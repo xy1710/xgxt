@@ -343,7 +343,7 @@ for (const [port, label] of [
   const alive = (await tcpAlive('127.0.0.1', port)) || (await tcpAlive('::1', port));
   if (alive) {
     warn(`端口 ${port}（${label}）已被占用`);
-    info(`占用的可能不是本项目的进程。启动脚本会提示你选择是否清掉。`);
+    info(`启动脚本接下来会自动结束这些旧进程，然后确认端口真正释放。`);
     info(`手动排查：netstat -ano | findstr :${port}`);
   } else {
     ok(`端口 ${port}（${label}）空闲`);

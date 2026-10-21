@@ -40,3 +40,7 @@
 
 # vite 构建时被沙箱拦住清不掉的旧产物（改名挪开的历史 dist）
 dist_old_*/
+
+# Launcher runtime artifacts (real port used last run, service logs)
+/tools/.last-url
+/logs/

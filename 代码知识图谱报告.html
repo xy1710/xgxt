@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="F2pTQLLCsQbWZAYnk93Q2d">
+<head data-page-node-id="f8WloWMBCRbigW1pW7x8Cq">
+<meta charset="UTF-8" data-page-node-id="dkkfSR9gw4nHjS5cRrzV6P">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="7WmY5wqzns8xYVq1MN4tVO">
+<title>良志学管系统 · 代码知识图谱报告</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f1f5f9; color: #1e293b; line-height: 1.6; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 64px; }
+  header.hero { background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 60%, #0ea5e9 100%); color: #fff; border-radius: 16px; padding: 36px 40px; margin-bottom: 24px; }
+  header.hero h1 { font-size: 26px; margin-bottom: 8px; }
+  header.hero p { font-size: 14px; opacity: .92; }
+  header.hero .meta { margin-top: 14px; font-size: 12.5px; opacity: .85; display: flex; gap: 18px; flex-wrap: wrap; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 28px; }
+  .kpi { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 18px; }
+  .kpi .num { font-size: 26px; font-weight: 700; color: #2563eb; }
+  .kpi .lbl { font-size: 12.5px; color: #64748b; margin-top: 2px; }
+  section { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 26px 28px; margin-bottom: 24px; }
+  section h2 { font-size: 18px; margin-bottom: 6px; padding-left: 10px; border-left: 4px solid #2563eb; }
+  section .desc { font-size: 13px; color: #64748b; margin-bottom: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; background: #f8fafc; color: #475569; font-weight: 600; padding: 8px 10px; border-bottom: 2px solid #e2e8f0; white-space: nowrap; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  tr:hover td { background: #f8fafc; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .t-blue { background: #dbeafe; color: #1d4ed8; }
+  .t-green { background: #dcfce7; color: #15803d; }
+  .t-amber { background: #fef3c7; color: #b45309; }
+  .t-red { background: #fee2e2; color: #b91c1c; }
+  .t-purple { background: #ede9fe; color: #6d28d9; }
+  .t-slate { background: #e2e8f0; color: #475569; }
+  .bar-track { background: #eef2f7; border-radius: 6px; height: 14px; width: 100%; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  .note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px 16px; font-size: 12.5px; color: #92400e; margin-top: 14px; }
+  .code { background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 14px 16px; font-family: Consolas, "Courier New", monospace; font-size: 12px; overflow-x: auto; white-space: pre; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #475569; margin-top: 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+  ul.tight { padding-left: 20px; font-size: 13px; }
+  ul.tight li { margin-bottom: 4px; }
+  .svgbox { overflow-x: auto; }
+  footer { text-align: center; font-size: 12px; color: #94a3b8; margin-top: 8px; }
+</style>
+</head>
+<body data-page-node-id="BCXww99PRG3r7QSpiF9Dgr">
+<div class="wrap" data-page-node-id="I3DWfZTb0LPqxcCkzyTDsQ">
+
+<header class="hero" data-page-node-id="xtKMzLyEkzqNCJ4zGKQy5k">
+  <h1 data-page-node-id="78ZgNUBYHnF5J3ECBJpPEx">良志学管系统 · 代码知识图谱报告</h1>
+  <p data-page-node-id="movFirkEwiExC3uc7mr5VF">对本地代码库 <b data-page-node-id="bs23TBpqTsyVOUn5Lx93Gt">D:\良志学管github版\xgxt</b> 全量解析构建的知识图谱：12,410 个代码节点、37,847 条关系边，覆盖 Vue3 前端、Express 后端与共享类型三层。</p>
+  <div class="meta" data-page-node-id="H22kGiR5OgoFEVGpPGOKjK">
+    <span data-page-node-id="LYRu5x6KwbDOC5iaz8ilih">索引时间：2026-10-19 09:37 (UTC)</span>
+    <span data-page-node-id="47Sr0AZ0KWVM32REuSHA9P">索引耗时：约 5 秒</span>
+    <span data-page-node-id="dBBfww3CPhsZvQdaOSfHrx">图谱项目 ID：D-e889afe5bf97e5ada6e7aea1githube78988-xgxt</span>
+    <span data-page-node-id="xpKbFbq1ws1VPyKm9cUVqV">状态：ready</span>
+  </div>
+</header>
+
+<div class="kpis" data-page-node-id="xicYs5ACr7B4AEOuOAQHIC">
+  <div class="kpi" data-page-node-id="01PwphTprznulSdkEvrZAj"><div class="num" data-page-node-id="afpIG3ohvOphitsD31LXAE">12,410</div><div class="lbl" data-page-node-id="1mSPkMsvxABgvjGSS0d5J8">图谱节点（17 种类型）</div></div>
+  <div class="kpi" data-page-node-id="phnHoAkAM8Pu3p9XNaXFCU"><div class="num" data-page-node-id="EnepgkF41DbsA65kPYZX1C">37,847</div><div class="lbl" data-page-node-id="Mk33Nim03j7nJFZa3uArCJ">图谱关系边（23 种类型）</div></div>
+  <div class="kpi" data-page-node-id="mI4PEQPrbHANCmZrrV9vSM"><div class="num" data-page-node-id="hKmEHHO4pADqI8icwEhgBF">717</div><div class="lbl" data-page-node-id="7clNuorEb5be8jtgMYteFd">索引源文件</div></div>
+  <div class="kpi" data-page-node-id="glorBLxJSmgcjtfQxAz7ir"><div class="num" data-page-node-id="3xRwNXBfHBsnzetCPd3mGW">947</div><div class="lbl" data-page-node-id="fFQN0AwmNB4hzIKlQWTRZ1">HTTP 路由节点</div></div>
+  <div class="kpi" data-page-node-id="39mK0dhmCpfCJ8HPMg8JSj"><div class="num" data-page-node-id="TcfrCuPs63CiHkdGTsyJF1">77</div><div class="lbl" data-page-node-id="g99MDfVk0rgbRmBq9wQpGT">数据库表节点</div></div>
+  <div class="kpi" data-page-node-id="c4MasCDtRfm1iKCXT8o38b"><div class="num" data-page-node-id="KZiDqWSLVynDlhf1nH6jEO">6</div><div class="lbl" data-page-node-id="vpoUfodpxLBozLGijpE8CJ">编程语言</div></div>
+</div>
+
+<!-- ============ 1. 系统架构 ============ -->
+<section data-page-node-id="iGpOO0XGJJAn3xUy0Qnpyc">
+  <h2 data-page-node-id="iAPU4NfKXBtMzJFAaDN43b">一、系统总体架构</h2>
+  <p class="desc" data-page-node-id="XqHBNTvQVVdEblydB6qe7d">三层 monorepo：web-job（Vue 3 + TS + Vite + Element Plus，hash 路由）→ server-job（Express + TS + Knex + MySQL，按业务分 8 大模块）→ MySQL 9 库；shared-types 作为前后端共享契约。</p>
+  <div class="svgbox" data-page-node-id="CBNXnxFw6rVqvQZgVjFFwL">
+  <svg viewBox="0 0 1160 660" width="100%" style="min-width:900px" font-family="inherit" data-page-node-id="95tJcZtIWf6Hv3HuDMa3uP">
+    <defs data-page-node-id="IrBDZ0sz4DaPeENpeco6ZD">
+      <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" data-page-node-id="DqBI2Xfqie9sADNQpMUVEy">
+        <path d="M0,0 L8,4 L0,8 z" fill="#2563eb" data-page-node-id="oBMlj58w6RJA3L5qgGCwED"></path>
+      </marker>
+      <marker id="arrg" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" data-page-node-id="PhtvgjUeJBWYoAlFQudUVb">
+        <path d="M0,0 L8,4 L0,8 z" fill="#64748b" data-page-node-id="u11ZjnnDSlxgUkFuhuO7mm"></path>
+      </marker>
+    </defs>
+
+    <!-- 前端 -->
+    <rect x="10" y="40" width="330" height="430" rx="12" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5" data-page-node-id="Mvw3fPCDpxfJJRhRaUVLl1"></rect>
+    <text x="175" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="#1e40af" data-page-node-id="ZTSSRHB5EbsUyhEuVMoDDc">web-job · Vue 3 前端（179 文件）</text>
+    <g font-size="11.5" fill="#1e3a8a" data-page-node-id="V041PT1qoFRflYroaCqbSS">
+      <rect x="26" y="78" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="sNaTOfoJZbRXoDjh3IorMC"></rect><text x="100" y="99" text-anchor="middle" data-page-node-id="5lAj1Kieevw7tsndPFaCw6">统一门户 · 登录</text>
+      <rect x="182" y="78" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="CvmACWqetD8WQA8c0MGRYx"></rect><text x="256" y="99" text-anchor="middle" data-page-node-id="KCVQG6EOiOsEeaVArqqw1l">市场咨询</text>
+      <rect x="26" y="118" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="36ID8CVUaM2LXbEOBSdvDM"></rect><text x="100" y="139" text-anchor="middle" data-page-node-id="GVutS2BMEvIQsnEsQWzvO1">财务管理</text>
+      <rect x="182" y="118" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="VLDFs0aEo29CUiugSXanRG"></rect><text x="256" y="139" text-anchor="middle" data-page-node-id="8HjUvNPvLCJfjUnSjBGkMl">权限管理</text>
+      <rect x="26" y="158" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="OAt3e4dIdTh3A7MsCmHWAz"></rect><text x="100" y="179" text-anchor="middle" data-page-node-id="Vogr8CDNyicB1A5BG52gFN">就业管理</text>
+      <rect x="182" y="158" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="npEH78LDFwBwBrcarqFyGl"></rect><text x="256" y="179" text-anchor="middle" data-page-node-id="0fHWvBOsJigsJHglOguoJz">教务管理</text>
+      <rect x="26" y="198" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="Ri1NsAS4ifvK7IgsO4mnOH"></rect><text x="100" y="219" text-anchor="middle" data-page-node-id="gLmJYoZz4kbDFKXPeFGiNe">班级管理 · 大学部</text>
+      <rect x="182" y="198" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="2XNH6Q1PDcU6oBOaSkiYW4"></rect><text x="256" y="219" text-anchor="middle" data-page-node-id="b5jV8NXPvGlpuY1iMHRfyZ">班级管理 · 初高</text>
+      <rect x="26" y="238" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="hSOAvUH3CvXdOfZMNviS8d"></rect><text x="100" y="259" text-anchor="middle" data-page-node-id="qdYvfW0e6PCncrA71dcPKb">教学管理 · 统一入口</text>
+      <rect x="182" y="238" width="148" height="34" rx="6" fill="#fff" stroke="#93c5fd" data-page-node-id="Ws4PUfYzMuLLmOWjdxTnCH"></rect><text x="256" y="259" text-anchor="middle" data-page-node-id="Gd4whkN4jwcISQeuRuBeQ1">router / pinia / api</text>
+      <rect x="26" y="284" width="304" height="40" rx="6" fill="#dbeafe" stroke="#60a5fa" data-page-node-id="VjgKMC3QVDA8z6RcOCuSvS"></rect>
+      <text x="178" y="301" text-anchor="middle" font-size="11.5" data-page-node-id="DW7cvPWvnsDJYOlQAkCcS4">82 个 .vue 组件 + 55 个 api 封装文件</text>
+      <text x="178" y="316" text-anchor="middle" font-size="11.5" data-page-node-id="9vkOFFczxMFdoSZoiPaHQc">（request.ts axios 实例统一走 /api/*）</text>
+      <rect x="26" y="336" width="304" height="118" rx="6" fill="#fff" stroke="#bfdbfe" stroke-dasharray="4 3" data-page-node-id="sePss5IBcUmbupO7hBeFAN"></rect>
+      <text x="178" y="356" text-anchor="middle" font-size="11.5" font-weight="700" data-page-node-id="PnlKgBCc2FPykkFORo9Gbm">图谱关系（web-job 域内）</text>
+      <text x="178" y="374" text-anchor="middle" font-size="11" data-page-node-id="lHO5XwW7eCeymozagreNt8">IMPORTS 3,689（全库） · CALLS 6,907（全库）</text>
+      <text x="178" y="390" text-anchor="middle" font-size="11" data-page-node-id="kuXCCCPCUXpYmafwZzH8us">HTTP_CALLS 37 条已解析的前端直调</text>
+      <text x="178" y="406" text-anchor="middle" font-size="11" data-page-node-id="Yn6j25ibgeiLPMNOF4K8Oe">HANDLES 258 · USAGE 13,913（全库）</text>
+      <text x="178" y="428" text-anchor="middle" font-size="11" fill="#b45309" data-page-node-id="sJqJuU8oDj3hGCjADClcfe">热点：perm.utils.toast.toast（fan-in 53）</text>
+      <text x="178" y="444" text-anchor="middle" font-size="11" fill="#b45309" data-page-node-id="D4ZpIywfY7VTuokUBVyM8t">class.api.request.post（fan-in 32）</text>
+    </g>
+
+    <!-- 共享类型 -->
+    <rect x="400" y="150" width="240" height="200" rx="12" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="1.5" data-page-node-id="RJ1QqwTXiwKmitiM2nRAjf"></rect>
+    <text x="520" y="174" text-anchor="middle" font-size="14" font-weight="700" fill="#5b21b6" data-page-node-id="GkQGzk2riDaYe7Pb7Wext3">shared-types · 共享契约</text>
+    <g font-size="11.5" fill="#4c1d95" data-page-node-id="2XPqsrirZDgbARo0kqHoNe">
+      <text x="520" y="200" text-anchor="middle" data-page-node-id="vi1KgiC5sSnJn6tFyWzLeo">96 个类型源文件</text>
+      <text x="520" y="220" text-anchor="middle" data-page-node-id="wLwoYqKeTIaWK37d7OTiwF">Interface <tspan font-weight="700" data-page-node-id="8xg3G8oeXwP4DGPRTBN3it">595</tspan> · Type <tspan font-weight="700" data-page-node-id="L8ziqTi2e7NWWaHB79LGD8">309</tspan> · Enum <tspan font-weight="700" data-page-node-id="QkP45mWArNu5mC6wFuNpov">195</tspan></text>
+      <text x="520" y="240" text-anchor="middle" data-page-node-id="w5kJFbLX4GUpbXXyRoEDxt">按业务分包：class / class-jh / consult /</text>
+      <text x="520" y="256" text-anchor="middle" data-page-node-id="9vEM2Hck1GtuaTvU5A2M6b">edu / finance / perm / portal / job …</text>
+      <rect x="416" y="272" width="208" height="30" rx="6" fill="#fff" stroke="#c4b5fd" data-page-node-id="qrU01tgDelNCp9xDdhQKxp"></rect>
+      <text x="520" y="291" text-anchor="middle" font-size="11" data-page-node-id="IBB2qayK0xiTFCn0Caf4mN">file:../shared-types 依赖注入前后端</text>
+      <text x="520" y="322" text-anchor="middle" font-size="11" data-page-node-id="fTIVvVycWNXVYlHh6yXROL">前后端启动前需 npm run build</text>
+      <text x="520" y="338" text-anchor="middle" font-size="11" data-page-node-id="xDZxcqyRtUsN6BDC6aaRYf">（predev / prebuild 钩子）</text>
+    </g>
+
+    <!-- 后端 -->
+    <rect x="700" y="40" width="450" height="430" rx="12" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5" data-page-node-id="AATGBaLqWC79Yh4cUqDAFr"></rect>
+    <text x="925" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="#166534" data-page-node-id="OWeQJCHTe1a2uE4e926su2">server-job · Express 后端（422 文件）</text>
+    <g font-size="11" fill="#14532d" data-page-node-id="vJaSCrJHPQue3oSpK769Mq">
+      <rect x="716" y="76" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="Fz4sxvPaR7JeRgcZoC2F6v"></rect><text x="818" y="95" text-anchor="middle" data-page-node-id="9Ktvny80HrP9yHOuH1TiGo">portal 门户（8 路由）</text>
+      <rect x="930" y="76" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="1BctDTrNmjYJbBWkujwmDB"></rect><text x="1032" y="95" text-anchor="middle" data-page-node-id="cvDYxJ5z1SkXYulMEWMd0W">consult 咨询（60 路由）</text>
+      <rect x="716" y="112" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="3ZVhYC6lQCc0ppywBBulzR"></rect><text x="818" y="131" text-anchor="middle" data-page-node-id="XARJ8FFo2PbSjZAIAsH9Da">finance 财务（50 路由）</text>
+      <rect x="930" y="112" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="BnkFOiQwSEJoLvF01LotQC"></rect><text x="1032" y="131" text-anchor="middle" data-page-node-id="MCZwcri1IrGscESzHrUTrG">perm 权限（74 路由）</text>
+      <rect x="716" y="148" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="00ZDheQAbcF9NwZBgBy7X5"></rect><text x="818" y="167" text-anchor="middle" data-page-node-id="qOTX2QB5IaKwY2eqclHCT8">job 就业（138 路由）</text>
+      <rect x="930" y="148" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="wEOqdxfRA4Rgh5Tj0IjAbA"></rect><text x="1032" y="167" text-anchor="middle" data-page-node-id="OXrhxJcNZsPB5npZEoiCFn">class 大学部（79 路由）</text>
+      <rect x="716" y="184" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="HR6IcTwnBB3oZmoNJ9DVl5"></rect><text x="818" y="203" text-anchor="middle" data-page-node-id="MR2cZiF9FNx76cbAyxdRJE">class-jh 初高（86 路由）</text>
+      <rect x="930" y="184" width="204" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="Ho34uUscJ8uQNbYLvzVgRi"></rect><text x="1032" y="203" text-anchor="middle" data-page-node-id="aCWPxxFBrE5R85gn06TGil">teaching 统一教学（127 路由）</text>
+      <rect x="716" y="222" width="418" height="34" rx="6" fill="#dcfce7" stroke="#4ade80" data-page-node-id="Tse0vDFJWOHuYp0fTyCVZY"></rect>
+      <text x="925" y="243" text-anchor="middle" font-size="11.5" data-page-node-id="R7FwPEL2KtGXeyaFNDZjVO">统一中间件：auth（JWT）· dataScope 数据范围 · validate（zod）· errorHandler · pagePermission · boardPermGate · approvalOnly</text>
+      <rect x="716" y="262" width="418" height="30" rx="6" fill="#fff" stroke="#86efac" data-page-node-id="qJGaAhDZaaudxjmhBhHAJN"></rect>
+      <text x="925" y="281" text-anchor="middle" font-size="11.5" data-page-node-id="Nc18DUL32IRjUpJUlof1Qt">统一工具层：response.ok / wrap 包装（fan-in 32/26）· date · roleEquiv · stageScope · financeClient</text>
+      <rect x="716" y="298" width="418" height="46" rx="6" fill="#fff" stroke="#fbbf24" stroke-dasharray="4 3" data-page-node-id="42WiOjzN2dK9bhHx7Az5Iq"></rect>
+      <text x="925" y="316" text-anchor="middle" font-size="11" fill="#92400e" data-page-node-id="W6cEYxurtbA6lBhgglBxTp">模块间 HTTP 互调（22 条 src 内 HTTP_CALLS）：</text>
+      <text x="925" y="332" text-anchor="middle" font-size="11" fill="#92400e" data-page-node-id="P0gST3lyu0EoM0CAWLrd3t">consult→finance/perm · class/job→class-jh · auth 中间件→perm</text>
+      <rect x="716" y="352" width="418" height="100" rx="6" fill="#fff" stroke="#bfdbfe" stroke-dasharray="4 3" data-page-node-id="6g5iME56rd5hyAdqt3tf6h"></rect>
+      <text x="925" y="372" text-anchor="middle" font-size="11.5" font-weight="700" data-page-node-id="pOc6OSYPBvwbFQa7YTAiiE">图谱关系（server-job 域内）</text>
+      <text x="925" y="390" text-anchor="middle" font-size="11" data-page-node-id="fkcUGBE1oosCq91N3xRHD9">Function 1,709 · Variable 1,473 · Module 428 · Interface 159</text>
+      <text x="925" y="406" text-anchor="middle" font-size="11" data-page-node-id="pXicamLoykJy4UsALnRixW">热点：teaching.shared.uniTable.tbl（fan-in 143）</text>
+      <text x="925" y="422" text-anchor="middle" font-size="11" data-page-node-id="Mk8RFC2P3ZMiYNQSRrcYOb">finance.utils.db.db（34）· class-jh.utils.enumName.nameOf（36）</text>
+      <text x="925" y="440" text-anchor="middle" font-size="11" fill="#b91c1c" data-page-node-id="ENaDO7ZUBPvznDS57FKP8K">唯一循环依赖：shared.http.remoteRequest ↔ consult.finance.client.request</text>
+    </g>
+
+    <!-- 数据库 -->
+    <rect x="400" y="520" width="750" height="120" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5" data-page-node-id="wvmfT6vaKltRpnfvjEHqWp"></rect>
+    <text x="775" y="544" text-anchor="middle" font-size="14" font-weight="700" fill="#9a3412" data-page-node-id="s4fFrFVQAsaGPFSiqe3WeU">MySQL 单实例 · 9 个数据库（跨库读取与同步）</text>
+    <g font-size="11" fill="#7c2d12" data-page-node-id="vDj7KXsUj7yBBIAsEdfLZo">
+      <rect x="416" y="558" width="150" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="4r9BFcCoMsgprgACWT4tzX"></rect><text x="491" y="577" text-anchor="middle" data-page-node-id="HrK7YJ66RM9bFGvAzMGnHB">sms_common（43 统一表）</text>
+      <rect x="576" y="558" width="130" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="Uu8W249DYNIq9gEyg8WaFk"></rect><text x="641" y="577" text-anchor="middle" data-page-node-id="XM20vE46HpSLTr0o1yRDyE">sms_portal（3 表）</text>
+      <rect x="716" y="558" width="130" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="VfOf1xcY4uaAVPhtAEJNAX"></rect><text x="781" y="577" text-anchor="middle" data-page-node-id="drrpFc3WyUZzdrLK91AUSW">sms_perm（14 表）</text>
+      <rect x="856" y="558" width="140" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="GuGOYxsDi6Yi1sHvfyMIaA"></rect><text x="926" y="577" text-anchor="middle" data-page-node-id="fm66y0PEJgXWHCpyYxW4UJ">sms_consult（9 表）</text>
+      <rect x="1006" y="558" width="130" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="TZH7AZPhEHWQ7q1cDNvtYT"></rect><text x="1071" y="577" text-anchor="middle" data-page-node-id="s0yxCFA116DPcSk9Qig60Y">sms_finance（8 表）</text>
+      <rect x="416" y="596" width="150" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="RbURe8GwmuRbshC9AhbT88"></rect><text x="491" y="615" text-anchor="middle" data-page-node-id="AxbDUDTJuvLr8Gbqnxo7JF">sms_job（migrations 28）</text>
+      <rect x="576" y="596" width="130" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="jsy3pbH1HjiOjw6hxvuylm"></rect><text x="641" y="615" text-anchor="middle" data-page-node-id="RdeSuMNN80D9bTZcDpuHm1">sms_edu（11）</text>
+      <rect x="716" y="596" width="130" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="NIvqxIpXAdtLlDItEUGmSL"></rect><text x="781" y="615" text-anchor="middle" data-page-node-id="KBPHzi5rS5VWZyRpZQEcCz">sms_class（11）</text>
+      <rect x="856" y="596" width="140" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="mRLf3gdKdQpyvQ2HLufped"></rect><text x="926" y="615" text-anchor="middle" data-page-node-id="VZQwNIMZJYNFxIWLneQ6Dc">sms_class_common（19）</text>
+      <rect x="1006" y="596" width="130" height="30" rx="6" fill="#ffedd5" stroke="#fdba74" data-page-node-id="fYBknpWkgmflfW8Hu5zuki"></rect><text x="1071" y="615" text-anchor="middle" data-page-node-id="TZwcIHskrnluVUcK01iU6k">sms_class_jh（33）</text>
+      <text x="775" y="644" text-anchor="middle" font-size="10.5" fill="#9a3412" data-page-node-id="cBhnfUf5wXK64TtqN15eDq">5 组 knex 迁移共 102 个文件（job / edu / class / class-common / class-jh）+ 5 个初始化 SQL（77 张表节点）</text>
+    </g>
+
+    <!-- 连线 -->
+    <line x1="340" y1="240" x2="696" y2="240" stroke="#2563eb" stroke-width="2" marker-end="url(#arr)" data-page-node-id="Ny7vxCysJblESYm8lnHyRq"></line>
+    <text x="518" y="232" text-anchor="middle" font-size="11" fill="#2563eb" font-weight="600" data-page-node-id="f2r5W1Dj7Ia7diB70D9JeI">HTTP /api/*（947 路由节点）</text>
+    <line x1="340" y1="255" x2="396" y2="255" stroke="#8b5cf6" stroke-width="1.6" marker-end="url(#arr)" data-page-node-id="zVXI1FbSGFzoJYnp87C4KH"></line>
+    <line x1="396" y1="275" x2="340" y2="275" stroke="#8b5cf6" stroke-width="1.6" marker-end="url(#arr)" data-page-node-id="FGKKgvasCFIm4W06nDDHmJ"></line>
+    <text x="368" y="248" text-anchor="middle" font-size="10" fill="#7c3aed" data-page-node-id="13zd0SfXqB37O4T5ZxJEyO"></text>
+    <line x1="644" y1="255" x2="696" y2="255" stroke="#8b5cf6" stroke-width="1.6" marker-end="url(#arr)" data-page-node-id="VL73LVKU6ZQG2geTsJDpFc"></line>
+    <line x1="696" y1="275" x2="644" y2="275" stroke="#8b5cf6" stroke-width="1.6" marker-end="url(#arr)" data-page-node-id="eex6XJIHgYROqb3qOzZppe"></line>
+    <line x1="925" y1="474" x2="925" y2="516" stroke="#ea580c" stroke-width="2" marker-end="url(#arrg)" data-page-node-id="Po80KqpBBGYuzt9Q9jUtA4"></line>
+    <text x="940" y="500" font-size="11" fill="#c2410c" font-weight="600" data-page-node-id="EHeAH8xOFPxPg8mZ9HFUJd">Knex 查询（WRITES 216 / CONFIGURES 196）</text>
+  </svg>
+  </div>
+  <div class="legend" data-page-node-id="FSBhFKwcAkdSaO7i96CY3a">
+    <span data-page-node-id="6oYggSqFCHYrhfhg5H9XS8"><i style="background:#93c5fd" data-page-node-id="iGUzPaFNAB2zlTVlWUKBsh"></i>前端层</span>
+    <span data-page-node-id="HgkEznzq6eDA80VWhCgFl8"><i style="background:#c4b5fd" data-page-node-id="GdXZQ8eYuEvcX3yGFg8neo"></i>共享契约层</span>
+    <span data-page-node-id="QcO4RvO84rZJUtLOz1S0N2"><i style="background:#86efac" data-page-node-id="H1b13ZhcCeEPqDK4tuGGRi"></i>后端服务层</span>
+    <span data-page-node-id="dO1if1NhOrDzegZoZu7wZ7"><i style="background:#fdba74" data-page-node-id="ZaWtvIgLS5yxUWW3Ts79gC"></i>数据层</span>
+    <span data-page-node-id="pEQaEBWiMufq57qAIScofI"><i style="background:#fbbf24" data-page-node-id="8UPuKjgaltRa41Nna5Snl7"></i>虚线 = 跨模块 HTTP 互调</span>
+  </div>
+</section>
+
+<!-- ============ 2. 图谱规模 ============ -->
+<section data-page-node-id="9NbRogtHn2u0p0wBNeSoQJ">
+  <h2 data-page-node-id="coNUN9nu9uEXP2jeVJwhsv">二、图谱规模与语言构成</h2>
+  <p class="desc" data-page-node-id="qOwjZEWHwYZHFEPzeXe4Uu">索引覆盖 6 种语言、717 个文件；.git、logs、node_modules、dist 及 gitignore 文件按设计排除（.env 等含敏感信息文件不索引）。</p>
+  <div class="grid2" data-page-node-id="UCYfYQgsCql0A6Ny9LXy3y">
+    <div data-page-node-id="jpbaWW7EBpNRnfImNvbq2L">
+      <table data-page-node-id="OYW1zuceRbd3sNvFQ5GBGH">
+        <tr data-page-node-id="coqJGoD3jpo3q6UQmRYPk7"><th data-page-node-id="vXPSMlxoUX3dZZKJLH37l2">语言 / 后缀</th><th style="width:90px" data-page-node-id="7wtoBKk0ncMF3sLmP8SBhO">文件数</th><th style="width:180px" data-page-node-id="HiKeT1fkwoJQrrGKVeAEJr">占比</th></tr>
+        <tr data-page-node-id="yxJyaqqTS3WAnuS0q8ySg6"><td data-page-node-id="7ccwjHF2EzKgn9UwG4YoFU">TypeScript (.ts)</td><td data-page-node-id="TyOP3fyJwF8AFRBvzfFYgM">457</td><td data-page-node-id="dYcoPOsFVDBokrzYz7XlWj"><div class="bar-track" data-page-node-id="dM1QhVMVej4Hl8yOP7O3GH"><div class="bar-fill" style="width:63.7%;background:#2563eb" data-page-node-id="U31jz9Vk5rl4M9iZjP7PVU"></div></div></td></tr>
+        <tr data-page-node-id="8NVR5WZxxRWY44x2VJM2al"><td data-page-node-id="D07ssxanJRZAftBYjQWFen">JavaScript (.js/.mjs/.cjs)</td><td data-page-node-id="RT7VpG6bPVkPMVFxAwda5y">159</td><td data-page-node-id="DnbkkQBqwW6T5I0pqFemgQ"><div class="bar-track" data-page-node-id="XzCaGlrJRenUACmvBSsNpt"><div class="bar-fill" style="width:22.2%;background:#0ea5e9" data-page-node-id="4gjelqFEGyELJrqsYSDrLH"></div></div></td></tr>
+        <tr data-page-node-id="9mgHlRS0CmzE3T585bcQT9"><td data-page-node-id="jAVPQanCJLHjGUEQkISsoQ">Vue (.vue)</td><td data-page-node-id="OTVFPM3VB1qVVSDsoJIXDN">82</td><td data-page-node-id="a8DTCOkx5wq14a1Z1UqbrI"><div class="bar-track" data-page-node-id="1d8JeTA09Vb0GCRQdzRh7V"><div class="bar-fill" style="width:11.4%;background:#10b981" data-page-node-id="38MtoDXKOF3GkOw3yaoDYd"></div></div></td></tr>
+        <tr data-page-node-id="1MxZiDggbb7epeYvrpEbeI"><td data-page-node-id="paIzcRVXQaMCCBJU1CvFcb">SQL (.sql)</td><td data-page-node-id="GBY5QExWrqGFlx9HsgBcGV">5</td><td data-page-node-id="f0TSNBWenPDJMNrP5xmNhI"><div class="bar-track" data-page-node-id="mAWI8Oq4BVPAV6gWGGSdE5"><div class="bar-fill" style="width:0.7%;background:#f59e0b" data-page-node-id="E1ZT1dVp12PmM4iL4BE33f"></div></div></td></tr>
+        <tr data-page-node-id="H1ZrZpOTRoJ7oOkeAikQ98"><td data-page-node-id="GPUQraJHNTATMcuQYplTGM">样式 / 页面 (.css/.html)</td><td data-page-node-id="qFg4m8ATt3QXBTVwNPRKRl">5</td><td data-page-node-id="V2rGaHg1PUA6W09rvvqFX7"><div class="bar-track" data-page-node-id="hiC8d0XHXbD486tq5xCZh0"><div class="bar-fill" style="width:0.7%;background:#8b5cf6" data-page-node-id="80jiZNo4jZcKesmgxgaWHd"></div></div></td></tr>
+        <tr data-page-node-id="VpRtoM822BEwQqYEnOC8Gx"><td data-page-node-id="QmRjFV9Oc4un5sf9ysUPDf">文档 / 配置 (.md/.json 等)</td><td data-page-node-id="EAN3eBkmfo7e3kfOxmJEql">9</td><td data-page-node-id="FrUWmmtEvwwChxyX4Zrqq5"><div class="bar-track" data-page-node-id="OntPUulBmgchxVkmLRaRFX"><div class="bar-fill" style="width:1.3%;background:#94a3b8" data-page-node-id="3B5SHzTGH06Qdjwv3onRo1"></div></div></td></tr>
+      </table>
+    </div>
+    <div data-page-node-id="RxCb3FaAsL12jQWr6WLAxt">
+      <table data-page-node-id="ksYYjbINc5LJURhymB29l8">
+        <tr data-page-node-id="XEBsudX9NUgJPJTUFZYxNy"><th data-page-node-id="bfVrrM3yesTeVc08qbuFCK">子项目</th><th style="width:80px" data-page-node-id="pz8inHby2EHfereiLFkALc">文件数</th><th data-page-node-id="DaDiY3IBbPnAUU2VPrxQJa">图谱节点构成</th></tr>
+        <tr data-page-node-id="76iNCDckkX8U4XoAzIDxNs"><td data-page-node-id="r35COrLaHCw3O28m1NNKxs"><span class="tag t-blue" data-page-node-id="9M0Ih5MEe0whOhrD1bgz7S">web-job</span> 前端</td><td data-page-node-id="ggLNifcjKKFD84JJCLRu67">179</td><td data-page-node-id="4dJHzAvqCHVnPNzRBzOZGj">Function 1,644 · Variable 1,606 · File/Module 各 179 · Interface 157</td></tr>
+        <tr data-page-node-id="mwjW5lHgjOqU70iA2VUyHU"><td data-page-node-id="YKlkEhQknARAJ9paLuNse9"><span class="tag t-green" data-page-node-id="LQ5yCCTZ1XSnBe34dDiuDy">server-job</span> 后端</td><td data-page-node-id="udEMdKSPGpCXm7rddqK5iN">422</td><td data-page-node-id="OeqyoWxFxancDprSgKZGG1">Function 1,709 · Variable 1,473 · Module 428 · File 422 · Table 77</td></tr>
+        <tr data-page-node-id="dIceqmV5NkxbowIL108Szk"><td data-page-node-id="GFBVd4EOnyIL8QETU3hcpj"><span class="tag t-purple" data-page-node-id="q7BDe6CgoTQG00x39giWWg">shared-types</span> 共享类型</td><td data-page-node-id="AGzeD5IQr6MWvnitGThPQq">96</td><td data-page-node-id="MDOo4aBtDHdk1BuKqxhVAm">Interface 595 · Type 309 · Enum 195 · Variable 1,283</td></tr>
+        <tr data-page-node-id="Toghz6n64VOnWeEN4eN7C2"><td data-page-node-id="bv4OVK526K8dHd4RjRZ5fX"><span class="tag t-slate" data-page-node-id="3hehFGHSTOoo4VBgVhERK8">tools / 脚本</span></td><td data-page-node-id="9ROXjvJGVy72YDseAUt6so">20+</td><td data-page-node-id="DUYfKXc6wANdtF5VOBdFYr">启动器 start.mjs（复杂度 39）、环境检查、验证脚本</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. 后端 API 模块 ============ -->
+<section data-page-node-id="qZlyhYJUGgbqVZzWUCtxiL">
+  <h2 data-page-node-id="tS36kmEKL1VkHQORAlZ7lf">三、后端 API 模块与路由分布</h2>
+  <p class="desc" data-page-node-id="D0vc8pIRDHkkhE6Bcu1ifA">947 个路由节点中 622 个为 /api/* 业务接口；方法分布 GET 346 / POST 263 / ANY 65 / PUT 49 / DELETE 25。</p>
+  <table data-page-node-id="smywhLSRUX3zmsxvPkywpW">
+    <tr data-page-node-id="UjWoshvAFFnEtzlFCs7etf"><th data-page-node-id="L7leJ9GT7I3UC5vM4eLB1c">业务模块</th><th style="width:70px" data-page-node-id="R2HAPUX5x8iO7VPkLSc6is">路由数</th><th style="width:220px" data-page-node-id="ckDl5SDxRsHdgw1PAar5f2">相对规模</th><th data-page-node-id="DkicPYN1rgtkaDrfdfFpMO">源码位置与说明</th></tr>
+    <tr data-page-node-id="84iQ1F0Q2PdtsWiZYNACLD"><td data-page-node-id="YHRqj8tVMAd9W4hkZt46XC"><span class="tag t-blue" data-page-node-id="OcEQjaRSLGqrw2EdHXGt7E">job</span> 就业管理</td><td data-page-node-id="YzmcaNutPifSbdU2CGoaqX">138</td><td data-page-node-id="hqBC4rGGss9CYFxdos9wPe"><div class="bar-track" data-page-node-id="AqEysjCSm1BA4pZNsdiGqN"><div class="bar-fill" style="width:100%;background:#2563eb" data-page-node-id="uO3CPIQQFrNSoxNbRLY2CH"></div></div></td><td data-page-node-id="Cqek7JDildHlgeWaTZgthY">src/routes/（22 个路由文件）+ src/services/；实训班级、考勤、成绩、考试、催费、退费、就业档案</td></tr>
+    <tr data-page-node-id="uakiE89VUX5Ev7GaAuaYFf"><td data-page-node-id="KSanxNRCijB6abNPayKjrC"><span class="tag t-green" data-page-node-id="ax35LjHdGyleTOBCumNYtk">teaching</span> 统一教学</td><td data-page-node-id="pWChIMP2YGtO9XGBrLLhXY">127</td><td data-page-node-id="vH5adGyZN4RC3kxywYl6mU"><div class="bar-track" data-page-node-id="AEF8QOJAVKwS35zwVj38v1"><div class="bar-fill" style="width:92%;background:#10b981" data-page-node-id="hGfqEFNFI4CfhsZIyFIwaw"></div></div></td><td data-page-node-id="JShGuWhC3dJlzk5fRryFey">src/teaching/（51 文件）：attendance/class/dorm/exam/leave/refund/score/student 8 领域，每域 route+service+多 repo</td></tr>
+    <tr data-page-node-id="KZrMBiDizA3gqXFmIYzj8T"><td data-page-node-id="mln2Nxs7ncMrk93DnJZdlB"><span class="tag t-purple" data-page-node-id="JL06I8J6V9ADCh7zCC27No">class-jh</span> 班级（初高）</td><td data-page-node-id="ntuYFmu6sF9mRGvGOFy1OV">86</td><td data-page-node-id="jplUXjf9dSBosbRL2HvZJY"><div class="bar-track" data-page-node-id="HB02QRjOwRRAQpSBSHdWAU"><div class="bar-fill" style="width:62%;background:#8b5cf6" data-page-node-id="9AW8qVL6yqUFGO0oiaojCJ"></div></div></td><td data-page-node-id="keCDpMCs3bp1nYMPCe6diT">src/class-jh/（24 文件）：routes 12 + utils 7 + middleware 4</td></tr>
+    <tr data-page-node-id="SpWEKcXe1MJlaIQTWbXHd3"><td data-page-node-id="4IIFP3w8L0X30VjvSBvuWN"><span class="tag t-blue" data-page-node-id="F2KqoW2pd1L4SEtQtXZhYb">class</span> 班级（大学部）</td><td data-page-node-id="1KcS0879jDxnxChDFupbc2">79</td><td data-page-node-id="nan4IYEIB8j5tva0cP92OG"><div class="bar-track" data-page-node-id="qck5om9ku3I0Uam5WE6nEI"><div class="bar-fill" style="width:57%;background:#0ea5e9" data-page-node-id="2gkRV93WTokxSzOfR3Durf"></div></div></td><td data-page-node-id="6iglYRkYJ4DATS75QBhkig">src/class/（约 38 文件）：modules 20（approval/attendance/consult/dorm/exam/fee/grade…）+ lib 10</td></tr>
+    <tr data-page-node-id="QLmeV4lP1WYpW1w2i59dP8"><td data-page-node-id="aBC1mEJuOZLk8ORDXQfZbA"><span class="tag t-amber" data-page-node-id="TMQBzOZ6NW4VtS7ZYMCMkZ">perm</span> 权限管理</td><td data-page-node-id="JUSfmcpVFhbPS334NT9Tnp">74</td><td data-page-node-id="7M8C4cTYDGnFgIb2aYXIra"><div class="bar-track" data-page-node-id="4kQ8GX30FBcttbzL96el61"><div class="bar-fill" style="width:54%;background:#f59e0b" data-page-node-id="Kjizy5o7NAIsozdt1ubt71"></div></div></td><td data-page-node-id="QB1gMHnucl3bG2FgrAEK3r">src/perm/（约 41 文件）：routes 14 + swagger 13 + services 4；含页面注册表 pageRegistry</td></tr>
+    <tr data-page-node-id="ekE0BBQ1yDq15etRB1rJ1U"><td data-page-node-id="kZGk5RfDHy6vAgNwIXO0Ou"><span class="tag t-green" data-page-node-id="CZ3zqQWHsjl3PCnZ1UUHUC">consult</span> 市场咨询</td><td data-page-node-id="jyPRnHocf2TCaKgMHjhS2P">60</td><td data-page-node-id="P7mFMXLEpFEltjYLyf3ElH"><div class="bar-track" data-page-node-id="X82CYLIoagikYDOiOLjIct"><div class="bar-fill" style="width:43%;background:#22c55e" data-page-node-id="08rqXf1ldZ1datTOj0K7cA"></div></div></td><td data-page-node-id="pl34MRRoKBeIWyohwS5gUy">src/consult/（22 文件）：routes 6 + services 8（含 finance.client / perm.client 跨模块客户端）</td></tr>
+    <tr data-page-node-id="A2sBXzU2XHRO8cJKHi0Ijw"><td data-page-node-id="j7nmZNQpycCGPFNpCI35uW"><span class="tag t-red" data-page-node-id="TBd6UEkEQSsln5PyvdkEtf">finance</span> 财务管理</td><td data-page-node-id="VnKxtP3qS6bkR8bX8mfV4A">50</td><td data-page-node-id="NwtC2I3XbR8YYzNVCx9TKM"><div class="bar-track" data-page-node-id="ibR7PCLyoXozjGch88YQG5"><div class="bar-fill" style="width:36%;background:#ef4444" data-page-node-id="VXRhoZrDTercBjoj3hIfjh"></div></div></td><td data-page-node-id="mHbv4aW9x8IeHzkFdYSEw6">src/finance/（21 文件）：routes 6 + services 6；缴费、凭证、退费、冻结、账单、费用标准</td></tr>
+    <tr data-page-node-id="nbAaFcq4SS4R1QB3AhPDvA"><td data-page-node-id="w2fk67qHuiOnGDItUW6nw7"><span class="tag t-slate" data-page-node-id="o8SyqWWnCw8gxMzitBM2Ls">portal / auth</span> 门户登录</td><td data-page-node-id="vBd4Yl4ElGjtfFziYAbvaZ">8</td><td data-page-node-id="ShWvTHcxsOJq0T6VLUdVFA"><div class="bar-track" data-page-node-id="kvMuEkVgqXfjQrMvaJvkCu"><div class="bar-fill" style="width:6%;background:#94a3b8" data-page-node-id="bHGE7jtyJsHVxdgw7SrUXJ"></div></div></td><td data-page-node-id="jvrY4kMxl6PZSm8x0u4bV8">src/portal/（10 文件）：统一登录入口 + /api/auth/internal 内部接口</td></tr>
+  </table>
+</section>
+
+<!-- ============ 4. 前端结构 ============ -->
+<section data-page-node-id="dzyxFnQ7nJDWkqr3neLd44">
+  <h2 data-page-node-id="ZxqTZy6yvsjqSV0G5DpHKh">四、前端结构（web-job）</h2>
+  <p class="desc" data-page-node-id="cMHI1VT4WkmJBazceMMAi6">172 个源码文件按业务板块分包，api 目录与后端 /api/* 一一对应；55 个 api 封装文件统一经 axios request.ts 发起请求。</p>
+  <table data-page-node-id="z326xzvUQy2UIVxVXZtAuR">
+    <tr data-page-node-id="hDbrlEf9TaJ4uJsRBAHzcL"><th data-page-node-id="QWruE7z8nWCZfEqMKKKjgm">板块目录</th><th style="width:70px" data-page-node-id="FiDlCWEcZ6L2BnVok3rISq">文件数</th><th data-page-node-id="Amj6GUIqTQXFhohK9g3cNO">构成</th></tr>
+    <tr data-page-node-id="nFf0HKKNzX7ZJkDkAVQzU6"><td data-page-node-id="fzRopIHTt02n0UMufcay7I"><b data-page-node-id="gNzSmch4ukBcMAwSPJgTB0">根目录</b>（views / archive / edu）</td><td data-page-node-id="3nNrrno3EelrHByd0ASHcw">约 30</td><td data-page-node-id="pC4Tq67Gx57QB3On5N0vMC">就业管理页面 12 + 教务 edu 3 + 档案 archive 4 + 通用组件 4 + store 4 + router/main/App</td></tr>
+    <tr data-page-node-id="zd8OGpnuqfdPHbLqjbs5m9"><td data-page-node-id="tZqiBlR7w0OD4CBadsp0JP"><b data-page-node-id="NZQGVAqOs8zjaHiQ6jUkln">class-jh/</b> 班级初高</td><td data-page-node-id="9XNIw9xeTGjODUgTuOiUMj">26</td><td data-page-node-id="2MO99iWWKTBIKIxEQaBAL9">api 10 · components 14（弹窗/抽屉）· utils 3 · views 4</td></tr>
+    <tr data-page-node-id="1sCLy7QKtkBcBsXurFdGNP"><td data-page-node-id="yNLMXMFP84VlQ97wQaxecT"><b data-page-node-id="OuN6gN1BfuQwG8xMBb9rBS">perm/</b> 权限</td><td data-page-node-id="CjSWJEiuXGo7XWfdrubfQu">23</td><td data-page-node-id="yPXQBJQTxZnN2L48VCYTxx">views 7 · api 4 · components 5 · stores 3 · utils 3 · composables 1</td></tr>
+    <tr data-page-node-id="fJgSOSOshub69LA7xJ9w8s"><td data-page-node-id="1iGt3jpyKTmZRJkn8BZhSN"><b data-page-node-id="f9OwJvMxG4RmDbQeC5IMYc">teaching/</b> 统一教学</td><td data-page-node-id="2AggedIyypXuUxQF19eQUi">21</td><td data-page-node-id="C7YkymFHbFLUKX2xSXNDDP">api 8 · views 8 · routes.ts · domainConfig.ts · access.ts</td></tr>
+    <tr data-page-node-id="SU0VEtXc8DLsRTG1aFiGSC"><td data-page-node-id="1fa584pHZ21xka68IHZPrH"><b data-page-node-id="ixJAqLuHC9rCkvoH2CFf0Q">class/</b> 班级大学部</td><td data-page-node-id="vvTQwIDGbQ8n6TvUglOTUj">18</td><td data-page-node-id="Dwc8or6ojpqizt0IcFJeZk">api 8 · components 5 · stores 2 · views 2</td></tr>
+    <tr data-page-node-id="kQmKvAt8YN6FOWFALaHdQl"><td data-page-node-id="Oo9Z79cINaZQgELMpSZFQK"><b data-page-node-id="BZdZ7xrKJU827xHh724Qqs">api/</b> 就业模块接口</td><td data-page-node-id="aWi7vDlkI6Ns9miDsnX4I0">16</td><td data-page-node-id="GSnNcYPsz1ZBrhDjM3dDvY">student / exam / dorm / refund / statistics / review …</td></tr>
+    <tr data-page-node-id="IwwCreTz0aL1kFiJc6CqCZ"><td data-page-node-id="PFhAT5ccU0J3rhEzznwl3E"><b data-page-node-id="jXDAk79d8c5m7oyx5WjTmo">finance/</b> 财务</td><td data-page-node-id="96GK0QVzDt0xNVZ7yBtAdw">12</td><td data-page-node-id="5NnDVJQzIBW6XZNX40pE2x">views 6 · api 4 · stores 1 · utils 1</td></tr>
+    <tr data-page-node-id="vEKdpZSRY2ev64qdDoR8w8"><td data-page-node-id="IA6SDnKMkplk0CDUY4kNfI"><b data-page-node-id="AamA1TYYEwZhcSauItcl4s">consult/</b> 咨询</td><td data-page-node-id="kSkpVI1bUTY6OfHT8baqGo">9</td><td data-page-node-id="Wjs3EBjumaCBB6hpBV7bI0">views 5 · api 3 · stores 1</td></tr>
+    <tr data-page-node-id="tJnPz2PUgEfhsWPWRv6b8y"><td data-page-node-id="W96QGAondDbgoVpfxZMxGI"><b data-page-node-id="4VT6qTVcE6iErsD0DUrfAp">portal/</b> 门户</td><td data-page-node-id="gdl4tyNbkZ52RqXftaejIF">6</td><td data-page-node-id="fKgzX7Shg355xyI4QGMisF">views 1（Login）· api 2 · token.ts · embed.ts · stores 1</td></tr>
+  </table>
+</section>
+
+<!-- ============ 5. 数据层 ============ -->
+<section data-page-node-id="mm2JN5tGHCGC4vTjpCODSk">
+  <h2 data-page-node-id="1eZqJDuil4CriOWyj9HIqI">五、数据层：表与迁移</h2>
+  <p class="desc" data-page-node-id="NHjsNc24ngjcNr1NsIoiNt">图谱共解析 77 张表节点，来自 5 个初始化 SQL；另 102 个 knex 迁移文件覆盖 5 个业务库的建表与演进。</p>
+  <div class="grid2" data-page-node-id="7uk1XkwDID97fWxU4LA8tQ">
+    <div data-page-node-id="SatwAoVI8EcrbVO7e1p4a7">
+      <table data-page-node-id="XUBEA99KzqL2CdKl5cjUiz">
+        <tr data-page-node-id="YGUDuTKVh4N9TPh5iv85vQ"><th data-page-node-id="KauYbVoaKs7tPgRbg3KxKY">SQL 文件</th><th style="width:60px" data-page-node-id="WjS9Spo8NrGKtlG6WvmTcx">表数</th><th data-page-node-id="tEzxSNej3roK9RerhiueWT">内容</th></tr>
+        <tr data-page-node-id="dN6sADzRAPFyIoEF91KuxG"><td data-page-node-id="44poEmDsRL3K0QPmx0jFi9">uni-tables.sql</td><td data-page-node-id="GOpV6BVWC7jdDWm8tNOkLv">43</td><td data-page-node-id="6bpx2jwGN6kmgZHRDwylvV">t_uni_* 统一表：学员、班级、考勤、考试、缴费、退费、宿舍、审批、阶段等（sms_common）</td></tr>
+        <tr data-page-node-id="xdKzi6pm2myGvt66SxAFMF"><td data-page-node-id="ZDcHymtQ34bvZJh3TqShQo">sms_perm.sql</td><td data-page-node-id="vY8EVW4fCg9nlNkToZ1uPE">14</td><td data-page-node-id="DXzP3O9aBHZKuB5jH5GzAo">t_perm_* 权限 11 张 + t_student_base + knex 2 张</td></tr>
+        <tr data-page-node-id="SmfxvAS7X7yI4j9MBBdUBh"><td data-page-node-id="EcgpFbBhLsOGxg6lJFjTtf">sms_consult.sql</td><td data-page-node-id="zcdl1Fwt2ZBa8DDR4wCvfg">9</td><td data-page-node-id="iZ99arXB4rZsj7zZwld6eY">t_consult_* 咨询 7 张 + knex 2 张</td></tr>
+        <tr data-page-node-id="50bi36OpAfdWOEeDafDoei"><td data-page-node-id="n2xCL0NIJZqyR2BaNxKLAK">sms_finance.sql</td><td data-page-node-id="M0sQDfscEYzO1kbmHICL5y">8</td><td data-page-node-id="zZUHWlfHd3R8P2y29CCXox">t_finance_* 财务 5 张 + t_student_base + knex 2 张</td></tr>
+        <tr data-page-node-id="EDXCdcGVgFSqmS454KzTKL"><td data-page-node-id="4Iw5meGws0mIquN7Q600UT">sms_portal.sql</td><td data-page-node-id="JeqR6Nm45AAPQf2tq8d89Q">3</td><td data-page-node-id="AwcRoW67kpZTat8h96qSuJ">t_sys_account + knex 2 张</td></tr>
+      </table>
+      <div class="note" data-page-node-id="1VqN2Sx33kP6pfGURPTWMn">SQL 文件的解析为部分覆盖（parse_partial）：树解析器对 DDL 的支持有限，个别行范围的列定义可能缺失；精确表结构请以 SQL 原文为准。</div>
+    </div>
+    <div data-page-node-id="aFzb4Qbt2tiLNbPdUFofSr">
+      <table data-page-node-id="amgQLHKEt3EphDSVdjUBdJ">
+        <tr data-page-node-id="gKrQm3pwU6YQYLadwk2RkF"><th data-page-node-id="6gPwH2Oc4PBDoYQrQlUAuo">迁移组</th><th style="width:60px" data-page-node-id="EMurMoH7TLpUlptgen12pA">文件数</th><th data-page-node-id="LPFOrBd66NhrhOIxYMqaKk">时间跨度</th></tr>
+        <tr data-page-node-id="Kw296YqyBoxYkHomWidfcA"><td data-page-node-id="W0hEylL2PZb5El8ox6hsfS">migrations-class-jh/</td><td data-page-node-id="ePFuG6i67VdZUbUgspMYmx">33</td><td data-page-node-id="SiHNgvyXgaLIY83QctsdYU">2026-09-28 → 10-06</td></tr>
+        <tr data-page-node-id="JElsG1p7EQGfOtsieMJGA9"><td data-page-node-id="Ugu3ewNuHlPsAKYPeJx2A9">migrations/（job）</td><td data-page-node-id="WjqLSsbfG9bNUlI9ba2Vg6">28</td><td data-page-node-id="RPe0wnoWIxlZOkSDY24tsC">2026-09-28 → 10-04</td></tr>
+        <tr data-page-node-id="hgbBMvzzMeGDeVPJjTOxGC"><td data-page-node-id="5WA7lftQtlHOiEbyKJ2nNB">migrations-class-common/</td><td data-page-node-id="szLzkVIJCa32pIoyDAIH5l">19</td><td data-page-node-id="qSxx9FX5Mf6rMsVuog1XB9">2026-09-30 → 10-12</td></tr>
+        <tr data-page-node-id="GfgxFlicrhrEWDHZAMcakm"><td data-page-node-id="GL3iy1HKa8Ciat2VElSa83">migrations-edu/</td><td data-page-node-id="lp7U6cRpWrI4WYJleTYBXl">11</td><td data-page-node-id="PJpmYYt5LSJKprkg0woVXc">2026-09-28 → 10-04</td></tr>
+        <tr data-page-node-id="3G1Y8JzrD2BENzq03IOFGm"><td data-page-node-id="B2yfzrKeiSP7qfADjzr2BW">migrations-class/</td><td data-page-node-id="BOivVebEJGIzyBFuUEvxGQ">11</td><td data-page-node-id="dyh62Mv0ytOEAHdTlfe4OE">2026-09-30 → 10-04</td></tr>
+      </table>
+      <table style="margin-top:14px" data-page-node-id="CWilBvifYUHGAxmMKyqsF9">
+        <tr data-page-node-id="15HQBnvdHOoUwZ6BE3jZZA"><th data-page-node-id="QVESwtaWTbt6YeUlR75hTN">环境变量（39 个 EnvVar 节点）</th></tr>
+        <tr data-page-node-id="BQy9S7Rfl467PHpdB2f6Oo"><td style="font-size:12px;color:#475569" data-page-node-id="18rF54W4nDFMTGHjveuL0n">DB_HOST / DB_PORT / DB_USER / DB_PASSWORD · DB_NAME（9 库名前缀）· JWT_SECRET / JWT_EXPIRES_IN / INTERNAL_TOKEN · *_URL 跨模块地址（PERM_URL / FINANCE_URL / CONSULT_URL / CLASS_URL / EDU_URL / JOB_URL / PORTAL_URL / STAT_URL / AUTH_URL）· CROSS_MODULE_TIMEOUT · TEACHING_UNI_TABLE · SMS_BASE · AUTH_DEV_MODE …</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. 节点与边类型 ============ -->
+<section data-page-node-id="jBvPqR5jkslpcEZUjGxTkB">
+  <h2 data-page-node-id="oivmh4h5BEKbEhVr9Vn3YN">六、图谱节点 / 关系类型明细</h2>
+  <p class="desc" data-page-node-id="ylo7zBjoBaWQsysrx9mFdX">17 种节点、23 种关系构成完整代码知识图谱；边属性携带调用行号、置信度、URL 路径等溯源信息。</p>
+  <div class="grid2" data-page-node-id="DzHECGaUtbytpHEOUO2Kvz">
+    <div data-page-node-id="KKiOJr5b2o86FcokFDc142">
+      <table data-page-node-id="XQfIMDt2LQ8ilrTvVFptOH">
+        <tr data-page-node-id="ZALNBENDJ6VpdKouwcPnEl"><th data-page-node-id="NBYHqYmTp3mV5uGL2JbLQ5">节点类型</th><th style="width:70px" data-page-node-id="4zPKysPGABi0LLzaKFnAN4">数量</th></tr>
+        <tr data-page-node-id="3FyMF784NOaY6C6z5ax5Bb"><td data-page-node-id="ZFu32GEaZjBMuaPyoM1Lbj">Variable 变量</td><td data-page-node-id="oW1SmdSFw7Rr5203gjESp3">4,564</td></tr>
+        <tr data-page-node-id="xe6Id7MKQkxteyi5uwCNRD"><td data-page-node-id="pFFpsKrIEjFx7hgUEdeJSY">Function 函数</td><td data-page-node-id="y8rrFgOvMLLID4UUPrdhyl">3,556</td></tr>
+        <tr data-page-node-id="D5VD59UND3mJ5klVWbdWIK"><td data-page-node-id="vPni2DXVNn8GSCFTaRsjZ1">Route 路由</td><td data-page-node-id="GcN2FQRHqFammVonl1jWEH">947</td></tr>
+        <tr data-page-node-id="m4MH2Vzd7nyoP9K0rUXb0h"><td data-page-node-id="Tps1CyWGCeX2YQGyzWYfvj">Interface 接口</td><td data-page-node-id="02nBQjYqnTYQ4DEjejR1MN">911</td></tr>
+        <tr data-page-node-id="fNBykecUvBcNEcqIO2yVeD"><td data-page-node-id="kF0OcLrlTvDawEmnY62UCK">Module 模块</td><td data-page-node-id="8cQu4pPJaQubf2nB1OnCpm">723</td></tr>
+        <tr data-page-node-id="kLJ2vPUNrp7mYCywGU4E5s"><td data-page-node-id="Lz8St1BdG5GOkG5P4ooKG8">File 文件</td><td data-page-node-id="jV0meq0jANTsAQqkEkPTXF">717</td></tr>
+        <tr data-page-node-id="lza9YUwav20UXDSRA3xfYU"><td data-page-node-id="iF9gwtca4uH2D3qs6UyX9J">Type 类型</td><td data-page-node-id="F63Ix1r6d1Ex8DZcQzavym">361</td></tr>
+        <tr data-page-node-id="4EdVxtySuLbO3UrGLYITm6"><td data-page-node-id="Gk8qDAl7esChbh2Q57jm0h">Enum 枚举</td><td data-page-node-id="bSstAGl87VX8oNHVyjZkpj">197</td></tr>
+        <tr data-page-node-id="ZPJIRifFLgzHTxrgujizL2"><td data-page-node-id="4Lwo8RTDkwFnwh8cKEL6c0">Folder 目录</td><td data-page-node-id="BVR1FLYtwiBtOMkuX8dLNl">146</td></tr>
+        <tr data-page-node-id="Ko0sCBzB5lCYw31KK3mmoo"><td data-page-node-id="XgzgeBjW1BXijpaefx8jHq">Section 区段</td><td data-page-node-id="CeKg1beUYzAbpxiaGeyY8x">136</td></tr>
+        <tr data-page-node-id="szDl9bI7F8tXbEhiQXGjES"><td data-page-node-id="2VPY8kBTs2DuzkFyJB7d0g">Table 数据表</td><td data-page-node-id="W1TRuT4rDmF0K7CILezHaQ">77</td></tr>
+        <tr data-page-node-id="45La12P2T7EElng8d7N056"><td data-page-node-id="b4nEkFxoPowelxW173R46r">EnvVar 环境变量</td><td data-page-node-id="AFCEIelSkMPcXcvWFS2YTZ">39</td></tr>
+        <tr data-page-node-id="AqwxdYZZ6ghDiam52dSX4Z"><td data-page-node-id="FIliDL1tU9vXkOQKjnUsVa">Method 13 · Process 11 · Class 10 · Branch 1 · Project 1</td><td data-page-node-id="O99Iub0WDArsAeygu23JUi">36</td></tr>
+      </table>
+    </div>
+    <div data-page-node-id="YqwsdmQNoBbZC3f3jGxlzV">
+      <table data-page-node-id="rrIHBxKcFo6Ani01S6eUg7">
+        <tr data-page-node-id="RGIzDG1og4dZk1Nd7KWEca"><th data-page-node-id="W004AhQnBL966Y0bml5kig">关系类型</th><th style="width:70px" data-page-node-id="409nHliDiUWfMwvLiWlKIF">数量</th><th data-page-node-id="e67HZymJFoyQBLxFS0azMt">含义</th></tr>
+        <tr data-page-node-id="qV2bGsaTKUmcYEn0wand1J"><td data-page-node-id="YuCeT4DL9f82gOLBySpIXo">USAGE</td><td data-page-node-id="RTkFKzfKqKu3zUguQMMiaa">13,913</td><td data-page-node-id="95XEbFGDP11NtmDR7ABZPK">符号使用</td></tr>
+        <tr data-page-node-id="0hgECG6lCRduDS2L8cH3Xy"><td data-page-node-id="KbpNTSFimCn8n4QLzXMfmO">DEFINES</td><td data-page-node-id="lEDaxRfsIeVWYVizripmfz">10,548</td><td data-page-node-id="smHTEDHKx7SRkvJBVpKNcm">容器定义符号</td></tr>
+        <tr data-page-node-id="aS8ROGbmKBKnEuBaLuODZ0"><td data-page-node-id="faKyfyVQl8eXgbaofd01uI">CALLS</td><td data-page-node-id="EOxaTXI6XS3UDvUgu2pXwb">6,907</td><td data-page-node-id="vwy5QaFRh17EmF7AJIS4l5">函数调用（含行号/置信度）</td></tr>
+        <tr data-page-node-id="iJgLI3SJkQyh9ZsLPwJXHX"><td data-page-node-id="tu3RIi7LDcwDYb37dr7qoj">IMPORTS</td><td data-page-node-id="2rXwVySzb6WqAb9WG6h09E">3,689</td><td data-page-node-id="yI4JjGGQk5Rl9Z5BLDD3ef">导入依赖</td></tr>
+        <tr data-page-node-id="FTRuMMEej0sha7QqsaN6WR"><td data-page-node-id="CNoXFwJk77RB3GdquCunLY">CONTAINS_FILE / _FOLDER</td><td data-page-node-id="6qoy2IKLaYBEHzs5GVISZR">854</td><td data-page-node-id="qg1sLPhwGuWQ4KYxGL0pKU">目录包含</td></tr>
+        <tr data-page-node-id="qGyYfRjETPMj9Ec959Xusm"><td data-page-node-id="vIw3BcTPSYtFCwY4g2rmy0">SIMILAR_TO</td><td data-page-node-id="djUlmyCA2fBdL3u9v3fEHy">448</td><td data-page-node-id="Ax4OMT0r5NAa3RVA25C3BB">相似代码（Jaccard）</td></tr>
+        <tr data-page-node-id="ebBY53Pa6ajmHaTNzdAlEd"><td data-page-node-id="Y5sdhAI9G3GPyGIAuyZXA6">HTTP_CALLS</td><td data-page-node-id="7npHR5hZ9Z708cHWVsypIv">271</td><td data-page-node-id="cQCAeP5ge8WgC9TszyKxtR">HTTP 调用（含 url_path）</td></tr>
+        <tr data-page-node-id="EC6PhEY7speMYaKvLggjrb"><td data-page-node-id="M2LBLpWcSPO2hwWLliJ7qB">HANDLES</td><td data-page-node-id="BdGGbVTBcsePLQB8wWEVW6">258</td><td data-page-node-id="jBZ7u1qKYsaMI8ZhZPaVhw">处理器 ↔ 路由</td></tr>
+        <tr data-page-node-id="LlHbDHsXwOfL8b0P4JrpzW"><td data-page-node-id="Us61JVxJYqo4KFoUOL7ctB">RAISES / WRITES / THROWS</td><td data-page-node-id="JI3DxTnTCcmzPlESaE5cut">440</td><td data-page-node-id="etdgWIadlobq7TOLxIrBG1">异常抛出 / 写入</td></tr>
+        <tr data-page-node-id="fiwLlxa76oQ1iVSlVFWC6i"><td data-page-node-id="Rr5rbw1RHKt9EZoqV6GXI9">CONFIGURES</td><td data-page-node-id="b2vcqHttrZpCcTH1cAlIIl">196</td><td data-page-node-id="8ICQP0YjpMjFcNYy149Emy">配置注入</td></tr>
+        <tr data-page-node-id="Kv3T5LYcKRQTGwDsJqzm3o"><td data-page-node-id="XMMiA5IAZji9AanZEz1ChC">IMPLEMENTS / INHERITS / OVERRIDE</td><td data-page-node-id="eMcXwkHdC0uK2iVXFaEfCO">141</td><td data-page-node-id="HtZgQQIqOF5EgCbfVsB9me">类型关系</td></tr>
+        <tr data-page-node-id="RgzhPr2KAEL3hcDkLAzvGP"><td data-page-node-id="kFs4x286UvBVMyCAg9Wy8r">SPAWNS</td><td data-page-node-id="3QSsNW0TGvvivXTmNeYbay">32</td><td data-page-node-id="U9VxzPExKsFEEDEEPEQGYa">子进程启动</td></tr>
+        <tr data-page-node-id="87lTpFACCNeBeHUFQBDCMz"><td data-page-node-id="i0hBCuE0l9MmBsfkHVvgi5">MENTIONS / REFERENCES_FILE</td><td data-page-node-id="PFWbYdcLljn4v3z3RzouBW">85</td><td data-page-node-id="8BMTuyk6TGUGMY4oFNCR6l">文档引用</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. 热点与复杂度 ============ -->
+<section data-page-node-id="gOAndn5RH8wRJD7mc1e1DL">
+  <h2 data-page-node-id="hon5CsqbIQlPvzWGcaFyiy">七、核心热点与复杂度警示</h2>
+  <p class="desc" data-page-node-id="xhydaN3HndQ9PVTIsqrZEv">按 fan-in（被调用次数）排序的全库热点函数；以及圈复杂度超过 15 的重点关注函数。</p>
+  <table data-page-node-id="64UnK3pyiuBU0oMsXV6BjD">
+    <tr data-page-node-id="yCL993tqyzAMJKSUhSp4Qk"><th data-page-node-id="EC5MKFGfAB8LTaeeqk5kGT">#</th><th data-page-node-id="2jOExU3aUQZsbIzKsTHVnQ">热点函数（qualified name）</th><th style="width:70px" data-page-node-id="G5gBF1n6CMRG235Liznm9J">fan-in</th><th style="width:220px" data-page-node-id="XGXj6oBI2MNMEyAgdFnSQZ">调用热度</th></tr>
+    <tr data-page-node-id="1J95brzRO8PZ6m5U8MMPnR"><td data-page-node-id="RVFkfh1n1l6BdAcPFF0Ag0">1</td><td data-page-node-id="9DG5wYgsF7ZjnMDxY5wlQ8">server-job/src/teaching/shared/uniTable.ts → <b data-page-node-id="rlP9gwdF3kApquxPDwSrGt">tbl</b></td><td data-page-node-id="aVz1ZAOaC9sVwd3KN8lhYd">143</td><td data-page-node-id="lCZfJFp9tf2sxd7Ri9LrUq"><div class="bar-track" data-page-node-id="VibEnG3a4CqqslHJUNrVR3"><div class="bar-fill" style="width:100%;background:#2563eb" data-page-node-id="DlHXZCBh6oeORDXAPQQyHX"></div></div></td></tr>
+    <tr data-page-node-id="ROlgMEHNIWV03wZ2KxWdA9"><td data-page-node-id="Smq8Dqu68Km8XU5EtzFf5k">2</td><td data-page-node-id="kmD2pman8kvMVbfmyG20Z5">web-job/src/perm/utils/toast.ts → <b data-page-node-id="DdShIgouHFVAYYHvHcHTpL">toast</b></td><td data-page-node-id="tSEUOTunHp643eExXNfoHd">53</td><td data-page-node-id="TCrz2lw7OmLPmU6sVpTphP"><div class="bar-track" data-page-node-id="djcQiVXCeb9EFgLqXRnX5Y"><div class="bar-fill" style="width:37%;background:#8b5cf6" data-page-node-id="F05QDr0daj6MpMN4Q7SuNh"></div></div></td></tr>
+    <tr data-page-node-id="TSQJrTSMjqnTA7nLnH0Ypt"><td data-page-node-id="hKsUcvPaEEXFTaU9d7EqIh">3</td><td data-page-node-id="CBDGYdxxl1zfD7VkQx1buJ">server-job/src/class-jh/utils/enumName.ts → <b data-page-node-id="FikSPxU98JBsGN1fYhFme9">nameOf</b></td><td data-page-node-id="N3ZcguAh0EkFQ7nfGNDHQ6">36</td><td data-page-node-id="o6kM5esBxn3oi6lxCAiDvM"><div class="bar-track" data-page-node-id="NZTlMVZwY0GaQXpHiWBGps"><div class="bar-fill" style="width:25%;background:#10b981" data-page-node-id="0Vprwns2p8p1hmhgNeWlFo"></div></div></td></tr>
+    <tr data-page-node-id="8BhgUlZtQsY4A2U0pMKuwj"><td data-page-node-id="dNCBnfVO8tOHAA45MniguW">4</td><td data-page-node-id="6tQen4H5E2Gp4QApJ2Z6hD">server-job/src/finance/utils/db.ts → <b data-page-node-id="r8CbMXB4gupacPEKQUqE7X">db</b></td><td data-page-node-id="YLjdwxYrzTfDSHWPklgchZ">34</td><td data-page-node-id="nDWDRkJ06xJjqn7eAKLl92"><div class="bar-track" data-page-node-id="m1TpVy1TZLzkJyiv8J6OWT"><div class="bar-fill" style="width:24%;background:#f59e0b" data-page-node-id="jWFcRKWUyN4sIZOPfqwTLL"></div></div></td></tr>
+    <tr data-page-node-id="KluSFaHQvejbB1R7kFP8AP"><td data-page-node-id="4QyfJhRIaHDuGnS8NquiRZ">5</td><td data-page-node-id="ftCmD5mkfCv8mtGdDxsIS0">server-job/src/utils/response.ts → <b data-page-node-id="s77MpRV91xfrQbt70vjlV8">ok</b></td><td data-page-node-id="pVWE6vTNP7pbPTbbN042kX">32</td><td data-page-node-id="owBrZJbb8CC0gw4p0W9yJs"><div class="bar-track" data-page-node-id="pSbDy5Re95Ct2keweMCr8x"><div class="bar-fill" style="width:22%;background:#0ea5e9" data-page-node-id="DhyC6QLZtj64PCx7MgppW1"></div></div></td></tr>
+    <tr data-page-node-id="rW56z0RZBg6OMZ7osRrSTt"><td data-page-node-id="4MkG7ctOcx8Ek956wFh3BD">6</td><td data-page-node-id="lYjBKIRSyhSC5I3JyraeTi">web-job/src/class/api/request.ts → <b data-page-node-id="fGySojCyDx4wM0qteMToDs">post</b></td><td data-page-node-id="eEKErFq0tjX2nGryyXgjuC">32</td><td data-page-node-id="FC5VZHt5Acel5qQfBdHDam"><div class="bar-track" data-page-node-id="7KRhWkNZpUVT8BxcUVdyoF"><div class="bar-fill" style="width:22%;background:#0ea5e9" data-page-node-id="6OoSH7nnPbL9TALDUrgi75"></div></div></td></tr>
+    <tr data-page-node-id="tuhWdv8tTvkhKqJDamLxSv"><td data-page-node-id="XkeDYzZ0utfVqofj4px9bi">7</td><td data-page-node-id="6zGsvojOi2bXAuKkAmKr5r">server-job/src/utils/wrap.ts → <b data-page-node-id="kxl5ULQNJwMlAKNTNcv5fA">wrap</b></td><td data-page-node-id="4CAGXNJlasN3e1YkvHYyxJ">26</td><td data-page-node-id="Rf4LaGtVC7duOUg0bR4UMg"><div class="bar-track" data-page-node-id="ZxiSdldlJqbQOosWcIH1AP"><div class="bar-fill" style="width:18%;background:#94a3b8" data-page-node-id="m7Ksi1YHUHQKxyJwV3sHdm"></div></div></td></tr>
+    <tr data-page-node-id="ZIL6yruBRtG1m4iS90p4DU"><td data-page-node-id="kPvjJn84JXv4GBY7P46jwZ">8</td><td data-page-node-id="hSRLJO2zeQKN8HzVVvVAzH">server-job/src/teaching/shared/uniTable.ts → <b data-page-node-id="hCMAah7D0MmmqQMKz2SuYA">tblTrx</b></td><td data-page-node-id="A0Sq34qF20D4yfgF3J33Fl">26</td><td data-page-node-id="tthSxfWuUFEtoJbsh0UIqj"><div class="bar-track" data-page-node-id="4GeTFfVEt6rZ9qmBqr9ISG"><div class="bar-fill" style="width:18%;background:#94a3b8" data-page-node-id="8yHn8DJ4BOUU0tYG01GFCt"></div></div></td></tr>
+  </table>
+  <table style="margin-top:18px" data-page-node-id="hAYr9QXxHR7Uu9w5e4eA1S">
+    <tr data-page-node-id="LUyfbgP20ocrz2ARWZDDce"><th data-page-node-id="RBR1TsAGGvxsQD0QkHeY8g">复杂度 top</th><th style="width:60px" data-page-node-id="bVxpCqPIG3ZjyUJpVg3TTj">圈复杂度</th><th style="width:60px" data-page-node-id="cPjldC9VC7RvnVMrm5AczQ">行数</th><th data-page-node-id="EmpFHCMeNKaCGD5XNR9hgQ">说明</th></tr>
+    <tr data-page-node-id="QYHcyi9DzOF0OQYn0Ny9Ly"><td data-page-node-id="C4kB0OSXiQsyn7FhYYjfdD"><span class="tag t-red" data-page-node-id="AgnnYkwI0RBZ7FLAEZtlAH">61</span> teaching/dorm/repo.uni.ts → makeRepo</td><td data-page-node-id="lFEujLa34LGLVaSFJIbsVG">61</td><td data-page-node-id="eMeGdbCV9ZluEjEq7RvrTe">633</td><td data-page-node-id="r04LkCyXFzq6oBYHiRDjyj">宿舍统一仓储工厂函数，是全库最重函数，建议拆分</td></tr>
+    <tr data-page-node-id="jS4QJZ41a4sfIU5zCjXedX"><td data-page-node-id="1ANdkeCOIBBh7TEsTApLll"><span class="tag t-amber" data-page-node-id="tCVHgBqEoYLCGxW6E0mApQ">39</span> tools/start.mjs → ensureDatabases</td><td data-page-node-id="Ta7kHK9lHWs2cFQ8BcHHzU">39</td><td data-page-node-id="SvsXRsNsYqqChFQ33xHlVk">290</td><td data-page-node-id="qaJKWx46YtVRP82jlCtzCM">一键启动器的建库逻辑，承担 9 库创建与 SQL 导入编排</td></tr>
+    <tr data-page-node-id="I8aimLAGLGTTIM2B4Q2P0I"><td data-page-node-id="NGfP0EhmDVSXEhBiYJKjOQ"><span class="tag t-amber" data-page-node-id="dxPQ5hSmBTCE5gMcW8A2JK">20</span> tools/check-env.mjs → probeMysql</td><td data-page-node-id="fGivEQGT9LFLg0yFAlPHIv">20</td><td data-page-node-id="F4FQJm7jlHBXnIZLh0SAlr">107</td><td data-page-node-id="LKJLLGLaMGlOVkQe6MVCOl">环境探测脚本</td></tr>
+    <tr data-page-node-id="ZznF2JkCd5FgTKwDasNPUS"><td data-page-node-id="ZT5bHiSnVuOo6sL93lAlU3"><span class="tag t-amber" data-page-node-id="dQ2uRE9YcUaWhpE3sO9rER">20</span> scripts/fix-perm-accounts.mjs → main</td><td data-page-node-id="6FVW5E5dviQWIT0AZco6Jt">20</td><td data-page-node-id="29zG3ThGbbZsUCPcpGBUT2">192</td><td data-page-node-id="aHUgP9P0hxNIiNPDctBhgo">权限账号修复脚本</td></tr>
+    <tr data-page-node-id="tZh8BQJ0jC5lU9hnGpFkrf"><td data-page-node-id="mRMT1MFNQEsKD9BHDW48FO"><span class="tag t-slate" data-page-node-id="T2cBkDPZawn9LuSxPG3gyJ">18</span> perm/views/UserManage.vue → validateForm</td><td data-page-node-id="cVCTB2h2A0SvF3FJgirnbC">18</td><td data-page-node-id="o9pdYD5iV2lrZTfRXjhjYJ">33</td><td data-page-node-id="SoEI9jsuNHK8ilWZ0KMccC">前端表单校验，规则集中</td></tr>
+    <tr data-page-node-id="iBcmfU4NArZeSKD1NWHX2e"><td data-page-node-id="nJfO03iTYoC1cG8wuy4Auz"><span class="tag t-slate" data-page-node-id="UFJLMsac11oI8WqNHZPGBZ">17</span> class/components/GradeImportDialog.vue → parse</td><td data-page-node-id="ihIZYPKoXKCu8DdNZGBjGJ">17</td><td data-page-node-id="eT0MkjHBTKCbIoH5QnE8Sp">58</td><td data-page-node-id="IusKXOme5sJ8MZtFJvRDF0">成绩导入解析</td></tr>
+    <tr data-page-node-id="OxZFEhF5UaEFyZMniDvGEp"><td data-page-node-id="kdtu7rCIXCNXmHqKHNU51Y"><span class="tag t-slate" data-page-node-id="RyFNcAPAXTq8OsQz1E6Bii">16</span> consult/services/student.service.ts → hasField</td><td data-page-node-id="XrkGlXGIb5aHv5yAoUBDIe">16</td><td data-page-node-id="OYJ3NGpkTxvUUEDRU3CkSh">19</td><td data-page-node-id="saj810TXYEp8LKrAGuOzSo">字段存在性判断（短函数多分支）</td></tr>
+  </table>
+</section>
+
+<!-- ============ 8. 循环依赖与跨模块调用 ============ -->
+<section data-page-node-id="c9c4ERKp9f4tCZk174wfpK">
+  <h2 data-page-node-id="CIiLzsJ0ICzMhWItKZWoTY">八、循环依赖与跨模块调用链</h2>
+  <p class="desc" data-page-node-id="2ySybqfymkahiZEGliJnSS">图谱检测到 1 处循环 CALLS 依赖；另绘制了 22 条服务间 HTTP 互调链路（图谱 src 域内 HTTP_CALLS）。</p>
+  <div class="grid2" data-page-node-id="noNG0JWNWZJazSJBNTalnP">
+    <div data-page-node-id="sWYfQOMkIW4oJfOyA6Uhhi">
+      <table data-page-node-id="PLT6tHqyAv037GBDdxmEQc">
+        <tr data-page-node-id="n7jdxMLkt9Zy5uhkunSqDC"><th data-page-node-id="WcgfWGUmjtP05o4jh91ANH">循环依赖（CALLS）</th></tr>
+        <tr data-page-node-id="Uej8bxvFbzzpiBsXeHHohd"><td data-page-node-id="Epdj54rAHwW31OxDB1ikzT">
+          <div style="font-family:Consolas,monospace;font-size:12.5px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;color:#991b1b" data-page-node-id="E0jAFgPZZ09ezgBp2yHObH">
+            server-job/src/shared/http.ts → <b data-page-node-id="GN478BvY55R4OwDKuXPjM5">remoteRequest</b><br data-page-node-id="x8OF4Hz41UbPsqh4BbAWGb">
+            &nbsp;&nbsp;↔ consult/services/finance/client.ts → <b data-page-node-id="SC1BdQVOPloiMobzZFgEXE">request</b>
+          </div>
+          <p style="font-size:12.5px;color:#64748b;margin-top:8px" data-page-node-id="lpc3lTicpoCPGY93WwWonp">通用 HTTP 请求器与财务客户端互相调用。实际为分层设计（client 包装 remoteRequest，remoteRequest 回调 client 配置），风险较低，但重构时需注意。</p>
+        </td></tr>
+      </table>
+      <table style="margin-top:14px" data-page-node-id="VZPHKuEZQM8BW87GRF7G3F">
+        <tr data-page-node-id="Zzp74MEEz7AzUhDwbtBASr"><th data-page-node-id="WhqBMvGwZsACDO11dLJGRd">分层（layers）</th></tr>
+        <tr data-page-node-id="lanAevStMelFTc9kFbCRPC"><td style="font-size:12.5px" data-page-node-id="Yr1dpA5LpdoWeFB2k1RADo">api（含 HTTP 路由定义）· src（内部核心，fan-in 7 / fan-out 20）· scripts（高 fan-in 18）· e2e-merged / shot-ui / verify-round2 / shot-perm-revoke（入口层，仅出向调用）</td></tr>
+      </table>
+      <table style="margin-top:14px" data-page-node-id="t2g0b9Lg0LciSfJ8adGkQD">
+        <tr data-page-node-id="nIv24jeLgyvXaqvaHqlGGO"><th data-page-node-id="rxJvpuq2Cd6lJ4bzD69SbR">代码聚类（12 个 cluster）</th></tr>
+        <tr data-page-node-id="41DiKv5e4PtvD2G7doDkHD"><td style="font-size:12.5px" data-page-node-id="IyeROZFeJYiiIVnKV1huHI">server-job 域 8 个（最大 257 节点， cohesion 0.93，核心 tbl/fmtDate/tblIns）· web-job 域 4 个（最大 174 节点，toast/load/list/detail）· 跨 3 包的权限簇 128 节点（hasRole / resolveActionWithOverlay / getUserPagePermissions）</td></tr>
+      </table>
+    </div>
+    <div data-page-node-id="llPlmHeMMJczkVcYGRxUqE">
+      <table data-page-node-id="xhdYt6hUS3JCXgNm0qEXV3">
+        <tr data-page-node-id="lE35H3pAHAhSgWBf0Ph7y4"><th data-page-node-id="y4GsQtrbNnfEd47lYCVQCN">跨模块 HTTP 调用链（src 内）</th><th style="width:44px" data-page-node-id="HXSfYfb4hRlsPcfhtLPl4j">次数</th></tr>
+        <tr data-page-node-id="nbFnAjqtDZXOjBZuzkPVx9"><td data-page-node-id="UDbxmd8NIS25eB7j8DCUJz">consult/services/finance.client.ts → /api/finance/*（fee/refund/freeze/standard 7 个接口）</td><td data-page-node-id="StdcvDCkaeOK7nG3YuUjF4">7</td></tr>
+        <tr data-page-node-id="FmzMaXAz6QlxDm5XwzT4TG"><td data-page-node-id="nMHQwaJSNspZ62xHc0Q03H">utils/classSync.ts → /api/class/consult|fee|urge|dorm 的 sync/push + /api/class-jh/student/from-consult</td><td data-page-node-id="9rJh80HUUWlRgudJMe0QPi">5</td></tr>
+        <tr data-page-node-id="KVKYbcBEizIHRRtGIir7hj"><td data-page-node-id="yUu0N0TGmX15bGYD5LHXal">perm/services/remote.service.ts → /api/consult/account/profile</td><td data-page-node-id="Zfx1NCfMg46D2sCeob4YDw">2</td></tr>
+        <tr data-page-node-id="wkCO4N4EXlp6IlrwkgaePI"><td data-page-node-id="YBfTsnSPr7RGJ1OjsVEucf">utils/financeClient.ts → /api/finance/refund/apply|detail</td><td data-page-node-id="Guxhp2GEcT3MLR9Z7khbrz">2</td></tr>
+        <tr data-page-node-id="DZATYE0iBb59wE1UBfb9xM"><td data-page-node-id="Hg1I8ALBCZPerGNJRwVMBo">routes/upgrade.route.ts → /api/class/info/training/list、student/list</td><td data-page-node-id="2rWHg6xHBNyoMKHJELcAnJ">2</td></tr>
+        <tr data-page-node-id="c0q3c9XMM2oirGHg7UQM7h"><td data-page-node-id="YYm2qAXXW1NOp9HH18HkDg">class/lib/upstream.ts → /api/auth/internal/user/by-role、by-ids</td><td data-page-node-id="uUfUEC5sI1dBVAjDDWAfBB">2</td></tr>
+        <tr data-page-node-id="HnuuXSBYTyhF3wfqHJuMH9"><td data-page-node-id="Vgovxc77mhEGp2bipPQCLG">consult/services/perm.client.ts → /api/perm/user/auth-profile</td><td data-page-node-id="LzOYULBrADz7esgwZ9ge2v">1</td></tr>
+        <tr data-page-node-id="EWwnAY8acFURS6M87MdyjE"><td data-page-node-id="D3iVYfUhYYDJu0mZqoLySS">middleware/auth.ts → /api/perm/remote/account-profile</td><td data-page-node-id="2C5Rq9hKba4CxlCggrfBQR">1</td></tr>
+      </table>
+      <table style="margin-top:14px" data-page-node-id="GL6GW08NYHyweGQcZZMbHd">
+        <tr data-page-node-id="yEz4P9YI0hScpndqihWAJv"><th data-page-node-id="OFWAriGkEi7VHrBZcwrI4V">前端 → 后端直调（已解析 37 条）</th></tr>
+        <tr data-page-node-id="MQ7pHLMq2fzL5VzgD2rMex"><td style="font-size:12.5px" data-page-node-id="iCJeOzzeiS0FAFk2PApaiq">class/api/student.ts → /api/class/*（student/info/grade/exam/dorm/attendance/urge 18 个）· class/api/approval.ts → /api/class/suspend|refund|upgrade|notify（10 个）· class/api/consult.ts → /api/class/consult/receive|reject|push · store/pageConfig.ts → /api/perm/page/my-paths · 其余 api 文件经 request.ts 动态拼接，需结合 search_code 进一步展开</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 9. 使用指南 ============ -->
+<section data-page-node-id="lYVVeVD3auS6wXry3GzYqw">
+  <h2 data-page-node-id="FzZBlzA9DPZFHtFgmyELPp">九、如何继续使用这座图谱</h2>
+  <p class="desc" data-page-node-id="BCoZMjFJW2okqqd7G4KaOk">图谱已持久化在代码图谱服务中，可通过代码图谱工具随时查询；以下为常用入口。</p>
+  <ul class="tight" data-page-node-id="M9AH1nsEFvWx4SsVLg5dQ0">
+    <li data-page-node-id="5pFPTbDrPEDUevUIDjwodE"><b data-page-node-id="eMFj5G4KNTsaZ4XRABEQsm">查符号</b>：search_graph（BM25 / 正则 / 语义），例如搜 <code data-page-node-id="nMv50qy9qJKGIbW58z95lI">tbl</code>、<code data-page-node-id="xNzQjd1UB9bgVSTcR3UKFQ">rolePageEffective</code>，返回 qn、文件、行号与 in/out 度数。</li>
+    <li data-page-node-id="3BNXJkZkGQkAOentyWSH3N"><b data-page-node-id="2XhAyeLgrxAAW3uzM8ImNX">读源码</b>：get_code_snippet(qualified_name) 直接取函数体；大容器自动转大纲。</li>
+    <li data-page-node-id="UOtP5VjWSPBWF4aVyStNoO"><b data-page-node-id="F4GfXGPYZZwAkkt0ywqioA">追调用链</b>：trace_path(function_name, direction="both") 追上下游；data_flow 模式可跟踪参数流转。</li>
+    <li data-page-node-id="EnKW8NWmZFWzFourTK8sdP"><b data-page-node-id="Bqp0kUJ8SbOAVOGXIb7RYw">架构查询</b>：get_architecture(aspects=[...]) 重新生成语言/包/入口/热点/分层/聚类/循环视图。</li>
+    <li data-page-node-id="JOA7eLNrHefWSbzpYkrozM"><b data-page-node-id="Vgy20xpuhJyJVAnHz7AiHe">自定义聚合</b>：query_graph 执行只读 Cypher（支持 count/sum/avg/min/max/collect 等聚合，STARTS WITH 前缀过滤，200 行默认分页 + cursor 续页）。</li>
+    <li data-page-node-id="4OFzLpP8LkgvokWlnC5SF4"><b data-page-node-id="hQAbAy2zptJXiMKHiK1U8E">变更影响</b>：detect_changes 把 Git diff 映射到受影响符号（入站调用者闭包）。</li>
+  </ul>
+  <div class="code" style="margin-top:12px" data-page-node-id="Olfx7xHEBudpJIEHDfz2sz">// 示例：统计各业务目录的函数数量
+MATCH (fn:Function)
+WHERE fn.file_path STARTS WITH 'server-job/src/'
+RETURN fn.file_path AS file, count(*) AS cnt
+ORDER BY cnt DESC
+
+// 示例：查看权限解析链的调用关系
+MATCH (a)-[:CALLS]->(b)
+WHERE b.qualified_name CONTAINS 'roleActionOverlay'
+RETURN a.qualified_name AS caller, b.qualified_name AS callee</div>
+</section>
+
+<!-- ============ 10. 覆盖说明 ============ -->
+<section data-page-node-id="coPXa9SVL7Y6thVH6hVXnL">
+  <h2 data-page-node-id="7t5lQvOxQwHFP6Wu0eRP2A">十、索引覆盖与已知限制</h2>
+  <ul class="tight" data-page-node-id="mUHhS3y6jABkbAbYFxoPA0">
+    <li data-page-node-id="B3neVeUL5APpqe0Cz8kVHt"><b data-page-node-id="14DrqS20lf7vv3Hk8ipAC3">已索引</b>：717 个文件 / 12,410 节点 / 37,847 边；分支 main（HEAD 已记录）。</li>
+    <li data-page-node-id="dCDAF7FK7A8go5p0QJo2Mq"><b data-page-node-id="A8vLRr96frZw3PbysRxCtL">按设计排除</b>（gitignore/.cbmignore）：.git、logs、server-job/node_modules、shared-types/node_modules、shared-types/dist、backup/*.sql（含真实业务数据）、server-job/.env（含凭据）、docs/ui-preview/logo.png。</li>
+    <li data-page-node-id="GP6BUokMWF8bJsW9MfzfXN"><b data-page-node-id="xHaxhrNgEFlR8crMqOPfIX">部分解析</b>：5 个初始化 SQL 文件的 DDL 行范围可能缺列定义（77 张表节点已提取，列级信息以原文为准）。</li>
+    <li data-page-node-id="51Mvvx3rE16uIaCwMHaAIE"><b data-page-node-id="mjVSqzhNwEbJtGVo8BZGrj">文档引用</b>：49 条 MENTIONS（README / docs → 代码），其中 16 条 missing、26 条 ambiguous、27 条 below_tier 未解析。</li>
+    <li data-page-node-id="sB750hNpPNzT7VwHWeJyOc"><b data-page-node-id="P0joL7JWJXI323ruSsoLCk">watch 未开启</b>：当前为一次性索引；代码变更后重新执行 index_repository 即可刷新。</li>
+    <li data-page-node-id="EN7VpmjEgabBAgN0sDtJwn"><b data-page-node-id="tixszuHMlljGzC6QlI3TuI">跨仓智能</b>：未运行（单仓索引）。</li>
+  </ul>
+</section>
+
+<footer data-page-node-id="fiNvfSy5CERMuY0GL6lkWa">良志学管系统代码知识图谱 · 生成于 2026-10-19 · 数据源：本地代码图谱索引（full 模式）</footer>
+
+</div>
+</body>
+</html>

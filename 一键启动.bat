@@ -21,12 +21,46 @@ set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
 
 where node >nul 2>&1
+if errorlevel 1 call :find_node
 if errorlevel 1 goto :no_node
 
 if not exist "tools\start.mjs" goto :no_entry
 
 node "tools\start.mjs" %*
 goto :done
+
+:find_node
+REM ---------------------------------------------------------------------------
+REM  Explorer's environment can be stale: if PATH was edited after login and
+REM  Explorer was never restarted, "where node" fails even though Node is
+REM  installed. Probe the usual install locations and prepend the hit to PATH.
+REM ---------------------------------------------------------------------------
+for /d %%D in (
+  "D:\Node.js*"
+  "%~dp0node*"
+  "%~dp0..\node*"
+  "%ProgramFiles%\nodejs"
+  "%ProgramFiles(x86)%\nodejs"
+  "%LOCALAPPDATA%\Programs\nodejs"
+  "%LOCALAPPDATA%\nodejs"
+) do (
+  if exist "%%~D\node.exe" (
+    set "PATH=%%~D;%PATH%"
+    echo   [INFO] Node.js found at: %%~D
+    exit /b 0
+  )
+)
+REM nvm for Windows keeps versions under %APPDATA%\nvm\vXX.YY.Z\
+if exist "%APPDATA%\nvm" (
+  for /f "delims=" %%V in ('dir /b /ad /o-n "%APPDATA%\nvm" 2^>nul') do (
+    if exist "%APPDATA%\nvm\%%V\node.exe" (
+      set "PATH=%APPDATA%\nvm\%%V;%PATH%"
+      echo   [INFO] Node.js found at: %APPDATA%\nvm\%%V
+      exit /b 0
+    )
+  )
+)
+exit /b 1
 
 :no_node
 echo.
@@ -51,11 +85,26 @@ pause
 exit /b 1
 
 :done
-REM If start.mjs exited with an error, keep the window open so the user can read it.
+REM Keep the window open either way: on error so the user can read it,
+REM on success so the URL stays visible (many users never notice that the
+REM browser opened by itself, or have no default browser at all).
+REM The launcher writes the real address (Vite may have shifted the port)
+REM to tools\.last-url -- prefer it over the hard-coded default.
+set "URL=http://localhost:5173"
+if exist "tools\.last-url" (
+  for /f "usebackq delims=" %%U in ("tools\.last-url") do set "URL=%%U"
+)
 if errorlevel 1 (
   echo.
-  echo   ---- startup returned an error, see messages above / 启动未成功，请看上面的提示 ----
+  echo   ---- startup returned an error, see messages above ----
+  echo   ---- 启动未成功，请看上面的提示 ----
   echo.
-  pause
+) else (
+  echo.
+  echo   Services are running in the background. Closing this window is safe.
+  echo   服务已在后台运行，可以关闭本窗口（关闭不影响已经起来的服务）。
+  echo   Website: %URL%
+  echo.
 )
+pause
 exit /b 0
