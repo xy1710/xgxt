@@ -54,7 +54,7 @@ function timeStr(v: any): string | null {
  *
  * ⚠️ 状态映射（两边枚举不同名，做一次显式换算）：
  *   催费单 call_status：1 待催缴 / 2 催缴中 / 3 已缴清
- *   班级 PayStatus    ：1 待缴   / 2 已缴   / 3 已核对 / 4 逾期 / 5 冻结
+ *   班级 PayStatus    ：1 待缴   / 2 已缴   / 3 已核对 / 5 冻结
  *   → 已缴清 → 2（已缴）；其余 → 1（待缴）
  *
  * ⚠️ 不传 studentId：就业侧只有自己的学生 ID（与班级侧 ID 空间不同），

@@ -32,7 +32,7 @@ import { Request, Response, NextFunction } from 'express';
 import { BizCode, ApiResponse } from 'shared-types';
 import { getUserPagePermissions, getUserOperationPermissions } from '../utils/pagePermissionSource';
 import { getRemovedActionCodesForRoles, preloadRoleActionOverrides } from '../utils/roleActionOverlay';
-import { PAGE_PERMISSIONS, moduleOfPageCode } from '../config/pagePermissions';
+import { PAGE_PERMISSIONS, moduleOfPageCode, SHARED_PAGE_MODULES } from '../config/pagePermissions';
 
 /**
  * ★ 2026-10-06 模块级门槛（与页面级权限【叠加】判定）
@@ -56,6 +56,11 @@ function moduleGate(user: any): (pageCode: string) => boolean {
   if (!Array.isArray(mods) || mods.length === 0) return () => true;
   const set = new Set(mods.map((m) => String(m)));
   return (pageCode: string) => {
+    // ★ 2026-10-19：跨模块共用的页面码（待接收学员：初高中 + 大学都要用）
+    //   ⚠️ 与前端 `web-job/src/store/modules.ts` 的 SHARED_PAGE_MODULES 必须一致：
+    //      后端决定 my-pages 下发什么，前端决定菜单/路由放不放行，两边漏一处就半残。
+    const shared = SHARED_PAGE_MODULES[pageCode];
+    if (shared) return shared.some((m) => set.has(m));
     const m = moduleOfPageCode(pageCode);
     // 不属于任何门户模块的页面码（如 consult/finance/perm 自己的页面）不参与门槛
     return !m || set.has(m);

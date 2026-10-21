@@ -51,6 +51,8 @@ statsRouter.get(
     const attendanceTargetRate = await getNumberSetting('attendanceTargetRate');
 
     // 4) 紧急催费数（未结清且剩余天数 <= 阈值）
+    //    ★ 2026-10-20：未结清补上「逾期(4)」—— 与催费列表的 UNPAID_STATUSES 同口径，
+    //      否则列表里标着紧急、首页这个数字却不含这些行。
     const remindDays = await getNumberSetting('feeRemindDays');
     const feeRows = await db(FEE_TABLE)
       .where('is_deleted', false)
@@ -84,11 +86,14 @@ statsRouter.get(
       .where({ is_deleted: false, apply_status: ApplyStatus.PENDING })
       .count({ pendingDormApply: '*' });
 
+    // ★ 2026-10-16 修：待办跳转路径改为第 1 期合并入口 /teaching/<域>。
+    //   原来的裸路径（/approval 等）在老路由下线后只会落到 404 占位页；
+    //   工作台迁到系统首页后这个清单会直接展示给所有初高角色，必须可点达。
     const todos = [
-      { type: 'flow', title: '待审批流程', count: Number(pendingFlow), path: '/approval' },
-      { type: 'refund', title: '待审批退费', count: Number(pendingRefund), path: '/refund' },
-      { type: 'dormApply', title: '待审批调宿', count: Number(pendingDormApply), path: '/dorm' },
-      { type: 'fee', title: '紧急催费', count: urgentFeeCount, path: '/fee' },
+      { type: 'flow', title: '待审批流程', count: Number(pendingFlow), path: '/teaching/approval' },
+      { type: 'refund', title: '待审批退费', count: Number(pendingRefund), path: '/teaching/refund' },
+      { type: 'dormApply', title: '待审批调宿', count: Number(pendingDormApply), path: '/teaching/dorm' },
+      { type: 'fee', title: '紧急催费', count: urgentFeeCount, path: '/teaching/fee' },
     ];
     const pendingTodoCount = todos.reduce((a, t) => a + t.count, 0);
 

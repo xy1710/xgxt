@@ -1,5 +1,5 @@
 /**
- * 系统设置 / 阶段字典 / 操作日志 接口调用
+ * 系统设置 / 阶段字典 / 阶段方案 / 操作日志 接口调用
  */
 
 import { http } from './request';
@@ -9,6 +9,9 @@ import type {
   StageDict,
   StageListQuery,
   StageSavePayload,
+  StageScheme,
+  StageSchemeListQuery,
+  StageSchemeSavePayload,
   OpLog,
   OpLogListQuery,
 } from 'shared-types/class-jh';
@@ -40,6 +43,28 @@ export function addStage(payload: StageSavePayload): Promise<{ id: string }> {
 /** 阶段删除 */
 export function deleteStage(id: string): Promise<null> {
   return http.delete<null>(`/api/class-jh/stage/delete/${id}`);
+}
+
+/* ---------------- 阶段方案（★ 2026-10-16：阶段字典升级为「方案 + 多阶段」） ---------------- */
+
+/** 阶段方案列表（含阶段明细） */
+export function fetchStageSchemeList(query?: StageSchemeListQuery): Promise<StageScheme[]> {
+  return http.get<StageScheme[]>('/api/class-jh/stage-scheme/list', query);
+}
+
+/** 阶段方案新增 */
+export function addStageScheme(payload: StageSchemeSavePayload): Promise<{ id: string }> {
+  return http.post<{ id: string }>('/api/class-jh/stage-scheme/add', payload);
+}
+
+/** 阶段方案修改（阶段明细整体覆盖） */
+export function updateStageScheme(id: string, payload: StageSchemeSavePayload): Promise<{ id: string }> {
+  return http.put<{ id: string }>(`/api/class-jh/stage-scheme/update/${id}`, payload);
+}
+
+/** 阶段方案删除（被班级使用时后端会拒绝） */
+export function deleteStageScheme(id: string): Promise<null> {
+  return http.delete<null>(`/api/class-jh/stage-scheme/delete/${id}`);
 }
 
 /* ---------------- 操作日志 ---------------- */

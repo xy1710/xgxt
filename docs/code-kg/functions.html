@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>xgxt 函数清单</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: #f6f7f9; color: #1f2328;
+    font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    background: #fff; border-bottom: 1px solid #e3e6ea; padding: 16px 22px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  h1 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
+  .sub { color: #6b7280; font-size: 12px; }
+  .sub b { color: #1f2328; font-weight: 600; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
+  input[type=search] {
+    flex: 1 1 260px; min-width: 200px; padding: 7px 11px; font-size: 13px;
+    border: 1px solid #d4d8dd; border-radius: 6px; background: #fff; outline: none;
+  }
+  input[type=search]:focus { border-color: #4c7fff; box-shadow: 0 0 0 3px rgba(76,127,255,.12); }
+  select {
+    padding: 7px 9px; font-size: 13px; border: 1px solid #d4d8dd;
+    border-radius: 6px; background: #fff; color: #1f2328; cursor: pointer;
+  }
+  label.chk {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 13px;
+    color: #444; cursor: pointer; user-select: none;
+  }
+  .count { font-size: 12px; color: #6b7280; margin-left: auto; }
+  .count b { color: #1f2328; }
+
+  main { padding: 14px 22px 40px; }
+  table { width: 100%; border-collapse: collapse; background: #fff;
+          border: 1px solid #e3e6ea; border-radius: 8px; overflow: hidden; }
+  thead th {
+    text-align: left; font-size: 12px; font-weight: 600; color: #6b7280;
+    background: #fafbfc; padding: 9px 12px; border-bottom: 1px solid #e3e6ea;
+    position: sticky; top: 132px; z-index: 5;
+  }
+  tbody td { padding: 7px 12px; border-bottom: 1px solid #f0f2f4; vertical-align: top; }
+  tbody tr:hover { background: #f8fafc; }
+  .fn { font-family: ui-monospace, Consolas, monospace; font-size: 13px; font-weight: 600; color: #1a56db; }
+  .sig { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: #8b949e;
+         display: block; margin-top: 2px; white-space: nowrap; overflow: hidden;
+         text-overflow: ellipsis; max-width: 460px; }
+  .loc { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: #6b7280; }
+  .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 10px;
+    font-size: 11px; line-height: 17px; white-space: nowrap;
+  }
+  .t-role { background: #eef2ff; color: #4338ca; }
+  .t-domain { background: #ecfdf5; color: #047857; }
+  .t-async { background: #fff7ed; color: #c2410c; }
+  .t-export { background: #f0f9ff; color: #0369a1; }
+  .kind { font-size: 11px; color: #8b949e; }
+  .more { text-align: center; padding: 16px; }
+  button.more-btn {
+    padding: 8px 20px; font-size: 13px; border: 1px solid #d4d8dd;
+    background: #fff; border-radius: 6px; cursor: pointer; color: #1f2328;
+  }
+  button.more-btn:hover { background: #f3f4f6; }
+  .empty { text-align: center; padding: 40px; color: #8b949e; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>xgxt 函数清单</h1>
+  <div class="sub" id="sub">加载中…</div>
+  <div class="bar">
+    <input type="search" id="q" placeholder="搜索函数名或文件路径，如 loadRooms、dorm">
+    <select id="fPkg"><option value="">全部包</option></select>
+    <select id="fRole"><option value="">全部角色</option></select>
+    <select id="fDomain"><option value="">全部领域</option></select>
+    <select id="fKind"><option value="">全部种类</option></select>
+    <label class="chk"><input type="checkbox" id="fAsync">只看异步</label>
+    <label class="chk"><input type="checkbox" id="fExport">只看导出</label>
+    <span class="count" id="count"></span>
+  </div>
+</header>
+
+<main>
+  <table id="tbl">
+    <thead><tr>
+      <th style="width:34%">函数</th>
+      <th style="width:14%">角色</th>
+      <th style="width:12%">领域</th>
+      <th>位置</th>
+    </tr></thead>
+    <tbody id="body"></tbody>
+  </table>
+  <div class="more" id="more"></div>
+</main>
+
+<script src="functions.js"></script>
+<script>
+(function () {
+  const D = window.FUNC_DATA;
+  if (!D) { document.getElementById('sub').textContent = '❌ 没读到 functions.js，请先跑 node tools/scan-functions.mjs'; return; }
+
+  const { funcs, stats, labels } = D;
+
+  document.getElementById('sub').innerHTML =
+    `共 <b>${stats.total}</b> 个函数 · 扫描 <b>${stats.files}</b> 个文件 · 异步 <b>${stats.asyncCount}</b> · 导出 <b>${stats.exportedCount}</b>` +
+    ` &nbsp;|&nbsp; 生成于 <code>${D.generatedAt.slice(0, 19).replace('T', ' ')}</code>`;
+
+  // 填充下拉：包直接用（id 即显示名）
+  const pkgSel = document.getElementById('fPkg');
+  [...new Set(funcs.map(f => f.pkg))].sort().forEach(p => pkgSel.insertAdjacentHTML('beforeend', `<option value="${p}">${p}</option>`));
+
+  const addOpts = (id, key, labelMap) => {
+    const sel = document.getElementById(id);
+    const counts = new Map();
+    funcs.forEach(f => counts.set(f[key], (counts.get(f[key]) || 0) + 1));
+    [...counts.entries()].sort((a, b) => b[1] - a[1]).forEach(([v, c]) => {
+      sel.insertAdjacentHTML('beforeend', `<option value="${v}">${(labelMap[v] || v)} (${c})</option>`);
+    });
+  };
+  addOpts('fRole', 'role', labels.role);
+  addOpts('fDomain', 'domain', labels.domain);
+  addOpts('fKind', 'kind', labels.kind);
+
+  const PAGE = 200;
+  let shown = 0, list = [];
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  function apply() {
+    const q = $('q').value.trim().toLowerCase();
+    const pkg = $('fPkg').value, role = $('fRole').value, dm = $('fDomain').value, kd = $('fKind').value;
+    const onlyAsync = $('fAsync').checked, onlyExport = $('fExport').checked;
+
+    list = funcs.filter(f => {
+      if (pkg && f.pkg !== pkg) return false;
+      if (role && f.role !== role) return false;
+      if (dm && f.domain !== dm) return false;
+      if (kd && f.kind !== kd) return false;
+      if (onlyAsync && !f.async) return false;
+      if (onlyExport && !f.exported) return false;
+      if (q && !(f.name.toLowerCase().includes(q) || f.file.toLowerCase().includes(q))) return false;
+      return true;
+    });
+    shown = 0;
+    $('body').innerHTML = '';
+    $('count').innerHTML = `匹配 <b>${list.length}</b> / ${stats.total}`;
+    render();
+  }
+
+  function render() {
+    const slice = list.slice(shown, shown + PAGE);
+    const html = slice.map(f => `<tr>
+      <td>
+        <span class="fn">${esc(f.name)}</span>
+        ${f.exported ? '<span class="tag t-export">export</span>' : ''}
+        ${f.async ? '<span class="tag t-async">async</span>' : ''}
+        <span class="sig">${esc(f.signature || '')}</span>
+      </td>
+      <td><span class="tag t-role">${esc(labels.role[f.role] || f.role)}</span><div class="kind">${esc(labels.kind[f.kind] || f.kind)}</div></td>
+      <td><span class="tag t-domain">${esc(labels.domain[f.domain] || f.domain)}</span></td>
+      <td><span class="loc">${esc(f.file)}:${f.line}</span></td>
+    </tr>`).join('');
+    $('body').insertAdjacentHTML('beforeend', html);
+    shown += slice.length;
+    $('more').innerHTML = shown < list.length
+      ? `<button class="more-btn" id="moreBtn">还有 ${list.length - shown} 条，继续加载</button>`
+      : (list.length ? '<span class="empty" style="padding:12px;display:block">— 到底了 —</span>' : '<div class="empty">没有匹配的函数</div>');
+    const b = $('moreBtn');
+    if (b) b.onclick = render;
+  }
+
+  let timer;
+  $('q').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(apply, 180); });
+  ['fPkg', 'fRole', 'fDomain', 'fKind', 'fAsync', 'fExport'].forEach(id => {
+    $(id).addEventListener('change', apply);
+  });
+
+  apply();
+})();
+</script>
+</body>
+</html>

@@ -113,6 +113,9 @@ export function toListItem(row: any, feeStat?: { paid: number; pending: number }
     intendCourse: row.intend_course || undefined,
     paidCount: feeStat?.paid ?? 0,
     pendingCount: feeStat?.pending ?? 0,
+    // ★ 2026-10-16 分期欠费：直接读学生表上同步好的 arrear_amount（由分期服务维护）
+    arrearAmount: Number(row.arrear_amount || 0),
+    inArrear: Number(row.arrear_amount || 0) > 0,
     infoCompleteness: calcCompleteness(row),
     createTime: row.create_time ? formatTime(row.create_time) : '',
   };
@@ -135,6 +138,8 @@ export function toDetail(row: any): ConsultStudent {
     sourceChannel: row.source_channel,
     sourceChannelName: nameOf(LEAD_CHANNEL_NAME, row.source_channel),
     sourceRemark: row.source_remark || undefined,
+    referrerName: row.referrer_name || undefined,
+    referrerPhone: row.referrer_phone || undefined,
     ownerId: row.owner_id || undefined,
     ownerName: row.owner_name || undefined,
     ownerTitle: row.owner_title || undefined,

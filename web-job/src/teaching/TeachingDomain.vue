@@ -76,8 +76,8 @@ const STAGE_ORDER = ['jh', 'class', 'job', 'edu'] as const;
 
 /** 学段 key → 中文名（与各统一页的 STAGE_LABEL 保持一致） */
 const STAGE_LABEL: Record<string, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '实训',
   edu: '教务',
   就业: '就业',
@@ -132,7 +132,7 @@ const unified = computed(() => def.value?.unified || null);
         <el-tab-pane v-for="s in stages" :key="s.stage" :label="s.stage" :name="s.stage" />
       </el-tabs>
 
-      <el-empty v-if="stages.length === 0" description="当前账号没有该业务域任何学段的访问权限" />
+      <el-empty v-if="stages.length === 0" description="当前账号没有该业务域任何部门的访问权限" />
 
       <template v-else>
         <el-alert

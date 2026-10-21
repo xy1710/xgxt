@@ -52,9 +52,8 @@
         >
           <!--
             ⚠️ 这里只列「本页可能出现」的状态。
-               本页硬约束为「只看已上传凭证的单据」，所以「待缴」「逾期」
-               这两类（都是没交钱、没凭证的）永远不会出现，
-               列出来只会让财务选了之后得到空列表，白踩一次坑。
+               本页硬约束为「只看已上传凭证、且非冻结的单据」，所以
+               「待缴」「冻结」永远不会出现，列出来只会让财务白踩一次坑。
           -->
           <el-option
             v-for="(name, v) in payStatusOptions"
@@ -133,7 +132,18 @@
         <el-table-column prop="className" label="班级" width="100">
           <template #default="{ row }">{{ dash(row.className) }}</template>
         </el-table-column>
-        <el-table-column prop="feeTypeName" label="缴费类型" width="90" align="center" />
+        <el-table-column label="缴费类型" width="120" align="center">
+          <template #default="{ row }">
+            <div>{{ row.feeTypeName }}</div>
+            <!--
+              ★ 2026-10-19 用户口径：总金额下面要知道包含什么。
+                列表放不下明细，先在这里标「含 N 项」，点详情看分项。
+            -->
+            <div v-if="(row.itemCount || 1) > 1" class="voucher-group">
+              含 {{ row.itemCount }} 项
+            </div>
+          </template>
+        </el-table-column>
         <!-- 来源模块：这笔钱是谁发起的（咨询/教务/财务自建） -->
         <el-table-column label="来源" width="100" align="center">
           <template #default="{ row }">
@@ -176,11 +186,19 @@
         <el-table-column label="缴费日期" width="100" align="center">
           <template #default="{ row }">{{ dash(row.payDate) }}</template>
         </el-table-column>
-        <el-table-column label="缴费凭证" width="96" align="center">
+        <el-table-column label="缴费凭证" width="132" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.hasVoucher" type="primary" size="small" effect="plain">已上传 ›</el-tag>
             <el-tag v-else-if="row.payDate" type="warning" size="small" effect="plain">待上传</el-tag>
             <el-tag v-else type="info" size="small" effect="plain">—</el-tag>
+            <!--
+              ★ 2026-10-19 一张凭证可能覆盖多张单据（一次缴清多项费用只有一张转账截图），
+                此时本行金额只是其中一项，凭证截图是合计 —— 必须标出来，
+                否则财务会以为「凭证和实缴金额对不上」。
+            -->
+            <div v-if="(row.voucherGroupCount || 1) > 1" class="voucher-group">
+              共 {{ row.voucherGroupCount }} 笔 · {{ formatAmount(row.voucherGroupAmount) }}
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="headTeacherName" label="班主任" width="90">
@@ -236,6 +254,11 @@
         <el-descriptions-item label="缴费类型">{{ detail.feeTypeName }}</el-descriptions-item>
         <el-descriptions-item label="金额">
           <span class="amount">{{ formatAmount(detail.amount) }}</span>
+          <!-- ★ 2026-10-19 一张凭证覆盖多张单据时，本单只是其中一项 -->
+          <div v-if="(detail.voucherGroupCount || 1) > 1" class="voucher-group">
+            本单为其中一项，该凭证合计 {{ formatAmount(detail.voucherGroupAmount) }}
+            （共 {{ detail.voucherGroupCount }} 笔）
+          </div>
         </el-descriptions-item>
         <el-descriptions-item label="缴费状态">
           <el-tag :type="payStatusTagType(detail.payStatus)" size="small">
@@ -262,6 +285,45 @@
         </el-descriptions-item>
         <el-descriptions-item label="备注" :span="2">{{ dash(detail.remark) }}</el-descriptions-item>
       </el-descriptions>
+
+      <!--
+        ============ 这笔钱包含什么（总金额下面列的小列）============
+
+        ★ 2026-10-19 用户口径：
+          一张凭证 = 交的总金额，总金额下面列出包含的费用项。
+          合计单（家长一次转一笔钱交多类费用）才有明细；
+          单项单的物品就是「缴费类型」那一行，不重复列。
+      -->
+      <div v-if="detail && (detail.items?.length || 0) > 1" class="items-block">
+        <div class="items-head">
+          <span class="items-title">这笔钱包含</span>
+          <span class="items-total">
+            共 {{ detail.items?.length }} 项 · 合计 {{ formatAmount(detail.amount) }}
+          </span>
+        </div>
+        <el-table :data="detail.items" size="small" border>
+          <el-table-column prop="feeTypeName" label="费用项" min-width="140" />
+          <el-table-column label="应缴" width="120" align="right">
+            <template #default="{ row }">¥{{ row.standardAmountYuan }}</template>
+          </el-table-column>
+          <el-table-column label="实缴" width="120" align="right">
+            <template #default="{ row }">
+              <span class="items-amount">¥{{ row.amountYuan }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="优惠" width="120" align="right">
+            <template #default="{ row }">
+              <span v-if="row.discount > 0" class="items-discount">
+                -¥{{ row.discountYuan }}
+              </span>
+              <span v-else class="dash">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="items-note">
+          实缴合计 = 本单金额 = 缴费凭证上的金额，财务按整单核对一次即可。
+        </div>
+      </div>
 
       <!-- ============ 缴费凭证（截图 + 转账单号）============ -->
       <div v-if="detail" class="voucher-block">
@@ -308,6 +370,18 @@
             <div class="info-row">
               <span class="info-label">上传时间</span>
               <span class="info-value">{{ dash(detail.voucherTime) }}</span>
+            </div>
+            <!--
+              ★ 2026-10-19 一次缴清多项费用：一张转账截图覆盖多张单据，
+                截图金额是合计，本单只是其中一项 —— 这里明确写出来。
+            -->
+            <div v-if="(detail.voucherGroupCount || 1) > 1" class="info-row">
+              <span class="info-label">凭证覆盖</span>
+              <span class="info-value">
+                共 {{ detail.voucherGroupCount }} 笔 · 合计
+                <b>{{ formatAmount(detail.voucherGroupAmount) }}</b>
+                <span class="voucher-group-inline">（本单 {{ formatAmount(detail.amount) }}）</span>
+              </span>
             </div>
             <div class="info-row">
               <span class="info-label">凭证规则</span>
@@ -485,8 +559,10 @@ const dateRange = ref<[string, string] | null>(null);
 /**
  * 「缴费状态」筛选下拉的可选项。
  *
- * ⚠️ 只列本页真的可能出现的那几个 —— 本页硬约束是「只看已上传凭证的单据」，
- *    「待缴/逾期」都是没交钱没凭证的，永远不会出现在结果里，
+ * ⚠️ 只列本页真的可能出现的那几个 —— 本页硬约束是
+ *    「只看已上传凭证、且非冻结的单据」，所以：
+ *      · 「待缴」没有凭证 → 不会出现
+ *      · 「冻结」被后端硬性排除 → 不会出现
  *    列出来等于给财务挖坑（选了就是空列表）。
  *
  * 命名对照（2026-10-04 起）：2 = 待核对，3 = 已缴。
@@ -494,7 +570,6 @@ const dateRange = ref<[string, string] | null>(null);
 const payStatusOptions = computed(() => ({
   [PayStatus.PAID]: PAY_STATUS_NAME[PayStatus.PAID],
   [PayStatus.VERIFIED]: PAY_STATUS_NAME[PayStatus.VERIFIED],
-  [PayStatus.FROZEN]: PAY_STATUS_NAME[PayStatus.FROZEN],
 }));
 
 /**
@@ -549,7 +624,6 @@ const stats = ref<FeeStats>({
   waitVerify: 0,
   verified: 0,
   rejected: 0,
-  overdue: 0,
   frozen: 0,
 });
 
@@ -758,9 +832,20 @@ function openInNewTab(url?: string) {
 /* ---------- 核对 ---------- */
 
 async function handleVerify(row: FeeListItem) {
+  /**
+   * ★ 2026-10-19 一张凭证覆盖多张单据时，把「本单只是其中一项」讲清楚：
+   *    财务核对的是「钱到账了没有」，凭证上的合计金额和本单金额本来就不同，
+   *    不提示的话会被当成数据错乱，或者误以为少记了钱。
+   */
+  const groupTip =
+    (row.voucherGroupCount || 1) > 1
+      ? `（注意：这张凭证共覆盖 ${row.voucherGroupCount} 笔单据，合计 ${formatAmount(
+          row.voucherGroupAmount,
+        )}，本单只是其中一项；本次只核对本单，其余同凭证单据需分别核对）`
+      : '';
   try {
     await ElMessageBox.confirm(
-      `确认「${row.studentName}」的 ${row.feeTypeName} ${formatAmount(row.amount)} 已到账并核对入账吗？`,
+      `确认「${row.studentName}」的 ${row.feeTypeName} ${formatAmount(row.amount)} 已到账并核对入账吗？${groupTip}`,
       '核对确认',
       { type: 'warning', confirmButtonText: '确认核对', cancelButtonText: '取消' },
     );
@@ -878,6 +963,64 @@ onMounted(async () => {
 .amount {
   font-weight: 600;
   color: #443432;
+}
+
+/* 一张凭证覆盖多张单据时的小字说明（共 N 笔 · 合计 ¥X） */
+.voucher-group {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #A2938E;
+  white-space: nowrap;
+}
+
+/* 详情弹窗里「凭证覆盖」那一行的括号说明 */
+.voucher-group-inline {
+  color: #A2938E;
+  font-size: 12px;
+}
+
+/* ---------- 「这笔钱包含」子表（合计单的分项） ---------- */
+
+.items-block {
+  margin-top: 16px;
+}
+
+.items-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.items-title {
+  font-weight: 600;
+  color: #443432;
+  font-size: 13px;
+}
+
+.items-total {
+  font-size: 12px;
+  color: #A2938E;
+}
+
+.items-amount {
+  font-weight: 600;
+  color: #443432;
+}
+
+.items-discount {
+  color: #C06B2A;
+}
+
+.items-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #A2938E;
+}
+
+.dash {
+  color: #C4B8B4;
 }
 
 .reject-text {

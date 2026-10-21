@@ -260,6 +260,20 @@ export interface UrgeRow {
   lastUrgeTime: string | null;
   overdueDays: number;
   isOverdue: boolean;
+
+  /* ★ 2026-10-21 登记缴费五列（与初高 t_class_fee 同口径，对齐催费页操作列） */
+  /** 缴费方式 1微信支付 2支付宝 3现金；未登记为 null */
+  payMethod?: number | null;
+  /** 枚举双返回 */
+  payMethodName?: string;
+  /** 实缴金额（分） */
+  paidAmount?: number | null;
+  /** 缴费日期 YYYY-MM-DD */
+  payDate?: string | null;
+  /** 缴费凭证地址 */
+  voucherUrl?: string | null;
+  /** 缴费备注 */
+  payRemark?: string | null;
 }
 
 export interface UrgeLogRow {
@@ -474,8 +488,7 @@ export interface ConsultItem {
   homeAddress: string | null;
   intendDeptCode: number | null;
   intendDeptName: string | null;
-  intendStage: number | null;
-  intendStageName: string | null;
+  /** ★ 2026-10-19：意向阶段已删除（后端不再下发），阶段一律取目标班级的 */
   intendClassId: string | null;
   intendClassName: string | null;
   remark: string | null;
@@ -489,6 +502,10 @@ export interface ConsultItem {
   studentId: string | null;
   studentNo: string | null;
   sourceSystem: string | null;
+  /** 目标班是否属于初高（1 初高部）—— 接收弹窗据此隐藏大学部才有的字段 */
+  targetIsJh?: boolean;
+  /** 当前登录人能否接收 / 驳回（后端按「目标班是不是我带的班」算好） */
+  canReceive?: boolean;
   /** 是否末班 / 重修转入（成绩管理「末班」推来） */
   isRepeatIn?: boolean;
   /** 是否换班转入（班级信息管理「换班」推来） */
@@ -506,7 +523,6 @@ export interface ConsultReceivePayload {
   id: string;
   classId?: string | null;
   studentNo?: string | null;
-  stage?: number | null;
   age?: number | null;
   phone?: string | null;
   parentPhone?: string | null;

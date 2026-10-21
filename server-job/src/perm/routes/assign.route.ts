@@ -1,14 +1,14 @@
 /**
- * 角色-权限分配路由
+ * 职位权限分配路由
  *
  * 提供方：权限管理（林晓）
  * 前缀：  /api/perm/assign
  *
- *  GET  /role-list              左栏角色清单
- *  GET  /tree?roleId=xxx        权限树 + 该角色勾选态 + 实时统计
+ *  GET  /role-list              左栏职位清单
+ *  GET  /tree?roleId=xxx        权限树 + 该职位勾选态 + 实时统计
  *  PUT  /save                   保存（全量覆盖）
- *  POST /copy                   从其他角色复制权限
- *  POST /reset                  清空该角色全部权限
+ *  POST /copy                   从其他职位复制权限
+ *  POST /reset                  清空该职位全部权限
  *
  * ⚠️ 本模块最关键的语义：**应用权限 = 全量覆盖**，不是增量合并。
  *    前端把整棵树的勾选状态一次性提交，后端先按 role_id 清空再插入。
@@ -41,8 +41,8 @@ import { clearRoleActionCache } from '../../utils/roleActionOverlay';
  *
  * 【为什么必须有这一步】
  *   权限点（t_perm_role_perm）在两个地方被当**默认值**用：
- *     ① 角色 → 页面 的默认可见集合（rolePageDefaults.ts，15 秒内存缓存）
- *     ② 角色 → 操作码 的按钮判权叠加（roleActionOverlay.ts，15 秒内存缓存）
+ *     ① 职位 → 页面 的默认可见集合（rolePageDefaults.ts，15 秒内存缓存）
+ *     ② 职位 → 操作码 的按钮判权叠加（roleActionOverlay.ts，15 秒内存缓存）
  *   缓存 TTL 是 15 秒，但**改完不主动清**的话，管理员会看到
  *   「界面上取消了权限点，页面/按钮却要等十几秒才变」——
  *   实测确认过是 15.1 秒（见 docs/权限控制-端到端验证报告）。
@@ -58,7 +58,7 @@ export const assignRouter = Router();
 const permKey = (moduleKey: string, itemName: string) => `${moduleKey}||${itemName}`;
 
 /* ============================================================
- * 1. 左栏角色清单
+ * 1. 左栏职位清单
  *    GET /api/perm/assign/role-list
  * ============================================================ */
 
@@ -100,7 +100,7 @@ assignRouter.get(
     const { roleId } = (req as any).validated as { roleId: string };
 
     const role = await db('t_perm_role').where({ id: roleId, is_deleted: false }).first();
-    if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '角色不存在');
+    if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '职位不存在');
 
     const [mods, perms, stats] = await Promise.all([
       loadModules(),
@@ -180,7 +180,7 @@ assignRouter.put(
     const body = (req as any).validated as { roleId: string; perms: RolePermMap };
 
     const role = await db('t_perm_role').where({ id: body.roleId, is_deleted: false }).first();
-    if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '角色不存在');
+    if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '职位不存在');
 
     const before = Number(role.perm_count || 0);
     const permCount = await replaceRolePerms(body.roleId, body.perms, req.user?.userId || 'system');
@@ -193,7 +193,7 @@ assignRouter.put(
       operatorRole: req.user?.roles?.join('、'),
       moduleName: '权限管理',
       actionType: '权限变更',
-      targetObj: `角色 ${role.role_name}`,
+      targetObj: `职位 ${role.role_name}`,
       beforeValue: `权限点 ${before}`,
       afterValue: `权限点 ${permCount}`,
       ip: clientIp(req),
@@ -224,19 +224,19 @@ assignRouter.post(
     };
 
     if (targetRoleId === sourceRoleId) {
-      throw new BizError(BizCode.PARAM_ERROR, '来源角色与目标角色不能是同一个');
+      throw new BizError(BizCode.PARAM_ERROR, '来源职位与目标职位不能是同一个');
     }
 
     const [target, source] = await Promise.all([
       db('t_perm_role').where({ id: targetRoleId, is_deleted: false }).first(),
       db('t_perm_role').where({ id: sourceRoleId, is_deleted: false }).first(),
     ]);
-    if (!target) throw new BizError(BizCode.ROLE_NOT_FOUND, '目标角色不存在');
-    if (!source) throw new BizError(BizCode.ROLE_NOT_FOUND, '来源角色不存在');
+    if (!target) throw new BizError(BizCode.ROLE_NOT_FOUND, '目标职位不存在');
+    if (!source) throw new BizError(BizCode.ROLE_NOT_FOUND, '来源职位不存在');
 
     const perms = await getRolePermMap(sourceRoleId);
     if (!Object.keys(perms).some((k) => (perms[k] || []).length)) {
-      throw new BizError(BizCode.PERM_SAVE_EMPTY, `来源角色「${source.role_name}」没有任何权限可复制`);
+      throw new BizError(BizCode.PERM_SAVE_EMPTY, `来源职位「${source.role_name}」没有任何权限可复制`);
     }
 
     const permCount = await replaceRolePerms(targetRoleId, perms, req.user?.userId || 'system');
@@ -248,7 +248,7 @@ assignRouter.post(
       operatorRole: req.user?.roles?.join('、'),
       moduleName: '权限管理',
       actionType: '权限变更',
-      targetObj: `角色 ${target.role_name}`,
+      targetObj: `职位 ${target.role_name}`,
       beforeValue: `权限点 ${target.perm_count}`,
       afterValue: `复制自「${source.role_name}」，权限点 ${permCount}`,
       ip: clientIp(req),
@@ -279,7 +279,7 @@ assignRouter.post(
     const { roleId, mode } = (req as any).validated as { roleId: string; mode?: 'clear' | 'full' };
 
     const role = await db('t_perm_role').where({ id: roleId, is_deleted: false }).first();
-    if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '角色不存在');
+    if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '职位不存在');
 
     let perms: RolePermMap = {};
     if (mode === 'full') {
@@ -301,13 +301,13 @@ assignRouter.post(
       operatorRole: req.user?.roles?.join('、'),
       moduleName: '权限管理',
       actionType: '权限变更',
-      targetObj: `角色 ${role.role_name}`,
+      targetObj: `职位 ${role.role_name}`,
       beforeValue: `权限点 ${before}`,
       afterValue: mode === 'full' ? `已全量赋予，权限点 ${permCount}` : '已清空权限',
       ip: clientIp(req),
     });
 
-    res.json(ok({ permCount }, mode === 'full' ? '已赋予全部权限' : '已清空该角色的权限'));
+    res.json(ok({ permCount }, mode === 'full' ? '已赋予全部权限' : '已清空该职位的权限'));
   }),
 );
 

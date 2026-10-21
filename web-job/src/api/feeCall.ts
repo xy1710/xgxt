@@ -60,6 +60,33 @@ export function voidFeeCall(id: string): Promise<null> {
   return http.post<null>('/api/job/fee-call/void', { id });
 }
 
+/**
+ * 登记缴费（上传缴费凭证）· 就业
+ *
+ * ★ 2026-10-21 用户要求：催费页里就业要和初高功能对齐 ——
+ *   初高的行能登记缴费（缴费方式 / 实缴金额 / 缴费日期 / 备注 / 截图），
+ *   就业催费单原来只有一个催缴状态，「钱怎么交的」完全没记录。
+ *
+ * 落库位置：`t_job_fee_call` 的 pay_method / paid_amount / pay_date / voucher_url / pay_remark；
+ * 成功后 call_status 置 3（已缴清）并写 handle_time / handle_remark。
+ * ⚠️ 本模块仍然不产生财务账目（只是催办工单），凭证只存在这张单上。
+ */
+export function submitFeeCallPayment(payload: {
+  /** 催费单 id（页面行里的 feeId 带 `call:` 前缀，调用前剥掉） */
+  id: string;
+  /** 缴费方式 1微信支付 2支付宝 3现金 */
+  payMethod: number;
+  /** 实缴金额（分），允许与应缴不同 */
+  paidAmount: number;
+  /** 缴费日期 YYYY-MM-DD（不能晚于今天） */
+  payDate: string;
+  remark?: string;
+  /** 缴费截图 dataURL；现金可不传 */
+  dataUrl?: string;
+}): Promise<{ id: string; voucherUrl: string | null; callStatus: number; payMethodName: string }> {
+  return http.post('/api/job/fee-call/voucher', payload);
+}
+
 /** 统计 */
 export function fetchFeeCallSummary(): Promise<FeeCallSummary> {
   return http.get<FeeCallSummary>('/api/job/fee-call/summary');

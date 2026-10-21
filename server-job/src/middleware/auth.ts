@@ -43,7 +43,7 @@ export interface AuthUser {
    *   为什么需要它：各 legacy 模块有自己的老角色码（如初高模块把
    *   `TEACH_HEAD` 翻成 `ROLE_HEAD_TEACHER`），而「权限树」
    *   （`sms_perm.t_perm_role.role_code`）用的是**无前缀新码**。
-   *   要让「角色-权限分配」的改动叠加到接口判权上，必须拿得到新码。
+   *   要让「职位权限分配」的改动叠加到接口判权上，必须拿得到新码。
    *
    *   —— 由各模块的 authMiddleware 在解析业务角色时顺手挂上（`resolveBusinessRoles` 的返回值）。
    */
@@ -485,7 +485,7 @@ export function checkPermission(permissionCode: string) {
     // ★ 兜底：按角色查「操作权限配置」（2026-09-30 补）
     //   user.permissions 要等「登录 8001 + 权限管理 8006」接上才会被填，
     //   在那之前它是空数组 —— 不加这一步，**连校长都点不了「新建考试」**。
-    //   ★ 2026-10-07：这一层已叠加「角色-权限分配」页面的权限树
+    //   ★ 2026-10-07：这一层已叠加「职位权限分配」页面的权限树
     //     （详见 utils/roleActionOverlay.ts）→ 管理员改权限点，按钮立刻变。
     if ((await getUserOperationPermissions(user.roles)).includes(permissionCode)) {
       next();

@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码知识图谱 · 学管系统 xgxt</title>
+<style>
+  :root{
+    --bg:#f6f8fb; --card:#ffffff; --ink:#0f172a; --muted:#64748b;
+    --line:#e3e8ef; --server:#2563eb; --web:#0d9488; --shared:#7c3aed; --tools:#94a3b8;
+    --warn:#d97706; --ok:#059669;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1280px;margin:0 auto;padding:32px 24px 64px}
+  header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:24px}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px}
+  .sub{color:var(--muted);font-size:13.5px;line-height:1.7}
+  .sub code{background:#eef2f7;padding:1px 6px;border-radius:4px;font-size:12.5px}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:22px 0 26px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .kpi .n{font-size:26px;font-weight:650;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+  .kpi .l{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .panel h2{font-size:15px;margin:0 0 4px;font-weight:640}
+  .panel .hint{color:var(--muted);font-size:12px;margin:0 0 16px;line-height:1.6}
+  .graph-grid{display:grid;grid-template-columns:1fr 300px;gap:14px;margin-bottom:14px}
+  #cv{width:100%;height:560px;display:block;border-radius:10px;cursor:grab}
+  .legend{display:flex;flex-direction:column;gap:9px;font-size:12.5px;color:var(--muted);
+    border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:1px}
+  #detail{font-size:12.5px;line-height:1.75;color:var(--muted);min-height:120px}
+  #detail b{color:var(--ink)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  .bars{display:flex;flex-direction:column;gap:7px}
+  .bar{display:grid;grid-template-columns:104px 1fr 38px;align-items:center;gap:9px;font-size:12px}
+  .bar .lab{color:var(--muted);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar .track{background:#eef2f7;border-radius:4px;height:15px;overflow:hidden}
+  .bar .fill{height:100%;border-radius:4px;transition:width .5s ease}
+  .bar .val{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:560}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--muted);font-weight:560;padding:7px 8px;border-bottom:1px solid var(--line);font-size:11.5px;text-transform:uppercase;letter-spacing:.4px}
+  td{padding:8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.mono,code.mono{font-family:"Cascadia Code",Consolas,monospace;font-size:11.5px;color:#334155}
+  .cx{font-variant-numeric:tabular-nums;font-weight:600;padding:1px 7px;border-radius:5px;font-size:11.5px}
+  .cx.hi{background:#fef2f2;color:#b91c1c}
+  .cx.mid{background:#fffbeb;color:#b45309}
+  .cx.lo{background:#ecfdf5;color:#047857}
+  .flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;align-items:stretch;margin-top:6px}
+  .step{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px;position:relative}
+  .step .t{font-size:12px;font-weight:640;margin-bottom:3px}
+  .step .d{font-size:11px;color:var(--muted);line-height:1.5}
+  .step .v{font-size:17px;font-weight:660;margin-top:8px;font-variant-numeric:tabular-nums}
+  .pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .pill{background:#f1f5f9;border:1px solid var(--line);border-radius:20px;padding:3px 10px;font-size:11.5px;color:#475569}
+  .notes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:14px}
+  .note{background:#fff;border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;padding:14px 16px}
+  .note.ok{border-left-color:var(--ok)}
+  .note h3{font-size:12.5px;margin:0 0 6px}
+  .note p{margin:0;font-size:12px;color:var(--muted);line-height:1.7}
+  .gq{margin-top:22px;background:#0f172a;border-radius:12px;padding:18px 20px;color:#cbd5e1}
+  .gq h3{color:#fff;font-size:13px;margin:0 0 10px}
+  .gq pre{margin:0;font-family:"Cascadia Code",Consolas,monospace;font-size:11.5px;line-height:1.8;overflow-x:auto}
+  .gq .k{color:#7dd3fc}
+  .gq .c{color:#64748b}
+  footer{margin-top:34px;color:#94a3b8;font-size:11.5px;text-align:center}
+  @media(max-width:980px){
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .graph-grid,.two,.notes{grid-template-columns:1fr}
+    .flow{grid-template-columns:1fr 1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>代码知识图谱 · 学管系统 xgxt</h1>
+    <div class="sub">
+      由 <code>codebase-memory-mcp</code> 全量索引生成（mode=full，含语义分析）·
+      项目标识 <code>xgxt-xueguan</code> · 索引于 2026-10-19 20:07 ·
+      覆盖 <b>743</b> 个文件、6 种语言
+    </div>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="graph-grid">
+    <div class="panel">
+      <h2>域级依赖图谱</h2>
+      <p class="hint">节点＝业务域（按文件数缩放），连线＝跨域 import 与函数调用强度。拖拽节点、滚轮缩放，点击查看域信息。</p>
+      <canvas id="cv"></canvas>
+    </div>
+    <div class="panel">
+      <h2>图例</h2>
+      <div class="legend">
+        <div><i style="background:#2563eb"></i>后端 server-job</div>
+        <div><i style="background:#0d9488"></i>前端 web-job</div>
+        <div><i style="background:#7c3aed"></i>共享 shared-types</div>
+        <div><i style="background:#94a3b8"></i>工具 tools</div>
+      </div>
+      <h2>选中节点</h2>
+      <div id="detail">点击图中任意节点查看该域的规模、内部调用量与上下游依赖。</div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:14px">
+    <h2>请求链路分层</h2>
+    <p class="hint">从图谱的 HTTP_CALLS / CALLS / Route 边还原的调用主干。</p>
+    <div class="flow" id="flow"></div>
+  </div>
+
+  <div class="two">
+    <div class="panel">
+      <h2>路由分布（按 API 一级模块）</h2>
+      <p class="hint">Route 节点共 963 个；其中 681 个是带 <code>/api/*</code> 全前缀的绝对路由，282 个是子路由相对路径。</p>
+      <div class="bars" id="routeBars"></div>
+    </div>
+    <div class="panel">
+      <h2>请求处理器归属（按目录）</h2>
+      <p class="hint">从 Route 反向溯源到处理函数所落的业务目录，共 1107 条 Route←CALLS 关系。</p>
+      <div class="bars" id="handlerBars"></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:14px">
+    <h2>复杂度热点 TOP 15</h2>
+    <p class="hint">按圈复杂度排序，红色为需要重点拆解的函数。</p>
+    <table id="cxTable"></table>
+  </div>
+
+  <div class="two">
+    <div class="panel">
+      <h2>数据表资产</h2>
+      <p class="hint">从 SQL 初始化脚本解析出的 Table 节点，去重后 70 张（含 2 张 knex 迁移表），业务表 68 张。</p>
+      <div class="bars" id="tblBars"></div>
+      <div class="pills" id="tblPills"></div>
+    </div>
+    <div class="panel">
+      <h2>HTTP 方法分布</h2>
+      <p class="hint">按 Route 节点标注的 method 统计。</p>
+      <div class="bars" id="methodBars"></div>
+      <p class="hint" style="margin-top:16px">
+        未标注 method 的 206 条多为 <code>router.use</code> 挂载或子路由注册，属于解析盲区。
+      </p>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:14px">
+    <h2>图谱给出的三个判断</h2>
+    <div class="notes" id="notes"></div>
+  </div>
+
+  <div class="gq">
+    <h3>继续使用这张图谱</h3>
+<pre><span class="c"># 命令行（无需打开 IDE）</span>
+cbm cli search_graph --project xgxt-xueguan --query <span class="k">"复学"</span>
+cbm cli trace_path    --project xgxt-xueguan --from &lt;node_id&gt; --to &lt;node_id&gt;
+cbm cli get_file_outline --project xgxt-xueguan --file server-job/src/teaching/dorm/repo.uni.ts
+
+<span class="c"># Cypher 查询示例</span>
+MATCH (r:Route) WHERE r.name STARTS WITH <span class="k">'/api/teaching/'</span> RETURN r.name, r.method
+MATCH (f:Function)-[:CALLS]-&gt;(r:Route) WHERE r.name STARTS WITH <span class="k">'/api/finance/'</span> RETURN f.name, f.file_path</pre>
+  </div>
+
+  <footer>codebase-memory-mcp v0.12.1 · 12,896 nodes / 39,635 edges · 生成本页面的数据来自真实图谱查询</footer>
+</div>
+
+<script>
+const DATA = {"nodes": [{"id": "server:teaching", "layer": "server", "name": "teaching", "files": 52}, {"id": "server:class", "layer": "server", "name": "class", "files": 37}, {"id": "server:perm", "layer": "server", "name": "perm", "files": 43}, {"id": "server:class-jh", "layer": "server", "name": "class-jh", "files": 27}, {"id": "server:consult", "layer": "server", "name": "consult", "files": 23}, {"id": "server:finance", "layer": "server", "name": "finance", "files": 23}, {"id": "server:routes", "layer": "server", "name": "routes", "files": 23}, {"id": "server:utils", "layer": "server", "name": "utils", "files": 24}, {"id": "server:middleware", "layer": "server", "name": "middleware", "files": 6}, {"id": "server:services", "layer": "server", "name": "services", "files": 3}, {"id": "server:shared", "layer": "server", "name": "shared", "files": 1}, {"id": "server:config", "layer": "server", "name": "config", "files": 1}, {"id": "server:root", "layer": "server", "name": "root", "files": 1}, {"id": "server:scripts", "layer": "server", "name": "scripts", "files": 60}, {"id": "web:class-jh", "layer": "web", "name": "class-jh", "files": 33}, {"id": "web:perm", "layer": "web", "name": "perm", "files": 24}, {"id": "web:teaching", "layer": "web", "name": "teaching", "files": 20}, {"id": "web:views", "layer": "web", "name": "views", "files": 17}, {"id": "web:api", "layer": "web", "name": "api", "files": 15}, {"id": "web:finance", "layer": "web", "name": "finance", "files": 12}, {"id": "web:portal", "layer": "web", "name": "portal", "files": 6}, {"id": "web:store", "layer": "web", "name": "store", "files": 4}, {"id": "web:components", "layer": "web", "name": "components", "files": 4}, {"id": "web:config", "layer": "web", "name": "config", "files": 2}, {"id": "web:router", "layer": "web", "name": "router", "files": 1}, {"id": "web:root", "layer": "web", "name": "root", "files": 1}, {"id": "shared:shared-types", "layer": "shared", "name": "shared-types", "files": 95}, {"id": "tools:tools", "layer": "tools", "name": "tools", "files": 17}], "edges": [{"source": "server:routes", "target": "server:utils", "weight": 228}, {"source": "web:views", "target": "web:api", "weight": 202}, {"source": "server:class", "target": "server:teaching", "weight": 102}, {"source": "server:teaching", "target": "server:utils", "weight": 68}, {"source": "server:routes", "target": "server:middleware", "weight": 55}, {"source": "web:teaching", "target": "web:store", "weight": 25}, {"source": "server:teaching", "target": "server:class", "weight": 24}, {"source": "server:root", "target": "server:routes", "weight": 23}, {"source": "server:middleware", "target": "server:utils", "weight": 22}, {"source": "server:utils", "target": "shared:shared-types", "weight": 22}, {"source": "web:views", "target": "web:store", "weight": 19}, {"source": "server:routes", "target": "shared:shared-types", "weight": 18}, {"source": "server:utils", "target": "server:shared", "weight": 17}, {"source": "server:teaching", "target": "server:middleware", "weight": 17}, {"source": "server:perm", "target": "server:utils", "weight": 17}, {"source": "server:root", "target": "server:perm", "weight": 16}, {"source": "server:teaching", "target": "server:class-jh", "weight": 16}, {"source": "server:consult", "target": "server:shared", "weight": 15}, {"source": "server:teaching", "target": "shared:shared-types", "weight": 15}, {"source": "web:router", "target": "web:store", "weight": 14}, {"source": "web:components", "target": "web:api", "weight": 14}, {"source": "server:consult", "target": "server:class-jh", "weight": 12}, {"source": "server:consult", "target": "server:utils", "weight": 11}, {"source": "server:teaching", "target": "server:scripts", "weight": 10}, {"source": "web:teaching", "target": "web:api", "weight": 9}, {"source": "server:root", "target": "server:teaching", "weight": 9}, {"source": "server:root", "target": "server:finance", "weight": 9}, {"source": "web:root", "target": "web:store", "weight": 8}, {"source": "server:root", "target": "server:consult", "weight": 8}, {"source": "server:class-jh", "target": "server:utils", "weight": 8}, {"source": "server:class", "target": "server:utils", "weight": 8}, {"source": "server:utils", "target": "server:scripts", "weight": 8}, {"source": "web:config", "target": "web:teaching", "weight": 7}, {"source": "web:config", "target": "web:store", "weight": 7}, {"source": "server:root", "target": "server:middleware", "weight": 7}, {"source": "server:root", "target": "server:class", "weight": 7}, {"source": "server:utils", "target": "server:perm", "weight": 7}, {"source": "server:finance", "target": "server:shared", "weight": 7}, {"source": "server:services", "target": "server:utils", "weight": 6}, {"source": "server:finance", "target": "server:utils", "weight": 6}, {"source": "server:scripts", "target": "server:perm", "weight": 6}, {"source": "tools:tools", "target": "server:class-jh", "weight": 6}, {"source": "server:utils", "target": "server:consult", "weight": 5}, {"source": "server:perm", "target": "server:shared", "weight": 5}, {"source": "web:views", "target": "web:components", "weight": 4}, {"source": "web:perm", "target": "web:store", "weight": 4}, {"source": "web:finance", "target": "web:portal", "weight": 4}, {"source": "web:components", "target": "web:store", "weight": 4}, {"source": "server:routes", "target": "server:shared", "weight": 4}, {"source": "server:middleware", "target": "server:config", "weight": 4}, {"source": "server:class", "target": "server:middleware", "weight": 4}, {"source": "server:scripts", "target": "server:utils", "weight": 4}, {"source": "web:views", "target": "web:class-jh", "weight": 3}, {"source": "web:store", "target": "web:api", "weight": 3}, {"source": "web:class-jh", "target": "web:store", "weight": 3}, {"source": "server:utils", "target": "server:middleware", "weight": 3}, {"source": "server:routes", "target": "server:services", "weight": 3}, {"source": "server:class-jh", "target": "server:middleware", "weight": 3}], "routeModules": [{"module": "job", "count": 138}, {"module": "teaching", "count": 133}, {"module": "class-jh", "count": 96}, {"module": "class", "count": 82}, {"module": "perm", "count": 75}, {"module": "consult", "count": 63}, {"module": "finance", "count": 51}, {"module": "edu", "count": 48}, {"module": "room", "count": 11}, {"module": "change", "count": 10}, {"module": "assign", "count": 8}, {"module": "apply", "count": 7}], "handlerDomains": [{"domain": "routes", "count": 183}, {"domain": "class-jh", "count": 159}, {"domain": "api", "count": 156}, {"domain": "teaching", "count": 146}, {"domain": "perm", "count": 118}, {"domain": "consult", "count": 106}, {"domain": "class", "count": 86}, {"domain": "root", "count": 71}, {"domain": "finance", "count": 68}, {"domain": "portal", "count": 12}, {"domain": "views", "count": 1}, {"domain": "store", "count": 1}], "methods": [{"name": "GET", "count": 349}, {"name": "POST", "count": 266}, {"name": "PUT", "count": 51}, {"name": "DELETE", "count": 26}, {"name": "未标注", "count": 206}, {"name": "ANY", "count": 65}], "hotspots": [{"name": "makeRepo", "file": "server-job/src/teaching/dorm/repo.uni.ts", "complexity": 61, "lines": 633}, {"name": "ensureDatabases", "file": "tools/start.mjs", "complexity": 32, "lines": 233}, {"name": "probeMysql", "file": "tools/check-env.mjs", "complexity": 22, "lines": 112}, {"name": "main", "file": "server-job/scripts/fix-perm-accounts.mjs", "complexity": 20, "lines": 192}, {"name": "validateForm", "file": "web-job/src/perm/views/UserManage.vue", "complexity": 18, "lines": 33}, {"name": "parse", "file": "web-job/src/class/components/GradeImportDialog.vue", "complexity": 17, "lines": 58}, {"name": "run", "file": "server-job/scripts/uni-migrate.ts", "complexity": 16, "lines": 73}, {"name": "hasField", "file": "server-job/src/consult/services/student.service.ts", "complexity": 16, "lines": 19}, {"name": "repeat", "file": "server-job/src/teaching/score/repo.job.ts", "complexity": 15, "lines": 146}, {"name": "main", "file": "tools/verify-round2.mjs", "complexity": 15, "lines": 217}, {"name": "authMiddleware", "file": "server-job/src/consult/middleware/auth.ts", "complexity": 15, "lines": 126}, {"name": "seedClassJh", "file": "server-job/scripts/seed-all-demo.mjs", "complexity": 15, "lines": 233}, {"name": "syncFromFinance", "file": "server-job/src/consult/services/fee-order.service.ts", "complexity": 15, "lines": 88}, {"name": "processHandoff", "file": "server-job/src/routes/upgrade.route.ts", "complexity": 14, "lines": 248}, {"name": "main", "file": "server-job/scripts/_e2e-classdorm-check.mjs", "complexity": 14, "lines": 374}], "tables": {"total": 70, "groups": {"other": 2, "consult": 7, "finance": 5, "perm": 11, "student": 1, "sys": 1, "uni": 43}, "names": ["knex_migrations", "knex_migrations_lock", "t_consult_account", "t_consult_config", "t_consult_consume_item", "t_consult_fee_order", "t_consult_history", "t_consult_refund", "t_consult_student", "t_finance_bill", "t_finance_fee", "t_finance_fee_standard", "t_finance_freeze", "t_finance_refund", "t_perm_dept", "t_perm_log", "t_perm_menu", "t_perm_menu_action", "t_perm_page", "t_perm_role", "t_perm_role_page", "t_perm_role_perm", "t_perm_rule", "t_perm_user", "t_perm_user_role", "t_student_base", "t_sys_account", "t_uni_approval", "t_uni_approval_log", "t_uni_approval_main", "t_uni_attendance", "t_uni_attendance_detail", "t_uni_attendance_summary", "t_uni_checkout_apply", "t_uni_class", "t_uni_class_student", "t_uni_class_term", "t_uni_class_transfer", "t_uni_class_transfer_all", "t_uni_consult_push", "t_uni_dorm_apply", "t_uni_dorm_bed", "t_uni_dorm_building", "t_uni_dorm_change", "t_uni_dorm_change_log", "t_uni_dorm_resident", "t_uni_dorm_room", "t_uni_employment_log", "t_uni_exam", "t_uni_exam_content", "t_uni_exam_field", "t_uni_exam_score", "t_uni_fee", "t_uni_handover", "t_uni_kpi_target", "t_uni_notify", "t_uni_op_log", "t_uni_refund", "t_uni_refund_item", "t_uni_refund_log", "t_uni_repeat", "t_uni_review", "t_uni_setting", "t_uni_stage_def", "t_uni_stage_log", "t_uni_student", "t_uni_student_base_jh", "t_uni_upgrade_apply", "t_uni_urge", "t_uni_urge_log"]}, "http": {"total": 310, "caller_layers": {"tools": 105, "server": 167, "web": 38}, "fe_to_be": [{"fe": "scripts", "be": "teaching", "count": 76}, {"fe": "scripts", "be": "class", "count": 51}, {"fe": "class", "be": "class", "count": 35}, {"fe": "tools", "be": "class", "count": 20}, {"fe": "tools", "be": "http:", "count": 20}, {"fe": "tools", "be": "class-jh", "count": 15}, {"fe": "tools", "be": "consult", "count": 14}, {"fe": "tools", "be": "portal", "count": 11}, {"fe": "tools", "be": "job", "count": 8}, {"fe": "consult", "be": "finance", "count": 8}, {"fe": "tools", "be": "finance", "count": 7}, {"fe": "tools", "be": "perm", "count": 5}, {"fe": "utils", "be": "class", "count": 4}, {"fe": "utils", "be": "finance", "count": 3}, {"fe": "tools", "be": "edu", "count": 3}, {"fe": "scripts", "be": "field", "count": 3}, {"fe": "scripts", "be": "room", "count": 3}, {"fe": "scripts", "be": "apply", "count": 3}, {"fe": "routes", "be": "class", "count": 2}, {"fe": "tools", "be": "teaching", "count": 2}, {"fe": "scripts", "be": "student", "count": 2}, {"fe": "perm", "be": "consult", "count": 2}, {"fe": "class", "be": "auth", "count": 2}, {"fe": "scripts", "be": "bed", "count": 2}, {"fe": "consult", "be": "perm", "count": 1}, {"fe": "views", "be": "class-jh", "count": 1}, {"fe": "scripts", "be": "absent", "count": 1}, {"fe": "scripts", "be": "log", "count": 1}, {"fe": "utils", "be": "class-jh", "count": 1}, {"fe": "store", "be": "perm", "count": 1}], "top_fe_files": [{"file": "web-job/src/class/api/student.ts", "calls": 19}, {"file": "web-job/src/class/api/approval.ts", "calls": 10}, {"file": "web-job/src/class/api/consult.ts", "calls": 3}, {"file": "web-job/src/class/api/class.ts", "calls": 2}, {"file": "web-job/src/class/api/dorm.ts", "calls": 1}, {"file": "web-job/src/views/Workbench.vue", "calls": 1}, {"file": "web-job/src/store/pageConfig.ts", "calls": 1}, {"file": "web-job/scripts/_p3-menu-path-audit.cjs", "calls": 1}]}, "totals": {"nodes": 12896, "edges": 39635, "files_indexed": 743, "languages": {"TypeScript": 462, "JavaScript": 110, "Vue": 82, "SQL": 5, "HTML": 3, "CSS": 3}}};
+
+const LAYER_COLOR = {server:'#2563eb', web:'#0d9488', shared:'#7c3aed', tools:'#94a3b8'};
+const LAYER_NAME  = {server:'后端', web:'前端', shared:'共享', tools:'工具'};
+
+/* ---------- KPI ---------- */
+const kpis = [
+  ['12,896', '图谱节点'],
+  ['39,635', '关系边'],
+  ['743', '已索引文件'],
+  ['963', 'HTTP 路由'],
+  ['70', '数据表']
+];
+document.getElementById('kpis').innerHTML = kpis.map(([n,l])=>
+  `<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+/* ---------- 条形图 ---------- */
+function bars(el, rows, color, labelKey, valKey){
+  const max = Math.max(...rows.map(r=>r[valKey]));
+  el.innerHTML = rows.map(r=>{
+    const w = Math.max(2, r[valKey]/max*100);
+    return `<div class="bar">
+      <div class="lab" title="${r[labelKey]}">${r[labelKey]}</div>
+      <div class="track"><div class="fill" style="width:${w}%;background:${color}"></div></div>
+      <div class="val">${r[valKey]}</div>
+    </div>`;
+  }).join('');
+}
+bars(document.getElementById('routeBars'),
+     DATA.routeModules.map(r=>({m:r.module,n:r.count})), '#2563eb','m','n');
+bars(document.getElementById('handlerBars'),
+     DATA.handlerDomains.map(r=>({m:r.domain,n:r.count})), '#0d9488','m','n');
+
+const mx = Math.max(...DATA.methods.map(m=>m.count));
+const mColors = {GET:'#2563eb',POST:'#0d9488',PUT:'#d97706',DELETE:'#dc2626','ANY':'#7c3aed','未标注':'#94a3b8'};
+document.getElementById('methodBars').innerHTML = DATA.methods
+  .sort((a,b)=>b.count-a.count).map(m=>`<div class="bar">
+    <div class="lab">${m.name}</div>
+    <div class="track"><div class="fill" style="width:${m.count/mx*100}%;background:${mColors[m.name]||'#94a3b8'}"></div></div>
+    <div class="val">${m.count}</div></div>`).join('');
+
+const tg = Object.entries(DATA.tables.groups).sort((a,b)=>b[1]-a[1]).slice(0,7);
+bars(document.getElementById('tblBars'),
+     tg.map(([m,n])=>({m:'t_'+m+'_*',n})), '#7c3aed','m','n');
+document.getElementById('tblPills').innerHTML =
+  DATA.tables.names.slice(0,26).map(t=>`<span class="pill">${t}</span>`).join('') +
+  (DATA.tables.names.length>26?`<span class="pill">…共 ${DATA.tables.names.length} 张</span>`:'');
+
+/* ---------- 复杂度表 ---------- */
+document.getElementById('cxTable').innerHTML =
+  `<thead><tr><th>函数</th><th>文件</th><th style="width:90px">行数</th><th style="width:90px">复杂度</th></tr></thead><tbody>` +
+  DATA.hotspots.map(h=>{
+    const cls = h.complexity>=20?'hi':(h.complexity>=10?'mid':'lo');
+    return `<tr><td><b>${h.name}</b></td><td class="mono">${h.file}</td>
+      <td class="mono">${h.lines}</td><td><span class="cx ${cls}">${h.complexity}</span></td></tr>`;
+  }).join('') + `</tbody>`;
+
+/* ---------- 请求链路 ---------- */
+document.getElementById('flow').innerHTML = [
+  ['① 页面','web-job/src 各业务域视图','17 页面目录'],
+  ['② API 封装','web-job/src/api + 各域 api','38 处静态可解析调用'],
+  ['③ 路由','Route 节点','963'],
+  ['④ 处理器','Route ← CALLS 函数','1,107'],
+  ['⑤ 仓储/表','t_uni_* 等业务表','70']
+].map(([t,d,v])=>`<div class="step"><div class="t">${t}</div><div class="d">${d}</div><div class="v">${v}</div></div>`).join('');
+
+/* ---------- 三个判断 ---------- */
+document.getElementById('notes').innerHTML = [
+  ['ok','统一表体系已成主干','68 张业务表里 43 张是 <code>t_uni_*</code>，说明「统一表 + 多岗位视图」的建模思路已经在库里落地，新增业务优先挂 uni 表。'],
+  ['warn','双命名体系并存','后端同时存在 <code>class</code>／<code>class-jh</code>／<code>job</code>／<code>teaching</code> 四套班级域路由（合计 449 条），前端与后端命名并不对称，是最容易踩坑的边界。'],
+  ['warn','前端调用静态可解析率偏低','310 条 HTTP_CALLS 中仅 38 条来自 web 层，其余来自 tools 与 server 自测脚本；说明前端大量走动态拼接 URL，跨层链路目前主要靠路由命名对齐。']
+].map(([cls,t,p])=>`<div class="note ${cls}"><h3>${t}</h3><p>${p}</p></div>`).join('');
+
+/* ---------- 力导向图 ---------- */
+(function(){
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const detail = document.getElementById('detail');
+  let W=0,H=0,dpr=Math.min(window.devicePixelRatio||1,2);
+
+  const N = DATA.nodes.map((n,i)=>({...n,
+    x: 0, y: 0, vx:0, vy:0, r: Math.max(8, Math.min(34, 6+Math.sqrt(n.files)*3.1)),
+    deg: 0}));
+  const idx = {}; N.forEach((n,i)=>idx[n.id]=i);
+  const E = DATA.edges.map(e=>({s:idx[e.source], t:idx[e.target], w:e.weight}));
+
+  N.forEach(n=>{ n.deg = E.filter(e=>e.s===idx[n.id]||e.t===idx[n.id]).reduce((a,e)=>a+e.w,0); });
+
+  function resize(){
+    const rect = cv.getBoundingClientRect();
+    W = rect.width; H = rect.height;
+    cv.width = W*dpr; cv.height = H*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  resize();
+  window.addEventListener('resize', ()=>{ resize(); });
+
+  const cx0 = ()=>W/2, cy0 = ()=>H/2;
+  N.forEach((n,i)=>{
+    const a = (i/N.length)*Math.PI*2;
+    n.x = cx0()+Math.cos(a)*(W*0.28);
+    n.y = cy0()+Math.sin(a)*(H*0.32);
+  });
+
+  let hover=null, sel=null, drag=null, scale=1, pan={x:0,y:0};
+
+  function step(){
+    // 斥力
+    for(let i=0;i<N.length;i++){
+      const a=N[i];
+      for(let j=i+1;j<N.length;j++){
+        const b=N[j];
+        let dx=b.x-a.x, dy=b.y-a.y;
+        let d2=dx*dx+dy*dy; if(d2<1) d2=1;
+        const d=Math.sqrt(d2);
+        const f = 7200/d2;
+        const fx=dx/d*f, fy=dy/d*f;
+        a.vx-=fx; a.vy-=fy; b.vx+=fx; b.vy+=fy;
+      }
+    }
+    // 弹簧
+    E.forEach(e=>{
+      const a=N[e.s], b=N[e.t];
+      let dx=b.x-a.x, dy=b.y-a.y;
+      const d=Math.sqrt(dx*dx+dy*dy)||1;
+      const target = 150 + Math.min(90, 4200/Math.max(e.w,1)*0.7);
+      const f = (d-target)*0.004*Math.min(3, 1+e.w/120);
+      const fx=dx/d*f, fy=dy/d*f;
+      a.vx+=fx; a.vy+=fy; b.vx-=fx; b.vy-=fy;
+    });
+    // 向心 + 阻尼
+    N.forEach(n=>{
+      n.vx += (cx0()-n.x)*0.0042;
+      n.vy += (cy0()-n.y)*0.0042;
+      n.vx*=0.82; n.vy*=0.82;
+      const sp = Math.hypot(n.vx,n.vy);
+      if(sp>14){ n.vx*=14/sp; n.vy*=14/sp; }
+      n.x+=n.vx; n.y+=n.vy;
+      const pad=n.r+8;
+      n.x=Math.max(pad,Math.min(W-pad,n.x));
+      n.y=Math.max(pad,Math.min(H-pad,n.y));
+    });
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    ctx.save();
+    ctx.translate(pan.x,pan.y);
+    ctx.scale(scale,scale);
+
+    // 边
+    E.forEach(e=>{
+      const a=N[e.s], b=N[e.t];
+      const active = hover && (hover.id===a.id||hover.id===b.id);
+      ctx.beginPath();
+      ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+      ctx.strokeStyle = active? 'rgba(37,99,235,.55)' : 'rgba(148,163,184,.32)';
+      ctx.lineWidth = active? Math.min(4,1+e.w/60) : Math.min(2.6,.7+e.w/140);
+      ctx.stroke();
+    });
+
+    // 节点
+    N.forEach(n=>{
+      const color = LAYER_COLOR[n.layer] || '#94a3b8';
+      const isHover = hover && hover.id===n.id;
+      const isSel = sel && sel.id===n.id;
+      if(isHover||isSel){
+        ctx.beginPath(); ctx.arc(n.x,n.y,n.r+7,0,Math.PI*2);
+        ctx.fillStyle = color+'22'; ctx.fill();
+      }
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
+      ctx.fillStyle = color+'e6'; ctx.fill();
+      if(isSel){ ctx.lineWidth=2.5; ctx.strokeStyle='#0f172a'; ctx.stroke(); }
+
+      const label = n.name;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.font='600 12px "Segoe UI","PingFang SC",sans-serif';
+      const fits = ctx.measureText(label).width <= n.r*2-10;
+      if(n.r>=19 && fits){
+        ctx.fillStyle='#ffffff';
+        ctx.fillText(label, n.x, n.y);
+      } else {
+        ctx.font='560 11.5px "Segoe UI","PingFang SC",sans-serif';
+        const ly = n.y + n.r + 10;
+        ctx.lineWidth=3.5; ctx.strokeStyle='rgba(255,255,255,.92)';
+        ctx.strokeText(label, n.x, ly);
+        ctx.fillStyle='#475569';
+        ctx.fillText(label, n.x, ly);
+      }
+    });
+    ctx.restore();
+  }
+
+  function tick(){ step(); draw(); requestAnimationFrame(tick); }
+  // 预热
+  for(let i=0;i<420;i++) step();
+  tick();
+
+  function pick(ev){
+    const rect = cv.getBoundingClientRect();
+    const mx = (ev.clientX-rect.left-pan.x)/scale;
+    const my = (ev.clientY-rect.top-pan.y)/scale;
+    for(let i=N.length-1;i>=0;i--){
+      const n=N[i];
+      if((mx-n.x)**2+(my-n.y)**2 <= (n.r+4)**2) return n;
+    }
+    return null;
+  }
+
+  cv.addEventListener('mousemove', ev=>{
+    if(drag){ drag.x=(ev.clientX-cv.getBoundingClientRect().left-pan.x)/scale;
+      drag.y=(ev.clientY-cv.getBoundingClientRect().top-pan.y)/scale;
+      drag.vx=0; drag.vy=0; return; }
+    hover = pick(ev);
+    cv.style.cursor = hover? 'pointer':'grab';
+  });
+  cv.addEventListener('mousedown', ev=>{
+    const n = pick(ev);
+    if(n){ drag=n; }
+  });
+  window.addEventListener('mouseup', ()=>{ drag=null; });
+  cv.addEventListener('click', ev=>{
+    const n = pick(ev);
+    if(!n){ return; }
+    sel = n;
+    const outs = DATA.edges.filter(e=>e.source===n.id);
+    const ins  = DATA.edges.filter(e=>e.target===n.id);
+    const li = x=>`<div>· ${x.source===n.id?x.target:x.source} <span style="color:#94a3b8">(${x.weight})</span></div>`;
+    detail.innerHTML = `<b>${n.name}</b><br>
+      层级：${LAYER_NAME[n.layer]}<br>
+      文件数：${n.files}<br>
+      关联强度合计：${n.deg}<br>
+      <div style="margin-top:8px"><b>依赖出去</b>${outs.length?outs.map(e=>`<div>→ ${e.target} <span style="color:#94a3b8">(${e.weight})</span></div>`).join(''):'<div style="color:#94a3b8">无</div>'}</div>
+      <div style="margin-top:6px"><b>被依赖</b>${ins.length?ins.map(e=>`<div>← ${e.source} <span style="color:#94a3b8">(${e.weight})</span></div>`).join(''):'<div style="color:#94a3b8">无</div>'}</div>`;
+  });
+  cv.addEventListener('wheel', ev=>{
+    ev.preventDefault();
+    const rect = cv.getBoundingClientRect();
+    const mx = ev.clientX-rect.left, my = ev.clientY-rect.top;
+    const k = ev.deltaY<0? 1.1 : 0.9;
+    const ns = Math.max(.5, Math.min(2.4, scale*k));
+    pan.x = mx - (mx-pan.x)*(ns/scale);
+    pan.y = my - (my-pan.y)*(ns/scale);
+    scale = ns;
+  }, {passive:false});
+})();
+</script>
+</body>
+</html>

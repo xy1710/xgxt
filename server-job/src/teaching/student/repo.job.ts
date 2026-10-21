@@ -21,6 +21,7 @@
 
 import { randomUUID } from 'crypto';
 import { db } from '../../utils/db';
+import { commonDb } from '../../class/db';
 import {
   DEPT_NAME,
   GENDER_NAME,
@@ -36,16 +37,26 @@ import type {
   StudentSaveBody,
   StudentSaveResult,
 } from '../shared/dto';
-import { calcAge, fmtDate, fmtDateTime } from '../shared/format';
+import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+// ★ 2026-10-19 实训与就业部共用阶段方案：阶段名优先读 t_class_stage，PHASE_NAME 只兜底老数据
+import { resolveStageName } from '../../class-jh/utils/stageDict';
 
 const T = 't_student_base';
 const CLASS_TABLE = 't_job_class';
 const STAGE = 'job' as const;
 
-/** 就业档案只认这四种状态（原实现口径） */
+/**
+ * 学生档案「实训」页签可见的状态
+ *
+ * ★ 2026-10-16：在原口径（待就业 / 已就业 / 休学 / 退学 —— 旧的「就业档案」只关心
+ *   已经走到就业环节的人）基础上**补上「实训中」**：教学管理合并成一个入口后，
+ *   这个页签就是看实训班学生的，把「实训中」滤掉的话，实训班明明有 5 个学生，
+ *   页签里却是空的（班级管理花名册 5 人 / 学生档案 0 人，对不上）。
+ */
 const VISIBLE_STATUS: number[] = [
+  StudentStatus.TRAINING,
   StudentStatus.WAIT_EMPLOY,
   StudentStatus.EMPLOYED,
   StudentStatus.SUSPENDED,
@@ -96,13 +107,14 @@ function mapRow(r: Record<string, any>): StudentRow {
     studentName: String(r.student_name ?? ''),
     gender,
     genderName: GENDER_NAME[gender] ?? '',
-    age: numOrNull(r.age) ?? calcAge(r.birth_date),
+    // ★ 年龄优先按出生日期实时计算（每年自动更新），库里 age 仅作无出生日期时的兜底
+    age: calcAge(r.birth_date) ?? numOrNull(r.age),
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     classId: str(r.class_id),
     className: str(r.class_name),
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -112,6 +124,7 @@ function mapRow(r: Record<string, any>): StudentRow {
     studentStatus: status,
     studentStatusName: STUDENT_STATUS_NAME[status] ?? '',
     phone: str(r.phone),
+    parentName: str(r.parent_name),
     parentPhone: str(r.parent_phone),
     education: str(r.education),
     enrollDate: str(fmtDate(r.enroll_date)) || null,
@@ -164,7 +177,12 @@ async function applyScope(qb: any, user: any): Promise<void> {
 }
 
 function buildBase(q: StudentListQuery, user: any) {
-  const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', false).whereIn('student_status', VISIBLE_STATUS);
+  // ★ 2026-10-19：实训与就业部共用 t_student_base、dept 都是 3（就业部），
+  //   靠 stage_key 区分（job / emp）
+  const qb = tbl(db, 'sms_job', T, STAGE)
+    .where('is_deleted', false)
+    .andWhere('stage_key', 'job')
+    .whereIn('student_status', VISIBLE_STATUS);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.studentStatus) qb.andWhere('student_status', q.studentStatus);
@@ -208,6 +226,12 @@ export const repo: StudentRepo = {
     if (!allowed) return null;
 
     const base = mapRow(r);
+    // ★ 2026-10-19：实训没有自己的末班表（sms_job 里没有 t_class_repeat），
+    //   末班记录统一落在 sms_common.t_uni_repeat → 档案必须去那里读，
+    //   否则「末班成功」后详情页永远是空的。
+    const repeats = (await commonDb('t_uni_repeat')
+      .where({ edu_stage: STAGE, student_id: id, is_deleted: 0 })
+      .orderBy('repeat_time', 'desc')) as Array<Record<string, any>>;
     return {
       base,
       profile: {
@@ -241,7 +265,14 @@ export const repo: StudentRepo = {
         resumeData: str(r.resume_data),
       },
       flows: [],
-      repeats: [],
+      repeats: repeats.map((x) => ({
+        id: String(x.id),
+        fromClassName: x.from_class_name ?? null,
+        toClassName: x.to_class_name ?? null,
+        repeatReason: x.repeat_reason ?? null,
+        repeatTime: fmtDate(x.repeat_time),
+        repeatCount: x.repeat_count ?? 0,
+      })),
       extra: null,
     };
   },
@@ -257,11 +288,13 @@ export const repo: StudentRepo = {
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('birth_date', body.birthDate ?? undefined);
-    if (body.birthDate !== undefined) payload.age = calcAge(body.birthDate);
+    // ★ 出生日期：前端传了用前端的；没传则从身份证号自动提取（2026-10-15 表单改版）
+    const birth = body.birthDate || birthFromIdCard(body.idCard);
+    set('birth_date', birth ?? undefined);
+    if (birth) payload.age = calcAge(birth);
     else if (body.age !== undefined) payload.age = body.age;
     set('native_place', body.nativePlace);
-    set('dept_code', body.deptCode);
+    set('dept_code', body.deptCode ?? 3);
     set('class_id', body.classId);
     set('class_name', body.className);
     set(phaseCodeCol(), body.phaseCode);
@@ -270,6 +303,7 @@ export const repo: StudentRepo = {
     set('graduate_school', body.graduateSchool);
     set('enroll_date', body.enrollDate);
     set('phone', body.phone);
+    set('parent_name', body.parentName);
     set('parent_phone', body.parentPhone);
     set('home_address', body.homeAddress);
     set('id_card', body.idCard);
@@ -307,6 +341,7 @@ export const repo: StudentRepo = {
     await tblIns(db, 'sms_job', T, STAGE, {
       id,
       student_no: studentNo,
+      stage_key: 'job',
       ...payload,
       student_status: body.studentStatus ?? StudentStatus.WAIT_EMPLOY,
       repeat_count: 0,

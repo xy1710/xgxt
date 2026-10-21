@@ -67,6 +67,7 @@ export const MODULE_LABEL: Record<string, string> = {
   finance: '财务管理',
   perm: '权限管理',
   stat: '统计报表',
+  consult: '市场咨询',
 };
 
 /** 单个模块的基础地址 */

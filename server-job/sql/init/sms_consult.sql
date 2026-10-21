@@ -174,7 +174,7 @@ CREATE TABLE `t_consult_consume_item` (
 
 LOCK TABLES `t_consult_consume_item` WRITE;
 /*!40000 ALTER TABLE `t_consult_consume_item` DISABLE KEYS */;
-INSERT INTO `t_consult_consume_item` VALUES ('CIT-1','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'校服',12000,1,1),('CIT-2','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'被褥三件套',15000,2,1),('CIT-3','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'工具包',8000,3,1),('CIT-4','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'教材资料',6000,4,1),('CIT-5','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'军训服',9000,5,1),('CIT-6','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'宿舍门禁卡',2000,6,1);
+INSERT INTO `t_consult_consume_item` VALUES ('CIT-1','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'校服',12000,1,1),('CIT-2','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'被褥三件套',15000,2,1),('CIT-4','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'教材资料',6000,4,1),('CIT-5','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29',0,'军训服',9000,5,1);
 /*!40000 ALTER TABLE `t_consult_consume_item` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -210,6 +210,10 @@ CREATE TABLE `t_consult_fee_order` (
   `voucher_by` varchar(50) DEFAULT NULL COMMENT '上传凭证的人',
   `pay_method` varchar(20) DEFAULT NULL COMMENT '缴费方式 微信/支付宝/现金/银行转账/对公汇款',
   `batch_no` bigint DEFAULT NULL COMMENT '同一次发起的批次号（转正式 4 笔同批）',
+  `plan_id` varchar(36) DEFAULT NULL COMMENT '★ 2026-10-16 分期：所属分期计划ID（一次性缴费为 NULL）',
+  `stage_no` int DEFAULT NULL COMMENT '★ 2026-10-16 分期：第几期，从 1 开始（一次性缴费为 NULL）',
+  `total_due_amount` int DEFAULT NULL COMMENT '★ 2026-10-16 分期：整单应收（分）；一次性缴费为 NULL',
+  `item_detail` text COMMENT '★ 2026-10-15 合并缴费的明细（JSON 数组：[{feeType,feeTypeName,amount}]）。一次缴清多项时只建一张合计单，勾选了哪些费用存在这里，单笔缴费为 NULL',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_cfo_order_no` (`order_no`),
   KEY `idx_cfo_student` (`consult_student_id`),
@@ -227,6 +231,91 @@ LOCK TABLES `t_consult_fee_order` WRITE;
 /*!40000 ALTER TABLE `t_consult_fee_order` DISABLE KEYS */;
 INSERT INTO `t_consult_fee_order` VALUES ('ORD-001','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260001','FEE-ZX26001-5','CST-ZX26001','唐俊杰','ZX26001',NULL,1,5,98000,0,1,NULL,NULL,NULL,NULL,'wechat',1),('ORD-002','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260002','FEE-ZX26002-5','CST-ZX26002','苏雅雯','ZX26002',NULL,1,5,98000,1,2,NULL,'/uploads/seed/voucher-ZX26002.png','QPZZX26002','李老师','wechat',2),('ORD-003','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260003','FEE-ZX26003-5','CST-ZX26003','谢铭轩','ZX26003',NULL,1,5,98000,0,1,NULL,NULL,NULL,NULL,'wechat',3),('ORD-004','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260004','FEE-ZX26004-5','CST-ZX26004','郭子睿','ZX26004',NULL,1,5,98000,0,1,NULL,NULL,NULL,NULL,'wechat',4),('ORD-005','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260005','FEE-U26006-1','CST-U26006','杨静怡','U26006','U2602',2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26006.png','QPZU26006','张老师','wechat',5),('ORD-006','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260006','FEE-U26007-1','CST-U26007','赵一鸣','U26007','U2602',2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26007.png','QPZU26007','张老师','wechat',6),('ORD-007','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260007','FEE-U26008-1','CST-U26008','孙浩然','U26008','U2602',2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26008.png','QPZU26008','李老师','wechat',7),('ORD-008','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260008','FEE-U26009-1','CST-U26009','周晓彤','U26009','U2602',2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26009.png','QPZU26009','李老师','wechat',8),('ORD-009','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260009','FEE-U26010-1','CST-U26010','吴子豪','U26010','U2602',2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26010.png','QPZU26010','王经理','wechat',9),('ORD-010','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260010','FEE-U26016-1','CST-U26016','马志远','U26016',NULL,2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26016.png','QPZU26016','张老师','wechat',10),('ORD-011','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260011','FEE-U26017-1','CST-U26017','何静宜','U26017',NULL,2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26017.png','QPZU26017','李老师','wechat',11),('ORD-012','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260012','FEE-U26018-1','CST-U26018','高远航','U26018',NULL,2,1,1580000,2,3,NULL,'/uploads/seed/voucher-U26018.png','QPZU26018','王经理','wechat',12),('ORD-013','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260013','FEE-J26011-1','CST-J26011','邓雨欣','J26011','G2601',1,1,1280000,2,3,NULL,'/uploads/seed/voucher-J26011.png','QPZJ26011','张老师','wechat',13),('ORD-014','2026-10-06 21:25:29','SEED',NULL,'2026-10-06 21:25:29','SEED',0,'SK20260014','FEE-J26012-1','CST-J26012','罗佳怡','J26012','J2602',1,1,1280000,2,3,NULL,'/uploads/seed/voucher-J26012.png','QPZJ26012','李老师','wechat',14);
 /*!40000 ALTER TABLE `t_consult_fee_order` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `t_consult_installment_plan`
+-- ★ 2026-10-16 分期付款：一次发起收费 = 一张分期计划，下挂 N 个期次
+--
+
+DROP TABLE IF EXISTS `t_consult_installment_plan`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_consult_installment_plan` (
+  `id` varchar(36) NOT NULL COMMENT '分期计划ID',
+  `create_time` datetime NOT NULL COMMENT '创建时间',
+  `create_by` varchar(36) DEFAULT NULL COMMENT '创建人ID',
+  `create_by_name` varchar(50) DEFAULT NULL COMMENT '创建人姓名（快照）',
+  `update_time` datetime DEFAULT NULL COMMENT '修改时间',
+  `update_by` varchar(36) DEFAULT NULL COMMENT '修改人ID',
+  `is_deleted` tinyint(1) NOT NULL DEFAULT '0' COMMENT '逻辑删除',
+  `plan_no` varchar(32) NOT NULL COMMENT '分期计划号 FP20261016-001',
+  `consult_student_id` varchar(36) NOT NULL COMMENT '咨询学生ID',
+  `student_name` varchar(50) DEFAULT NULL COMMENT '学生姓名快照',
+  `student_no` varchar(32) DEFAULT NULL COMMENT '学号快照',
+  `dept_code` int DEFAULT NULL COMMENT '部门',
+  `total_amount` int NOT NULL DEFAULT '0' COMMENT '应收总额（分）',
+  `paid_amount` int NOT NULL DEFAULT '0' COMMENT '已缴（分，到账才计入）',
+  `discount_amount` int NOT NULL DEFAULT '0' COMMENT '整单优惠（分）',
+  `pending_amount` int NOT NULL DEFAULT '0' COMMENT '待缴（分）= total - discount - paid',
+  `stage_count` int NOT NULL DEFAULT '1' COMMENT '总期数',
+  `paid_stages` int NOT NULL DEFAULT '0' COMMENT '已结清期数',
+  `status` int NOT NULL DEFAULT '1' COMMENT '1进行中 2已完成 3已终止',
+  `item_detail` text COMMENT '费用项明细快照 JSON',
+  `remark` varchar(200) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_cip_plan_no` (`plan_no`),
+  KEY `idx_cip_student` (`consult_student_id`),
+  KEY `idx_cip_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='咨询分期计划表';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `t_consult_installment_plan`
+--
+
+LOCK TABLES `t_consult_installment_plan` WRITE;
+/*!40000 ALTER TABLE `t_consult_installment_plan` DISABLE KEYS */;
+/*!40000 ALTER TABLE `t_consult_installment_plan` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `t_consult_installment_item`
+-- ★ 2026-10-16 分期付款：期次明细，每期一条，缴完一张缴费单就回写一条
+--
+
+DROP TABLE IF EXISTS `t_consult_installment_item`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_consult_installment_item` (
+  `id` varchar(36) NOT NULL COMMENT '期次ID',
+  `create_time` datetime NOT NULL COMMENT '创建时间',
+  `update_time` datetime DEFAULT NULL COMMENT '修改时间',
+  `is_deleted` tinyint(1) NOT NULL DEFAULT '0' COMMENT '逻辑删除',
+  `plan_id` varchar(36) NOT NULL COMMENT '分期计划ID',
+  `stage_no` int NOT NULL COMMENT '第几期，从1开始',
+  `due_amount` int NOT NULL DEFAULT '0' COMMENT '本期应收（分）',
+  `due_date` date DEFAULT NULL COMMENT '到期日',
+  `paid_amount` int NOT NULL DEFAULT '0' COMMENT '本期已缴（分）',
+  `status` int NOT NULL DEFAULT '0' COMMENT '0待缴 1待确认 2已到账 3已顺延(历史)',
+  `postpone_count` int NOT NULL DEFAULT '0' COMMENT '★ 2026-10-16 自动顺延次数：到期未缴每次自动后移一个周期并+1',
+  `fee_order_id` varchar(36) DEFAULT NULL COMMENT '关联缴费单ID',
+  `pay_time` datetime DEFAULT NULL COMMENT '到账时间',
+  `remark` varchar(200) DEFAULT NULL COMMENT '备注',
+  PRIMARY KEY (`id`),
+  KEY `idx_cii_plan` (`plan_id`),
+  KEY `idx_cii_order` (`fee_order_id`),
+  KEY `idx_cii_due` (`due_date`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='咨询分期期次明细表';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `t_consult_installment_item`
+--
+
+LOCK TABLES `t_consult_installment_item` WRITE;
+/*!40000 ALTER TABLE `t_consult_installment_item` DISABLE KEYS */;
+/*!40000 ALTER TABLE `t_consult_installment_item` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -347,6 +436,8 @@ CREATE TABLE `t_consult_student` (
   `birthday` varchar(20) DEFAULT NULL COMMENT '出生日期',
   `source_channel` int NOT NULL DEFAULT '1' COMMENT '来源渠道 1家访 2线上咨询 3转介绍 4到校咨询 5电话咨询 9其他',
   `source_remark` varchar(100) DEFAULT NULL COMMENT '来源备注，如「青山社区」',
+  `referrer_name` varchar(50) DEFAULT NULL COMMENT '转介绍招生老师姓名（来源=转介绍时填）',
+  `referrer_phone` varchar(20) DEFAULT NULL COMMENT '转介绍招生老师手机号',
   `owner_id` varchar(36) DEFAULT NULL COMMENT '跟进人ID（咨询老师）',
   `owner_name` varchar(50) DEFAULT NULL COMMENT '跟进人姓名',
   `owner_title` varchar(50) DEFAULT NULL COMMENT '跟进人岗位',
@@ -365,6 +456,7 @@ CREATE TABLE `t_consult_student` (
   `class_name` varchar(50) DEFAULT NULL COMMENT '班级名称',
   `trial_start` date DEFAULT NULL COMMENT '试学开始日期（退费算天数用）',
   `loss_reason` varchar(200) DEFAULT NULL COMMENT '流失原因',
+  `arrear_amount` int NOT NULL DEFAULT '0' COMMENT '★ 2026-10-16 欠费金额（分），分期计划待缴余额 > 0 即为欠费',
   PRIMARY KEY (`id`),
   KEY `idx_cs_name` (`student_name`),
   KEY `idx_cs_phone` (`phone`),

@@ -177,6 +177,35 @@ export const classSync = {
     return post('/api/class/consult/push', { items });
   },
 
+  /**
+   * ★ 2026-10-20 分班即入班：推送单建好后立刻由班级侧「接收 + 建档」
+   *
+   * 用户口径：「缴费结束之后，直接给他分配班级……入班和分班合并」。
+   * 原来大学部是「推送 → 待接收学员 → 班主任点接收」，现在分班当场入班。
+   * 幂等：已接收的单子再调一次只返回 already=true，不会重复建档。
+   */
+  consultAutoReceive(consultNo: string, studentStatus?: number | null): Promise<SyncOutcome> {
+    return post('/api/class/consult/auto-receive', {
+      consultNo,
+      studentStatus: studentStatus ?? null,
+    });
+  },
+
+  /**
+   * ★ 2026-10-20 试学闭环：补费到账转正后，把班级学籍从「试学中」改成「正式在读」
+   *
+   * 用户口径：交了试学费先试学，试学过了由班主任发起补费，补齐后转正式。
+   * 钱和状态在咨询侧，学籍在班级侧，两边必须一起走 —— 否则班主任花名册里
+   * 学生永远挂着「试学中」，班主任会以为还没转正。
+   *
+   * ⚠️ 认人键是 consultNo（= 咨询侧学号），班级建档时写进 source_id。
+   * ⚠️ 失败不抛错：到账本身已经成功，学籍同步失败只记日志，
+   *    下次状态变更会再同步一次（幂等）。
+   */
+  studentStatusSync(consultNo: string, studentStatus: number): Promise<SyncOutcome> {
+    return post('/api/class/student/internal-status', { consultNo, studentStatus });
+  },
+
   /** 缴费信息 → 班级只读副本（sms_common.t_class_fee_sync） */
   feeSync(items: Array<Record<string, unknown>>): Promise<SyncOutcome> {
     return post('/api/class/fee/sync', {

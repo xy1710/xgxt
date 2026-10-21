@@ -6,7 +6,7 @@
  * 因此 prototype.css 里的 .mask / .dlg / .dlg-h / .dlg-b / .dlg-f 样式直接生效，视觉 1:1。
  *
  * 用法：
- *   <ProtoDialog v-model="show" title="新建<b>角色</b>" size="md">
+ *   <ProtoDialog v-model="show" title="新建<b>职位</b>" size="md">
  *     ...主体...
  *     <template #footer>
  *       <div class="lft">提示文案</div>
@@ -21,7 +21,7 @@ import { acquireZIndex } from '@/perm/composables/useDialogZIndex';
 const props = withDefaults(
   defineProps<{
     modelValue: boolean;
-    /** 标题（允许含 HTML，如「新建<b>角色</b>」） */
+    /** 标题（允许含 HTML，如「新建<b>职位</b>」） */
     title?: string;
     /** 尺寸：与原型 .dlg.sm/.md/.lg/.xl 对应 */
     size?: 'sm' | 'md' | 'lg' | 'xl';
@@ -34,12 +34,12 @@ const props = withDefaults(
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>();
 
 /**
- * ⭐ 弹窗层级（2026-10-04 修复「配置权限弹窗被新建角色弹窗盖住」）
+ * ⭐ 弹窗层级（2026-10-04 修复「配置权限弹窗被新建职位弹窗盖住」）
  *
  * 所有 ProtoDialog 都 Teleport 到 body，而 .mask 的 z-index 原来是固定 1000，
  * 于是「谁在模板里写得靠后谁在上面」——跟「谁后打开」无关。
- * RoleManage.vue 里「配置权限」(treeOpen) 写在「新建角色」(formOpen) 之前，
- * 就导致从新建角色里点「＋ 配置权限」时被压在下面。
+ * RoleManage.vue 里「配置权限」(treeOpen) 写在「新建职位」(formOpen) 之前，
+ * 就导致从新建职位里点「＋ 配置权限」时被压在下面。
  *
  * 现在改为：每次打开领一个全局递增的层级，保证【后打开的在上层】。
  * 详见 @/perm/composables/useDialogZIndex.ts

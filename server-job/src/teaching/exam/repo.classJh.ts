@@ -45,7 +45,7 @@ function mapRow(r: Record<string, any>): ExamRow {
   return {
     id: String(r.id),
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     examName: String(r.exam_name ?? ''),
     examType: Number(r.exam_type ?? 0),
     examTypeName: EXAM_TYPE_NAME[Number(r.exam_type)] ?? '未知',

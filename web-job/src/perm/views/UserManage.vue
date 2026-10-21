@@ -1,16 +1,16 @@
 <script setup lang="ts">
 /**
- * 用户管理（账号管理）
+ * 账号管理（账号管理）
  *
  * 页面结构严格对齐高保真原型《学管系统-权限体系高保真原型.html》：
  *   · 第 1924~2001 行 renderUsers()          —— KPI 5 卡 + 账号列表（筛选条 + 表格 + 行内操作）
- *   · 第 2002~2077 行 openUserDetail()       —— 账号详情弹窗（基本信息 + 所属角色 + 有效权限明细）
- *   · 第 2078~2187 行 openUserForm()         —— 新建 / 编辑账号弹窗（左：基本信息 + 部门树；右：角色 + 权限预览）
+ *   · 第 2002~2077 行 openUserDetail()       —— 账号详情弹窗（基本信息 + 所属职位 + 有效权限明细）
+ *   · 第 2078~2187 行 openUserForm()         —— 新建 / 编辑账号弹窗（左：基本信息 + 部门树；右：职位 + 权限预览）
  *   · 第 2188~2273 行 togRoleCk / refreshUserPermPreview / quickRoleSet /
  *                     quickRoleClear / previewUserPerm / pwdLive / genPwd / togglePw
  *   · 第 2274~2338 行 submitUserForm()       —— 表单校验（错误清单弹窗）→ 确认弹窗 → 落库
- *   · 第 2339~2397 行 openAssignRole()/submitAssignRole()  —— 分配角色弹窗
- *   · 第 2398~2460 行 resetPwd()/rpRule()/rpGen()/doResetPwd() —— 重置密码弹窗
+ *   · 第 2339~2397 行 openAssignRole()/submitAssignRole()  —— 分配职位弹窗
+ *   · 第 2398~2460 行 resetPwd()/rpGen()/doResetPwd() —— 重置密码弹窗（密码按规则随机生成）
  *   · 第 2461~2523 行 toggleUser()/unlockUser()/delUser()  —— 停用启用 / 解锁 / 删除
  *   · 第 2524~2570 行 dlgImportUser()        —— 批量导入（原型演示）
  *   · 第 1896~1914 行 exportDlg()            —— 导出数据弹窗
@@ -20,20 +20,24 @@
  *
  * ⚠️ 账号数据归权限管理模块所有：登录模块不建表，
  *    通过 GET /api/perm/user/auth-profile?account=xxx 取鉴权档案。
- * ⚠️ 一个账号可挂多个角色，权限取【并集去重】，数据范围取【最宽的一档】。
- *    列表里的「有效权限」就是这个并集去重后的结果（不是各角色权限数相加）。
+ * ⚠️ 一个账号可挂多个职位，权限取【并集去重】，数据范围取【最宽的一档】。
+ *    列表里的「有效权限」就是这个并集去重后的结果（不是各职位权限数相加）。
  *
  * 与原型的三处必要取舍（详见交付说明）：
  *   ① 原型是「一次性全量渲染 + 前端过滤」，开发版是服务端分页，
  *      因此表格下方保留了一条原型风格的分页条（分页语义不能丢）。
- *   ② 原型的角色权限是内存里的 PERM 表，开发版改为按需拉取
+ *   ② 原型的职位权限是内存里的 PERM 表，开发版改为按需拉取
  *      roleApi.detail(roleId).perms（带缓存）后再做并集，口径与后端一致。
  *   ③ 原型的「密码明文回显 / 短信通知 / 批量导入」是纯演示逻辑，
  *      开发版保留同样的 UI 与校验，但导入不落库、短信不真实发送。
  */
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+/* ★ 2026-10-16：模块注册表（新增/编辑账号时勾选「可访问模块」用） */
+import { fetchModules } from '@/portal/api/portal';
 import { PERM_ROUTE } from '@/perm/utils/links';
+/* ★ 2026-10-19：「可访问模块」不再手勾 —— 由所选职位推导（规则见该文件） */
+import { derivePortalModules } from '@/perm/utils/moduleDerive';
 import type {
   PermDeptTreeNode,
   PermModule,
@@ -47,17 +51,18 @@ import { deptApi, exportApi, menuApi, roleApi, userApi } from '@/perm/api/perm';
 import { useOptionStore } from '@/perm/stores/option';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import UserDetailDialog from '@/perm/components/UserDetailDialog.vue';
+import UserEditDialog from '@/perm/components/UserEditDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
 import { toast } from '@/perm/utils/toast';
 import { roleIconOf } from '@/perm/utils/roleIcon';
 
-/** 角色图标 —— 统一走 @/perm/utils/roleIcon */
+/** 职位图标 —— 统一走 @/perm/utils/roleIcon */
 const roleIcon = roleIconOf;
 
 const router = useRouter();
 const route = useRoute();
 
-/** 可选项字典走 Pinia 缓存（角色管理 / 操作日志 / 规则配置页共用同一份） */
+/** 可选项字典走 Pinia 缓存（职位管理 / 操作日志 / 规则配置页共用同一份） */
 const optionStore = useOptionStore();
 
 /* ============================================================
@@ -106,7 +111,7 @@ function pwdScore(v: string): number {
 const PWD_COLORS = ['#EFE9E4', '#B22A23', '#C9852E', '#CD3A33', '#4E9A6C'];
 const PWD_TEXTS = ['', '弱', '中', '强', '很强'];
 
-/** 取某角色已配权限动作总数（优先用列表里的 permCount，兜底用已缓存的权限映射） */
+/** 取某职位已配权限动作总数（优先用列表里的 permCount，兜底用已缓存的权限映射） */
 function permCountOf(roleId: string): number {
   const r = roles.value.find((x) => x.id === roleId);
   if (r) return r.permCount;
@@ -123,7 +128,7 @@ const list = ref<PermUserListItem[]>([]);
 const total = ref(0);
 const overview = ref<UserOverview | null>(null);
 
-/** 全部角色（表单 / 分配角色 / 筛选用） */
+/** 全部职位（表单 / 分配职位 / 筛选用） */
 const roles = ref<PermRoleListItem[]>([]);
 /** 部门树根（校级下的 7 个一级部门） */
 const deptRoots = ref<PermDeptTreeNode[]>([]);
@@ -181,13 +186,13 @@ async function loadOverview(): Promise<void> {
 async function loadMeta(): Promise<void> {
   try {
     // 字典从 store 拿（命中缓存就不重复请求）；
-    // 角色清单、部门树 / 部门说明、权限模块树是本页专有数据
+    // 职位清单、部门树 / 部门说明、权限模块树是本页专有数据
     const [, roleRes, tree, deptPage, mods] = await Promise.all([
       optionStore.load(),
       roleApi.list({ page: 1, size: 100 }),
       deptApi.tree(),
       deptApi.list({ page: 1, size: 100 }),
-      // 权限模块树只服务「权限预览 / 权限明细」，单独兜底，别让它拖垮角色与部门数据
+      // 权限模块树只服务「权限预览 / 权限明细」，单独兜底，别让它拖垮职位与部门数据
       menuApi.tree().catch(() => [] as PermModule[]),
     ]);
     roles.value = roleRes.list || [];
@@ -277,12 +282,12 @@ function onSizeChange(): void {
 }
 
 /* ============================================================
- * 二、角色权限映射（原型用内存里的 PERM，开发版按需拉取 + 缓存）
+ * 二、职位权限映射（原型用内存里的 PERM，开发版按需拉取 + 缓存）
  * ============================================================ */
 
 const rolePerms = reactive<Record<string, RolePermMap>>({});
 
-/** 确保这些角色的权限映射已在本地（缺谁拉谁，拉过一次就缓存） */
+/** 确保这些职位的权限映射已在本地（缺谁拉谁，拉过一次就缓存） */
 async function ensureRolePerms(ids: string[]): Promise<void> {
   const missing = ids.filter((id) => !rolePerms[id]);
   if (!missing.length) return;
@@ -298,7 +303,7 @@ async function ensureRolePerms(ids: string[]): Promise<void> {
   );
 }
 
-/** 多角色权限并集（原型 userPermPreviewHtml 第 2227~2238 行的 merged） */
+/** 多职位权限并集（原型 userPermPreviewHtml 第 2227~2238 行的 merged） */
 function mergedMap(ids: string[]): RolePermMap {
   const out: RolePermMap = {};
   ids.forEach((id) => {
@@ -417,12 +422,15 @@ function onConfirmOk(): void {
 /* ============================================================
  * 四、账号详情 —— 复用 @/perm/components/UserDetailDialog.vue
  *
- * 【2026-10-07 重构】原来这里自己写了一份内联详情弹窗，而「部门管理」「角色管理」
+ * ★ 2026-10-19：详情弹窗底部的「去编辑」按钮已删除（共享组件里也彻底去掉了），
+ *   本页改账号统一走列表行操作里的「编辑」。
+ *
+ * 【2026-10-07 重构】原来这里自己写了一份内联详情弹窗，而「部门管理」「职位管理」
  * 里点「账号详情」只是 router.push('/user') —— 同一件事三种做法、其中两种是坏的
  * （不弹详情，还得自己再搜一次那个账号）。现在三处统一走同一个组件。
  *
- * 组件只需传 userId，详情 / 权限模块树 / 各角色权限映射都由它自取；
- * 弹窗里的「查看权限 / 编辑权限」也不再跳「角色-权限分配」，就地叠一层权限树。
+ * 组件只需传 userId，详情 / 权限模块树 / 各职位权限映射都由它自取；
+ * 弹窗里的「查看权限 / 编辑权限」也不再跳「职位权限分配」，就地叠一层权限树。
  * ============================================================ */
 
 const userDetailOpen = ref(false);
@@ -436,17 +444,11 @@ function openUserDetail(row: PermUserListItem): void {
   userDetailOpen.value = true;
 }
 
-/** 详情里的「去编辑」→ 关掉详情，打开编辑表单（复用本页的 openEdit） */
-async function editFromDetail(id: string): Promise<void> {
-  userDetailOpen.value = false;
-  try {
-    const d = await userApi.detail(id);
-    // 同上：详情接口的返回比契约声明的更宽（列表项形态）
-    await openEdit({ ...d } as unknown as PermUserListItem);
-  } catch {
-    /* 已提示 */
-  }
-}
+/*
+ * ★ 2026-10-19：这里原先有个 `editFromDetail()`（详情底部的「去编辑」→ 打开编辑表单），
+ * 随按钮一起删掉了 —— 共享组件里已无该按钮，也不再有 `edit` 事件，留着就是死代码。
+ * 账号的编辑入口改由列表行操作里的「编辑」承担（见 openEdit 的调用点）。
+ */
 
 /* ============================================================
  * 五、新建 / 编辑账号（原型 openUserForm 第 2078~2187 行）
@@ -456,43 +458,106 @@ const formOpen = ref(false);
 const formMode = ref<'add' | 'edit'>('add');
 const showPwd = ref(false);
 
+/* ============================================================
+ * ★ 2026-10-16：可访问模块（门户登录后能进哪几个模块）
+ *
+ * 背景：门户登录要求 t_sys_account 里既有账号、又有至少一个模块，
+ *      否则「在账号管理里新建的账号」永远登不进系统。
+ *
+ * ★ 2026-10-19 改口径：新建账号时【不再手勾】——
+ *      界面上那一块勾选区已按用户要求删除，模块改由【所选职位自动推导】
+ *      （derivePortalModules，规则与依据见 utils/moduleDerive.ts）。
+ *      编辑账号不受影响：仍沿用列表带回的原值原样提交。
+ * ============================================================ */
+
+/** 模块候选（来自门户模块注册表，只拉一次） */
+const moduleOptions = ref<{ key: string; title: string; desc: string }[]>([]);
+
+/** 懒加载模块注册表 */
+async function ensureModuleOptions(): Promise<void> {
+  if (moduleOptions.value.length) return;
+  try {
+    moduleOptions.value = await fetchModules();
+  } catch {
+    /* 提示由请求拦截器统一弹出，这里不阻塞表单 */
+  }
+}
+
+/** 模块 key → 中文名（确认框里展示用） */
+function moduleTitleOf(key: string): string {
+  return moduleOptions.value.find((m) => m.key === key)?.title || key;
+}
+
 interface UserForm {
   id: string;
   userName: string;
-  gwNo: string;
   account: string;
   phone: string;
+  /** 0 = 未选 */
   gender: number;
-  age: number;
+  /** null = 未填 */
+  age: number | null;
   deptId: string;
-  /** 枚举以字符串承接，提交时再断言成 UserStatus（与角色管理页同一写法） */
+  /** 枚举以字符串承接，提交时再断言成 UserStatus（与职位管理页同一写法） */
   userStatus: string;
   password: string;
   needChangePwd: boolean;
+  /**
+   * ★ 2026-10-16：可访问模块（门户登录后能进哪几个模块）。
+   * ★ 2026-10-19：新建时不再由用户手勾 —— saveUser() 提交的是 derivedModules；
+   *   这个字段现在只承载【编辑】时从列表带回的原值（原样提交，不被改动）。
+   */
+  modules: string[];
 }
 
 const form = reactive<UserForm>({
+  // ★ 2026-10-16 按用户要求：新建表单【一切留空】——
+  //   性别不预选、年龄不给默认值、账号状态不预选、密码不预填、强制改密不预勾，
+  //   管理员填了什么才显示什么（对应的「必填」校验也都补齐了）。
   id: '',
   userName: '',
-  gwNo: '',
   account: '',
   phone: '',
-  gender: 1,
-  age: 28,
+  /** 0 = 未选（性别必须由管理员选） */
+  gender: 0,
+  /** null = 未填（年龄必须由管理员填，20-65） */
+  age: null,
   deptId: '',
-  userStatus: '正常',
+  /** '' = 未选（下拉第一项是「请选择」） */
+  userStatus: '',
   password: '',
-  needChangePwd: true,
+  needChangePwd: false,
+  modules: [],
 });
 
-/** 多选角色（原型 uRoles），单独用 ref 存放，替换数组才能触发权限预览重算 */
+/** 多选职位（原型 uRoles），单独用 ref 存放，替换数组才能触发权限预览重算 */
 const formRoleIds = ref<string[]>([]);
 
+/**
+ * ★ 2026-10-19 修：勾选职位后要把该职位在权限库里的功能点拉回来。
+ *
+ * 【为什么必须补这个 watch】
+ *   以前只有 `openEdit()` / `openPreview()` 会调 `ensureRolePerms()` ——
+ *   **新建表单里勾职位从来没人拉**，于是：
+ *     · 「权限预览（随职位勾选实时变化）」在新建时永远是空的（页面自己承诺的功能失效）；
+ *     · 本次新增的「按所选职位推导可访问模块」也拿不到输入 →
+ *       一路走到「推不出来就全开」的兜底 → 新建账号会白拿全部 7 个模块。
+ *   补上这个 watch，两件事一起修好；`ensureRolePerms` 内部按 id 缓存，
+ *   重复勾选不会重复请求。
+ *
+ * ⚠️ 必须写在 `formRoleIds` 声明【之后】—— `<script setup>` 是模块顶层作用域，
+ *    写在声明前会 `Cannot access 'formRoleIds' before initialization`（TDZ），
+ *    整个页面直接白屏（构建/类型检查都发现不了，只有跑起来才炸）。
+ */
+watch(formRoleIds, (ids) => {
+  void ensureRolePerms(ids);
+});
+
 const formTitle = computed(() => {
-  const sub = '<span class="tag n">填写账号信息并分配角色与部门</span>';
+  // ★ 2026-10-19：编辑账号只改基础信息，副标题不再提「分配职位与部门」
   return formMode.value === 'edit'
-    ? `编辑账号 · <span class="em">${esc(form.userName)}</span> ${sub}`
-    : `新建用户 ${sub}`;
+    ? `编辑账号 · <span class="em">${esc(form.userName)}</span> <span class="tag n">修改账号基础信息</span>`
+    : `新建账号 <span class="tag n">填写账号信息并分配职位与部门</span>`;
 });
 
 const pwScore = computed(() => pwdScore(form.password));
@@ -503,6 +568,19 @@ const formMerged = computed<RolePermMap>(() => mergedMap(formRoleIds.value));
 const formTags = computed<ModuleTag[]>(() => moduleTags(formMerged.value));
 const formPermCount = computed(() => actionCount(formMerged.value));
 const formModuleCount = computed(() => formTags.value.filter((t) => t.c > 0).length);
+
+/**
+ * ★ 2026-10-19：新建账号的「可访问模块」= 所选职位自动推导的结果。
+ *
+ * 输入取「有 ≥1 项权限的权限库模块」（与上面「M 个模块可用」同一口径），
+ * 映射表与两条兜底（推导为空 / 跨板块角色 → 全部模块）见 utils/moduleDerive.ts。
+ */
+const derivedModules = computed<string[]>(() =>
+  derivePortalModules(
+    formTags.value.filter((t) => t.c > 0).map((t) => t.key),
+    moduleOptions.value.map((m) => m.key),
+  ),
+);
 
 /** 部门勾选态：选中项 + 其上级（回显）+ 其下级（原型 deptCk 的级联） */
 const deptOn = computed<Set<string>>(() => {
@@ -521,44 +599,55 @@ const deptOn = computed<Set<string>>(() => {
 
 function openAdd(): void {
   formMode.value = 'add';
+  // ★ 2026-10-19：新建不再手勾模块 —— 提交时按「所选职位」推导（见 derivedModules）
+  form.modules = [];
+  void ensureModuleOptions();
   Object.assign(form, {
+    // ★ 2026-10-16：全部留空 —— 管理员填了才会出现内容
     id: '',
     userName: '',
-    // 工号沿用既有规则自动生成（GW + 4 位），仍可手改
-    gwNo: 'GW' + String(1000 + total.value + 1),
     account: '',
     phone: '',
-    gender: 1,
-    age: 28,
+    gender: 0, // 性别不预选
+    age: null, // 年龄不给默认值
     deptId: '',
-    userStatus: '正常',
-    password: 'Ab@123456',
-    needChangePwd: true,
+    userStatus: '', // 账号状态不预选（下拉显示「请选择」）
+    password: '', // 密码不预填（可点「随机」按规则生成）
+    needChangePwd: false, // 强制改密不预勾
   });
   formRoleIds.value = [];
   showPwd.value = false;
   formOpen.value = true;
 }
 
+/**
+ * 编辑账号 —— ★ 2026-10-20 起改走共享组件 UserEditDialog（就地弹窗）
+ *
+ * 【为什么从「内联表单」搬出去】
+ *   原先编辑复用下面那个「新建 / 编辑」合体表单（formMode = 'edit'）。
+ *   而「部门管理 → 查看账号 → 编辑」当时是 router.push('/user?edit=<id>') 跳过来
+ *   （用户原话：「跳转到账号管理进行修改很别扭」）。把编辑抽成一个共享弹窗后：
+ *     · 部门管理可以就地编辑，不再跳页；
+ *     · 两个页面用的是【同一份】字段与校验，不会各改各的。
+ *
+ * ⚠️ 下面那个内联表单（formOpen）现在只用于【新建账号】：
+ *    `formMode` 恒为 'add'，其中 `formMode === 'edit'` 的分支不会再走到。
+ *    新建账号要勾职位 / 选部门 / 推导可访问模块，那套逻辑仍留在本页。
+ */
+const userEditOpen = ref(false);
+const userEditId = ref('');
+const userEditRow = ref<PermUserListItem | null>(null);
+
+/** 打开编辑弹窗（列表行「编辑」、以及 /user?edit=<id> 深链接都走它） */
 async function openEdit(row: PermUserListItem): Promise<void> {
-  formMode.value = 'edit';
-  Object.assign(form, {
-    id: row.id,
-    userName: row.userName,
-    gwNo: row.gwNo,
-    account: row.account,
-    phone: row.phone,
-    gender: row.gender,
-    age: row.age,
-    deptId: row.deptId,
-    userStatus: row.userStatus,
-    password: '',
-    needChangePwd: row.needChangePwd,
-  });
-  formRoleIds.value = [...row.roleIds];
-  showPwd.value = false;
-  formOpen.value = true;
-  await ensureRolePerms(formRoleIds.value);
+  userEditRow.value = row;
+  userEditId.value = row.id;
+  userEditOpen.value = true;
+}
+
+/** 共享弹窗保存成功 → 刷新列表与 KPI（部门树在别的页面，这里不用管） */
+async function onUserEdited(): Promise<void> {
+  await Promise.all([load(), loadOverview()]);
 }
 
 /** 部门选择（开发版账号只归属一个部门，所以是单选；勾选上级自动回显下级） */
@@ -568,7 +657,7 @@ function pickDept(id: string): void {
 
 const isRoleOn = (id: string): boolean => formRoleIds.value.includes(id);
 
-/** 角色勾选（原型 togRoleCk 第 2189~2207 行）—— 停用角色要先确认 */
+/** 职位勾选（原型 togRoleCk 第 2189~2207 行）—— 停用职位要先确认 */
 function togRole(r: PermRoleListItem): void {
   if (r.roleStatus === '停用') {
     if (isRoleOn(r.id)) {
@@ -577,12 +666,12 @@ function togRole(r: PermRoleListItem): void {
     }
     openConfirm(
       {
-        title: '角色已停用',
+        title: '职位已停用',
         icon: '⚠',
         iconBg: 'var(--warn-l)',
-        msg: `角色「${r.roleName}」当前处于停用状态`,
-        desc: '为该账号分配已停用角色，账号登录后不会获得该角色的权限。',
-        tip: '建议先启用该角色，或改选其他角色。',
+        msg: `职位「${r.roleName}」当前处于停用状态`,
+        desc: '为该账号分配已停用职位，账号登录后不会获得该职位的权限。',
+        tip: '建议先启用该职位，或改选其他职位。',
         okText: '仍然分配',
         okClass: 'wn',
       },
@@ -598,27 +687,17 @@ function togRole(r: PermRoleListItem): void {
 }
 
 /** 随机强密码（原型 genPwd 第 2260~2267 行） */
+/**
+ * ★ 2026-10-16：新建/编辑账号的「随机」按钮
+ *
+ * 与「重置密码」弹窗【共用同一个生成器、同一条规则】：
+ * 含大写字母 + 含数字 + 长度不低于 8 位。
+ * 不再掺特殊符号 —— 密码规则里没有这一项，而且这个密码要口头/短信告知本人，好念好抄更要紧。
+ */
 function genPwd(): void {
-  const L = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const l = 'abcdefghijkmnpqrstuvwxyz';
-  const d = '23456789';
-  const s = '@#$%&*';
-  const rnd = (n: number): number => Math.floor(Math.random() * n);
-  let p =
-    L[rnd(L.length)] +
-    l[rnd(l.length)] +
-    l[rnd(l.length)] +
-    d[rnd(d.length)] +
-    d[rnd(d.length)] +
-    s[rnd(s.length)];
-  const all = L + l + d + s;
-  while (p.length < 12) p += all[rnd(all.length)];
-  form.password = p
-    .split('')
-    .sort(() => Math.random() - 0.5)
-    .join('');
-  showPwd.value = true;
-  toast(`已生成随机强密码：${form.password}`);
+  form.password = genPwdByRule();
+  showPwd.value = true; // 生成后直接明文展示，方便念给本人
+  toast(`已按密码规则生成：${form.password}`);
 }
 
 function togglePwd(): void {
@@ -632,20 +711,20 @@ function onPhoneInput(e: Event): void {
 }
 
 /** 快捷套用（原型 quickRoleSet / quickRoleClear 第 2214~2226 行）——
- *  原型写死角色 id，开发版按【角色名】匹配（种子数据同名） */
+ *  原型写死职位 id，开发版按【职位名】匹配（种子数据同名） */
 function quickRoleSet(names: string[]): void {
   const ids = roles.value.filter((r) => names.includes(r.roleName)).map((r) => r.id);
   if (!ids.length) {
-    toast(`未找到角色「${names.join('、')}」，请手动勾选`, 'warn');
+    toast(`未找到职位「${names.join('、')}」，请手动勾选`, 'warn');
     return;
   }
   formRoleIds.value = ids;
-  toast(`已套用角色：${names.join('、')}`);
+  toast(`已套用职位：${names.join('、')}`);
 }
 
 function quickRoleClear(): void {
   formRoleIds.value = [];
-  toast('已清空角色选择', 'warn');
+  toast('已清空职位选择', 'warn');
 }
 
 /* ---- 权限明细预览（原型 previewUserPerm 第 2239~2254 行） ---- */
@@ -661,7 +740,7 @@ async function openPreview(): Promise<void> {
 }
 
 const previewTitle = computed(
-  () => `权限明细预览 <span class="tag n">基于 ${previewRoleIds.value.length} 个角色合并</span>`,
+  () => `权限明细预览 <span class="tag n">基于 ${previewRoleIds.value.length} 个职位合并</span>`,
 );
 
 /* ---- 表单校验 + 提交（原型 submitUserForm 第 2274~2338 行） ---- */
@@ -674,32 +753,36 @@ function validateForm(): string[] {
   const v = form;
   if (!v.userName) errs.push('请输入姓名');
   else if (!/^[\u4e00-\u9fa5]{2,}$/.test(v.userName)) errs.push('姓名只能是汉字，且不少于 2 个字');
-  if (!v.gwNo) errs.push('请输入工号');
-  else if (!/^GW\d{4}$/.test(v.gwNo)) errs.push('工号格式为 GW + 4 位数字，如 GW1016');
-  if (!v.age || v.age < 16 || v.age > 70) errs.push('年龄需在 16-70 之间');
+  if (v.gender !== 1 && v.gender !== 2) errs.push('请选择性别');
+  // ★ 2026-10-19 按用户要求：账号年龄范围收紧为 20-65（与后端 zod 同口径）
+  if (!v.age || v.age < 20 || v.age > 65) errs.push('年龄需在 20-65 之间');
   if (!/^1[3-9]\d{9}$/.test(v.phone || '')) errs.push('手机号格式不正确（11 位，1 开头，请勿输入空格/横线）');
   if (!/^[A-Za-z0-9]{4,20}$/.test(v.account || '')) errs.push('登录账号需 4-20 位字母/数字');
   else if (list.value.some((u) => u.account === v.account && u.id !== v.id)) {
     errs.push(`登录账号「${v.account}」已被占用`);
   }
-  if (list.value.some((u) => u.gwNo === v.gwNo && u.id !== v.id)) errs.push(`工号「${v.gwNo}」已存在`);
 
-  // 新增必须给密码；编辑留空 = 不修改
+  // ★ 2026-10-16：密码校验只在【新建账号】时做 —— 编辑页不对密码做任何操作
   if (formMode.value === 'add') {
-    if (!v.password) errs.push('密码至少 8 位');
+    if (!v.password) errs.push('请输入密码');
     else if (v.password.length < 8) errs.push('密码至少 8 位');
-    else if (!(/[A-Z]/.test(v.password) && /[0-9]/.test(v.password))) {
-      errs.push('密码需同时包含大写字母与数字');
-    }
-  } else if (v.password) {
-    if (v.password.length < 8) errs.push('密码至少 8 位');
     else if (!(/[A-Z]/.test(v.password) && /[0-9]/.test(v.password))) {
       errs.push('密码需同时包含大写字母与数字');
     }
   }
 
-  if (!formRoleIds.value.length) errs.push('请至少为该账号分配一个角色');
-  if (!v.deptId) errs.push('请至少选择一个所属部门');
+  if (!v.userStatus) errs.push('请选择账号状态');
+  // ★ 2026-10-19：职位 / 可访问模块 / 所属部门 三块只在【新建账号】表单里出现，
+  //   编辑模式下它们沿用原值提交、界面上也无法修改，所以校验只对新建账号生效。
+  if (formMode.value === 'add') {
+    if (!formRoleIds.value.length) errs.push('请至少为该账号分配一个职位');
+    // ★ 2026-10-19：模块改为按职位推导 —— 这里只作兜底断言（正常情况下必有值：
+    //   推导不出结果时会回退「全部模块」，保证账号一定登得进去）。
+    if (!derivedModules.value.length) {
+      errs.push('未能按所选职位推导出「可访问模块」，请检查该职位的权限配置');
+    }
+    if (!v.deptId) errs.push('请至少选择一个所属部门');
+  }
   return errs;
 }
 
@@ -725,26 +808,43 @@ function submitUserForm(): void {
       msg: isEdit ? `确认保存对「${form.userName}」的修改？` : `确认创建账号「${form.userName}」？`,
       detail: [
         { k: '姓名 / 性别', v: `<b>${esc(form.userName)}</b> · ${form.gender === 2 ? '女' : '男'} · ${form.age} 岁` },
-        { k: '工号', v: esc(form.gwNo) },
         { k: '登录账号', v: `<code>${esc(form.account)}</code>` },
         { k: '手机号', v: esc(form.phone) },
-        { k: '所属部门', v: esc(deptFlat.value.find((d) => d.id === form.deptId)?.deptName || '—') },
-        {
-          k: '所属角色',
-          v: roleNames.length
-            ? roleNames.map((n) => `<span class="tag b">${esc(n)}</span>`).join(' ')
-            : '<span class="desc">无</span>',
-        },
-        {
-          k: '密码策略',
-          v: form.password
-            ? `${esc(form.password)} <span class="desc">${form.needChangePwd ? '· 强制首次登录修改' : '· 不强制修改'}</span>`
-            : `<span class="desc">不修改密码${form.needChangePwd ? ' · 仍要求首次登录修改' : ''}</span>`,
-        },
+        { k: '账号状态', v: esc(form.userStatus || '—') },
+        // ★ 2026-10-19：编辑账号只改基础信息 → 部门 / 模块 / 职位 / 密码
+        //   这四行只在【新建账号】的确认框里出现。
+        ...(isEdit
+          ? []
+          : [
+              {
+                k: '所属部门',
+                v: esc(deptFlat.value.find((d) => d.id === form.deptId)?.deptName || '—'),
+              },
+              {
+                k: '可访问模块',
+                v: derivedModules.value.length
+                  ? `${derivedModules.value
+                      .map((k) => `<span class="tag b">${esc(moduleTitleOf(k))}</span>`)
+                      .join(' ')} <span class="desc">· 按所选职位自动开通</span>`
+                  : '<span class="desc">未推导出模块 · 请检查职位权限</span>',
+              },
+              {
+                k: '所属职位',
+                v: roleNames.length
+                  ? roleNames.map((n) => `<span class="tag b">${esc(n)}</span>`).join(' ')
+                  : '<span class="desc">无</span>',
+              },
+              {
+                k: '密码策略',
+                v: `${esc(form.password)} <span class="desc">${
+                  form.needChangePwd ? '· 强制首次登录修改' : '· 不强制修改'
+                }</span>`,
+              },
+            ]),
       ],
       warn: dupName ? '系统内已存在同姓名的账号，请确认不是重复创建。' : '',
       tip: isEdit
-        ? '修改后该账号权限立即按新角色生效。'
+        ? '仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「分配职位」）。'
         : `账号创建后默认状态为「${form.userStatus}」，可直接登录。`,
       okText: isEdit ? '确认保存' : '确认创建',
     },
@@ -758,16 +858,20 @@ async function saveUser(): Promise<void> {
   const isEdit = formMode.value === 'edit';
   const payload = {
     userName: form.userName,
-    gwNo: form.gwNo,
     account: form.account,
     phone: form.phone,
     gender: form.gender,
-    age: form.age,
+    age: Number(form.age), // 校验已保证 20-65，这里收口成数字
     deptId: form.deptId,
+    // ★ 2026-10-19：新建 = 按职位推导；编辑 = 沿用列表带回的原值（界面不涉及模块）
+    modules: isEdit ? [...form.modules] : [...derivedModules.value],
     roleIds: [...formRoleIds.value],
     userStatus: form.userStatus as UserStatus,
-    password: form.password || undefined,
-    needChangePwd: form.needChangePwd,
+    // ★ 2026-10-16：编辑账号不传密码、也不传「强制首次登录修改密码」——
+    //   后端这两项都是可选的，不传 = 保持库里原值不动；只有新建时才带上。
+    ...(formMode.value === 'add'
+      ? { password: form.password, needChangePwd: form.needChangePwd }
+      : {}),
   };
   try {
     if (isEdit) {
@@ -778,7 +882,7 @@ async function saveUser(): Promise<void> {
       const roleNames = formRoleIds.value
         .map((id) => roles.value.find((r) => r.id === id)?.roleName || '')
         .filter(Boolean);
-      toast(`已创建账号「${form.userName}」，角色：${roleNames.join('、') || '无'}`);
+      toast(`已创建账号「${form.userName}」，职位：${roleNames.join('、') || '无'}`);
     }
     formOpen.value = false;
     await Promise.all([load(), loadOverview()]);
@@ -788,7 +892,7 @@ async function saveUser(): Promise<void> {
 }
 
 /* ============================================================
- * 六、分配角色（原型 openAssignRole / submitAssignRole 第 2344~2396 行）
+ * 六、分配职位（原型 openAssignRole / submitAssignRole 第 2344~2396 行）
  * ============================================================ */
 
 const assignOpen = ref(false);
@@ -797,8 +901,8 @@ const assignRoleIds = ref<string[]>([]);
 
 const assignTitle = computed(() =>
   assignTarget.value
-    ? `分配角色 · <span class="em">${esc(assignTarget.value.userName)}</span>`
-    : '分配角色',
+    ? `分配职位 · <span class="em">${esc(assignTarget.value.userName)}</span>`
+    : '分配职位',
 );
 
 const assignTags = computed<ModuleTag[]>(() => moduleTags(mergedMap(assignRoleIds.value)));
@@ -814,17 +918,17 @@ async function openAssignRole(row: PermUserListItem): Promise<void> {
   await ensureRolePerms(assignRoleIds.value);
 }
 
-/** 勾选（原型复用 togRoleCk：停用角色同样要先确认） */
+/** 勾选（原型复用 togRoleCk：停用职位同样要先确认） */
 function togAssignRole(r: PermRoleListItem): void {
   if (r.roleStatus === '停用' && !assignIsOn(r.id)) {
     openConfirm(
       {
-        title: '角色已停用',
+        title: '职位已停用',
         icon: '⚠',
         iconBg: 'var(--warn-l)',
-        msg: `角色「${r.roleName}」当前处于停用状态`,
-        desc: '为该账号分配已停用角色，账号登录后不会获得该角色的权限。',
-        tip: '建议先启用该角色，或改选其他角色。',
+        msg: `职位「${r.roleName}」当前处于停用状态`,
+        desc: '为该账号分配已停用职位，账号登录后不会获得该职位的权限。',
+        tip: '建议先启用该职位，或改选其他职位。',
         okText: '仍然分配',
         okClass: 'wn',
       },
@@ -848,18 +952,18 @@ function submitAssignRole(): void {
   if (!ids.length) {
     openConfirm(
       {
-        title: '未选择角色',
+        title: '未选择职位',
         icon: '⚠',
         iconBg: 'var(--warn-l)',
-        msg: '确认清空该账号的全部角色？',
+        msg: '确认清空该账号的全部职位？',
         desc: '清空后该账号将无法登录系统，操作前请确认。',
-        warn: '建议至少保留一个角色。',
+        warn: '建议至少保留一个职位。',
         okText: '确认清空',
         okClass: 'dg',
       },
       () => {
-        // 后端强制「账号至少保留一个角色」，这里按同样的规则拦截，避免打一次注定失败的请求
-        toast('账号至少需要保留一个角色，已取消清空', 'warn');
+        // 后端强制「账号至少保留一个职位」，这里按同样的规则拦截，避免打一次注定失败的请求
+        toast('账号至少需要保留一个职位，已取消清空', 'warn');
       },
     );
     return;
@@ -869,13 +973,13 @@ function submitAssignRole(): void {
   const removed = cur.filter((r) => !ids.includes(r));
   openConfirm(
     {
-      title: '保存角色分配',
+      title: '保存职位分配',
       icon: '🔗',
-      msg: `确认更新「${row.userName}」的角色？`,
+      msg: `确认更新「${row.userName}」的职位？`,
       detail: [
-        { k: '角色总数', v: `${cur.length} → <b style="color:var(--brand)">${ids.length}</b>` },
+        { k: '职位总数', v: `${cur.length} → <b style="color:var(--brand)">${ids.length}</b>` },
         {
-          k: '新增角色',
+          k: '新增职位',
           v: added.length
             ? added
                 .map((r) => `<span class="tag g">${esc(roleNameById(r))}</span>`)
@@ -883,7 +987,7 @@ function submitAssignRole(): void {
             : '<span class="desc">无</span>',
         },
         {
-          k: '移除角色',
+          k: '移除职位',
           v: removed.length
             ? removed
                 .map((r) => `<span class="tag d">${esc(roleNameById(r))}</span>`)
@@ -906,11 +1010,10 @@ function roleNameById(id: string): string {
 
 async function saveAssign(row: PermUserListItem, ids: string[]): Promise<void> {
   try {
-    // 角色分配走账号编辑接口（角色为全量覆盖），其余字段原样带回
+    // 职位分配走账号编辑接口（职位为全量覆盖），其余字段原样带回
     await userApi.update({
       id: row.id,
       userName: row.userName,
-      gwNo: row.gwNo,
       account: row.account,
       phone: row.phone,
       gender: row.gender,
@@ -921,7 +1024,7 @@ async function saveAssign(row: PermUserListItem, ids: string[]): Promise<void> {
       needChangePwd: row.needChangePwd,
     });
     assignOpen.value = false;
-    toast('已更新角色分配');
+    toast('已更新职位分配');
     await Promise.all([load(), loadOverview()]);
   } catch {
     /* 已提示 */
@@ -934,8 +1037,7 @@ async function saveAssign(row: PermUserListItem, ids: string[]): Promise<void> {
 
 const resetOpen = ref(false);
 const resetTarget = ref<PermUserListItem | null>(null);
-const resetRule = ref<'sys' | 'random' | 'custom'>('sys');
-const resetPwdValue = ref('Ab@123456');
+const resetPwdValue = ref('');
 const resetNeedChange = ref(true);
 const resetNotify = ref(true);
 const pwdRuleOpen = ref(false);
@@ -958,34 +1060,42 @@ const resetPwText = computed(() => PWD_TEXTS[resetPwScore.value] || '太短');
 
 function openReset(row: PermUserListItem): void {
   resetTarget.value = row;
-  resetRule.value = 'sys';
-  resetPwdValue.value = 'Ab@123456';
+  // ★ 2026-10-16：打开即按规则随机生成一个新密码（可点「随机」再换）
+  resetPwdValue.value = genPwdByRule();
   resetNeedChange.value = true;
   resetNotify.value = true;
   resetOpen.value = true;
 }
 
-/** 切换「初始密码规则」（原型 rpRule 第 2427~2433 行） */
-function rpRule(): void {
-  if (resetRule.value === 'sys') resetPwdValue.value = 'Ab@123456';
-  else if (resetRule.value === 'random') resetPwdValue.value = `Xk@${randomDigits()}mQ`;
+/**
+ * ⭐ 2026-10-16：按【密码规则】随机生成一个密码 —— 新建/编辑账号与重置密码弹窗共用。
+ *
+ * 规则 = 含大写字母 + 含数字 + 长度不低于 8 位（与界面上那句提示完全一致）。
+ * 组成：2 个大写 + 3 个小写 + 3 个数字 = 8 位，再打散顺序，避免固定「大写-小写-数字」的形状。
+ * ⚠️ 不掺特殊符号：这条规则本身不要求，而且管理员要口头/短信告知本人，好念好抄更要紧。
+ */
+function genPwdByRule(): string {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // 去掉 I O 这些易混字符
+  const lower = 'abcdefghijkmnpqrstuvwxyz';
+  const digit = '23456789'; // 去掉 0 1
+  const pick = (s: string, n: number) =>
+    Array.from({ length: n }, () => s[Math.floor(Math.random() * s.length)]).join('');
+  return (pick(upper, 2) + pick(lower, 3) + pick(digit, 3))
+    .split('')
+    .sort(() => (Math.random() < 0.5 ? -1 : 1))
+    .join('');
 }
 
-/** 随机按钮：切到自定义并填入随机强密码（原型 rpGen 第 2434~2435 行） */
+/** 随机按钮：按同一规则再换一个 */
 function rpGen(): void {
-  resetRule.value = 'custom';
-  resetPwdValue.value = `Pz@${randomDigits()}wK`;
-}
-
-function randomDigits(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  resetPwdValue.value = genPwdByRule();
 }
 
 function doResetPwd(): void {
   const row = resetTarget.value;
   if (!row) return;
   const p = resetPwdValue.value;
-  if (p.length < 8) {
+  if (p.length < 8 || !/[A-Z]/.test(p) || !/[0-9]/.test(p)) {
     pwdRuleOpen.value = true;
     return;
   }
@@ -1038,7 +1148,7 @@ async function saveReset(row: PermUserListItem, pwd: string, notify: boolean): P
  * 八、停用 / 启用 / 解锁 / 删除（原型第 2461~2522 行）
  * ============================================================ */
 
-/** 该账号是否持有系统管理员角色（后端保护：不可删除、不可停用） */
+/** 该账号是否持有系统管理员职位（后端保护：不可删除、不可停用） */
 function isSysAdminUser(row: PermUserListItem): boolean {
   return row.roleIds.some((id) => roles.value.find((r) => r.id === id)?.roleCode === 'SYS_ADMIN');
 }
@@ -1053,13 +1163,13 @@ function toggleUser(row: PermUserListItem): void {
       msg: `确认${off ? '停用' : '启用'}账号「${row.userName}」？`,
       detail: [
         { k: '账号', v: esc(row.account) },
-        { k: '角色', v: row.roleNames.length ? esc(row.roleNames.join('、')) : '<span class="desc">无</span>' },
+        { k: '职位', v: row.roleNames.length ? esc(row.roleNames.join('、')) : '<span class="desc">无</span>' },
         { k: '变更后状态', v: off ? '已停用' : '正常' },
       ],
       warn: off ? '停用后该账号立即无法登录，但数据保留；如需彻底移除请用"删除"。' : '',
       tip: off
-        ? '如需临时冻结（保留登录但只读），请联系管理员配置只读角色。'
-        : '启用后该账号恢复原有角色权限。',
+        ? '如需临时冻结（保留登录但只读），请联系管理员配置只读职位。'
+        : '启用后该账号恢复原有职位权限。',
       okText: off ? '确认停用' : '确认启用',
       okClass: off ? 'wn' : 'pri',
     },
@@ -1142,8 +1252,8 @@ function delUser(row: PermUserListItem): void {
         desc: '系统管理员账号受保护，既不可删除也不可停用，避免误操作导致无人能维护权限体系。',
         detail: [
           { k: '账号', v: `${esc(row.userName)}（${esc(row.account)}）` },
-          { k: '角色', v: '<span class="tag p">🔧 系统管理员</span>' },
-          { k: '建议操作', v: '如需调整其权限，请到「角色-权限分配」修改角色' },
+          { k: '职位', v: '<span class="tag p">🔧 系统管理员</span>' },
+          { k: '建议操作', v: '如需调整其权限，请到「职位权限分配」修改职位' },
         ],
         tip: '若该人员已离职，请新建账号接替后再联系管理员处理。',
         okText: '知道了',
@@ -1162,11 +1272,10 @@ function delUser(row: PermUserListItem): void {
       msg: `确认删除账号「${row.userName}」？`,
       detail: [
         { k: '账号', v: esc(row.account) },
-        { k: '工号', v: esc(row.gwNo) },
         { k: '部门', v: esc(row.deptName) },
-        { k: '角色', v: row.roleNames.length ? esc(row.roleNames.join('、')) : '<span class="desc">无</span>' },
+        { k: '职位', v: row.roleNames.length ? esc(row.roleNames.join('、')) : '<span class="desc">无</span>' },
       ],
-      warn: '删除后账号不可恢复，如需再次使用只能重新创建。',
+      warn: '删除后账号不可恢复，如需再次使用只能重新创建；门户登录账号也会一并作废。',
       okText: '确认删除',
       okClass: 'dg',
     },
@@ -1196,9 +1305,9 @@ async function saveRemove(row: PermUserListItem): Promise<void> {
 const importOpen = ref(false);
 const importResultOpen = ref(false);
 const importFailRows = [
-  { name: '赵晓峰', gw: 'GW1017', account: 'zhaoxf', phone: '135****2201', ok: true },
-  { name: '钱多多', gw: 'GW1018', account: 'qiandd', phone: '136****3302', ok: true },
-  { name: '孙小美', gw: 'GW1019', account: 'sunxm', phone: '137****4403', ok: false },
+  { name: '赵晓峰', account: 'zhaoxf', phone: '135****2201', ok: true },
+  { name: '钱多多', account: 'qiandd', phone: '136****3302', ok: true },
+  { name: '孙小美', account: 'sunxm', phone: '137****4403', ok: false },
 ];
 const importDetail = [
   { k: '成功', v: '<b style="color:var(--ok)">2</b> 条' },
@@ -1289,7 +1398,7 @@ async function doExport(): Promise<void> {
           <input
             v-model="query.keyword"
             class="inp"
-            placeholder="按姓名 / 手机号 / 账号 / 工号搜索"
+            placeholder="按姓名 / 手机号 / 账号搜索"
             style="width: 220px"
             @input="onKeywordInput"
             @keyup.enter="searchNow"
@@ -1299,7 +1408,7 @@ async function doExport(): Promise<void> {
             <option v-for="d in deptFlat" :key="d.id" :value="d.id">{{ d.deptName }}</option>
           </select>
           <select v-model="query.roleId" class="inp" @change="searchNow">
-            <option value="">全部角色</option>
+            <option value="">全部职位</option>
             <option v-for="r in roles" :key="r.id" :value="r.id">{{ r.roleName }}</option>
           </select>
           <select v-model="query.userStatus" class="inp" @change="searchNow">
@@ -1311,7 +1420,7 @@ async function doExport(): Promise<void> {
           <button class="btn" type="button" @click="resetQuery">重置</button>
           <button class="btn" type="button" @click="importOpen = true">批量导入</button>
           <button class="btn" type="button" @click="openExport">导出</button>
-          <button class="btn pri" type="button" @click="openAdd">＋ 新建用户</button>
+          <button class="btn pri" type="button" @click="openAdd">＋ 新建账号</button>
         </div>
       </div>
       <div class="card-b p0">
@@ -1319,11 +1428,11 @@ async function doExport(): Promise<void> {
           <table class="tb">
             <thead>
               <tr>
-                <th style="width: 150px">姓名 / 工号</th>
+                <th style="width: 150px">姓名</th>
                 <th style="width: 120px">登录账号</th>
                 <th style="width: 130px">手机号</th>
                 <th style="width: 120px">所属部门</th>
-                <th style="width: 170px">所属角色</th>
+                <th style="width: 170px">所属职位</th>
                 <th style="width: 80px">状态</th>
                 <th style="width: 132px">最后登录</th>
                 <th style="width: 290px">操作</th>
@@ -1333,7 +1442,6 @@ async function doExport(): Promise<void> {
               <tr v-for="u in list" :key="u.id">
                 <td>
                   <b class="lk" @click="openUserDetail(u)">{{ u.userName }}</b>
-                  <div class="desc num">{{ u.gwNo }}</div>
                 </td>
                 <td>
                   <code
@@ -1351,7 +1459,7 @@ async function doExport(): Promise<void> {
                       style="margin: 1px 2px 1px 0"
                     >{{ n }}</span>
                   </template>
-                  <span v-else class="tag d">无角色</span>
+                  <span v-else class="tag d">无职位</span>
                 </td>
                 <td>
                   <span v-if="u.userStatus === '正常'" class="tag g">正常</span>
@@ -1364,8 +1472,13 @@ async function doExport(): Promise<void> {
                   <div class="acts">
                     <span class="lk" @click="openUserDetail(u)">查看</span>
                     <span class="lk" @click="openEdit(u)">编辑</span>
-                    <span class="lk" @click="openAssignRole(u)">分配角色</span>
-                    <span class="lk wn" @click="openReset(u)">重置密码</span>
+                    <span class="lk" @click="openAssignRole(u)">分配职位</span>
+                    <span
+                      class="lk wn"
+                      title="本人忘记密码、登不进系统时，由管理员代其重置新密码"
+                      @click="openReset(u)"
+                      >重置密码</span
+                    >
                     <span
                       class="lk"
                       :class="u.userStatus === '正常' ? 'wn' : 'gr'"
@@ -1415,34 +1528,50 @@ async function doExport(): Promise<void> {
     </div>
 
     <div class="notice i">
-      ℹ<div><b>删除规则：</b>账号有业务数据关联时不可删除，只能停用；系统管理员账号既不可删除也不可停用。</div>
+      ℹ<div><b>删除规则：</b>账号有业务数据关联时不可删除，不可停用；系统管理员账号既不可删除也不可停用。</div>
     </div>
 
     <!-- ==================== 账号详情 ====================
          ⚠️ 2026-10-07 起改用 @/perm/components/UserDetailDialog.vue ——
-         「用户管理 / 部门管理 / 角色管理」三处点「账号详情」看到的是同一个弹窗，
-         内容也一致（基本信息 + 所属角色 + 有效权限明细），这里不再自己写一份。 -->
+         「账号管理 / 部门管理 / 职位管理」三处点「账号详情」看到的是同一个弹窗，
+         内容也一致（基本信息 + 所属职位 + 有效权限明细），这里不再自己写一份。 -->
+    <!-- ★ 2026-10-19：「去编辑」按钮已从共享组件里彻底删除，故这里不再传开关；
+         本页改账号走列表行操作里的「编辑」。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
-      @edit="editFromDetail"
     />
 
-    <!-- ==================== 新建 / 编辑账号（原型 openUserForm 第 2078~2187 行） ==================== -->
+    <!-- ==================== 编辑账号（就地弹窗，与部门管理共用一份） ==================== -->
+    <!-- ★ 2026-10-20：编辑从下面那个合体表单里搬出来，抽成共享组件，
+         这样「部门管理 → 编辑账号」也能就地改，不必跳回本页。 -->
+    <UserEditDialog
+      v-model="userEditOpen"
+      :user-id="userEditId"
+      :fallback="userEditRow"
+      @saved="onUserEdited"
+    />
+
+    <!-- ==================== 新建账号（原型 openUserForm 第 2078~2187 行） ====================
+         ⚠️ ★ 2026-10-20：本表单现在【只用于新建】—— 编辑已迁到上面的 UserEditDialog，
+         `formMode` 恒为 'add'，里面 `formMode === 'edit'` 的分支不会再走到。 -->
     <ProtoDialog v-model="formOpen" :title="formTitle" size="xl">
-      <div style="display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px">
-        <!-- 左：基本信息 + 所属部门 -->
+      <!-- ★ 2026-10-19：编辑账号只保留【基本信息】→ 单列；新建账号仍是左信息 + 右职位两列 -->
+      <div
+        :style="{
+          display: 'grid',
+          gridTemplateColumns: formMode === 'edit' ? '1fr' : '1.15fr 0.85fr',
+          gap: '20px',
+        }"
+      >
+        <!-- 左：基本信息（新建时下方还有 所属部门） -->
         <div>
           <div class="sec-t"><span class="bar"></span>基本信息</div>
           <div class="fm" style="grid-template-columns: 1fr 1fr">
             <div class="f">
               <label>姓名 <span class="req">*</span></label>
               <input v-model="form.userName" class="inp" placeholder="请输入真实姓名" />
-            </div>
-            <div class="f">
-              <label>工号 <span class="req">*</span></label>
-              <input v-model="form.gwNo" class="inp" placeholder="如 GW1016" />
             </div>
             <div class="f">
               <label>性别 <span class="req">*</span></label>
@@ -1453,7 +1582,7 @@ async function doExport(): Promise<void> {
             </div>
             <div class="f">
               <label>年龄 <span class="req">*</span></label>
-              <input v-model.number="form.age" class="inp" type="number" min="16" max="70" placeholder="16-70" />
+              <input v-model.number="form.age" class="inp" type="number" min="20" max="65" placeholder="20-65" />
             </div>
             <div class="f">
               <label>手机号 <span class="req">*</span></label>
@@ -1470,22 +1599,34 @@ async function doExport(): Promise<void> {
               <label>登录账号 <span class="req">*</span></label>
               <input v-model="form.account" class="inp" placeholder="字母/数字，4-20 位" />
             </div>
+            <!-- ★ 2026-10-16 按用户要求：编辑账号页不再涉及密码 ——
+                 密码只在【新建账号】时由管理员生成（并同步开通门户登录）；
+                 忘记密码走行内「重置密码」，本人自己改走右上角「修改密码」。 -->
+            <template v-if="formMode === 'add'">
             <div class="f full">
-              <label>
-                {{ formMode === 'edit' ? '重置为初始密码' : '登录密码' }}
-                <span v-if="formMode === 'add'" class="req">*</span>
+              <!-- 规则标记紧跟在「密码」右边，并用括号括起来 -->
+              <label style="display: flex; align-items: center; gap: 6px">
+                <span>密码</span>
+                <!-- ★ 2026-10-16：密码改为必填 —— 两种模式都带红色 * -->
+                <span class="req">*</span>
+                <span style="font-weight: 400; font-size: 11px; color: #9C8D88"
+                  >（密码需包含大写字母和数字，长度不低于 8 位）</span
+                >
               </label>
               <div class="pw">
                 <input
                   v-model="form.password"
                   class="inp"
                   :type="showPwd ? 'text' : 'password'"
-                  :placeholder="
-                    formMode === 'add' ? '8-20 位，含大小写、数字、符号' : '留空表示不修改密码'
-                  "
+                  placeholder="请输入密码"
                 />
                 <button class="btn" type="button" @click="genPwd">随机</button>
                 <button class="btn" type="button" @click="togglePwd">{{ showPwd ? '隐藏' : '显示' }}</button>
+              </div>
+              <!-- ★ 2026-10-16：把「谁设密码、谁能改」写清楚 ——
+                   管理员在新建账号时生成初始密码并告知本人，本人登录后可在右上角自行修改 -->
+              <div class="desc" style="margin-top: 5px">
+                创建后请把「登录账号 + 初始密码」告知本人；本人登录后可在右上角「修改密码」自行修改。
               </div>
               <div v-if="form.password" style="display: flex; gap: 3px; align-items: center; margin-top: 5px">
                 <div
@@ -1510,14 +1651,31 @@ async function doExport(): Promise<void> {
                 强制首次登录修改密码
               </label>
             </div>
+            </template>
+
             <div class="f">
               <label>账号状态 <span class="req">*</span></label>
               <select v-model="form.userStatus" class="inp">
+                <!-- ★ 2026-10-16：新建时不给默认值，先显示「请选择」 -->
+                <option value="" disabled>请选择</option>
                 <option v-for="o in statusOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
               </select>
             </div>
           </div>
 
+          <!-- ★ 2026-10-19：所属部门 / 所属职位 / 权限预览 / 快捷套用
+               只在【新建账号】时出现 —— 编辑账号只改基础信息。
+               编辑时这些字段沿用列表带回的原值一起提交，不会被改动；
+               需要调整职位或部门请走列表里的「分配职位」入口。 -->
+          <template v-if="formMode === 'add'">
+          <!-- ★ 2026-10-19：原先的「可访问模块」勾选区已按用户要求删除 ——
+               模块改为【按所选职位自动推导】（见 utils/moduleDerive.ts）：
+               ① 权限库模块 → 门户模块 按固定表映射（market→consult / fin→finance /
+                  perm→perm / job→job / train→job / acad→edu / teach→class+class-jh /
+                  approve 不单独给模块）；
+               ② 推到 ≥ 6 个 → 视为跨板块角色（校长 / 系统管理员），直接全开；
+               ③ 一个都推不出来 → 回退全部模块，保证建出来的账号一定登得进去。
+               最终结果会在提交前的确认框里列出来，不会再手勾。 -->
           <div class="divider"></div>
           <div class="sec-t">
             <span class="bar"></span>所属部门 <span class="desc">（该账号归属与可见范围）</span>
@@ -1546,11 +1704,13 @@ async function doExport(): Promise<void> {
           <div class="desc mt8">
             ※ 选择"教学部"会级联勾选初中部/高中部/大学部；未勾选子部门时按上级部门归属。
           </div>
+          </template>
+
         </div>
 
-        <!-- 右：角色 + 权限预览 + 快捷套用 -->
-        <div>
-          <div class="sec-t"><span class="bar"></span>所属角色 <span class="desc">（可多选）</span></div>
+        <!-- 右：职位 + 权限预览 + 快捷套用（★ 2026-10-19：仅新建账号时出现） -->
+        <div v-if="formMode === 'add'">
+          <div class="sec-t"><span class="bar"></span>所属职位 <span class="desc">（可多选）</span></div>
           <div
             style="border: 1px solid var(--line); border-radius: 9px; padding: 9px; max-height: 262px; overflow-y: auto"
           >
@@ -1572,13 +1732,13 @@ async function doExport(): Promise<void> {
             </div>
           </div>
           <div class="desc" style="margin: 7px 0 0">
-            权限取所选角色的<b>并集</b>；如需精细调整，请编辑对应角色的权限树。
+            权限取所选职位的<b>并集</b>；如需精细调整，请编辑对应职位的权限树。
           </div>
 
           <div class="mt12">
             <div class="sec-t">
               <span class="bar"></span>权限预览
-              <span class="desc" style="font-weight: 400">（随角色勾选实时变化）</span>
+              <span class="desc" style="font-weight: 400">（随职位勾选实时变化）</span>
               <span style="margin-left: auto">
                 <span class="lk" @click="openPreview">查看明细</span>
               </span>
@@ -1594,7 +1754,7 @@ async function doExport(): Promise<void> {
             >
               <div v-if="!formRoleIds.length" class="empty" style="padding: 22px">
                 <div class="ic">🎭</div>
-                尚未选择角色，账号将无任何权限
+                尚未选择职位，账号将无任何权限
               </div>
               <template v-else>
                 <div style="font-size: 12.5px; margin-bottom: 8px">
@@ -1657,7 +1817,7 @@ async function doExport(): Promise<void> {
 
     <!-- ============ 权限明细预览（原型 previewUserPerm 第 2239~2254 行） ============ -->
     <ProtoDialog v-model="previewOpen" :title="previewTitle" size="lg">
-      <div class="notice i mb12">ℹ<div>以下为该账号<b>实际生效</b>的权限（多角色取并集）。</div></div>
+      <div class="notice i mb12">ℹ<div>以下为该账号<b>实际生效</b>的权限（多职位取并集）。</div></div>
       <div v-for="m in previewCards" :key="m.key" style="margin-bottom: 12px">
         <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 5px">{{ m.icon }} {{ m.name }}</div>
         <template v-if="m.rows.length">
@@ -1681,9 +1841,9 @@ async function doExport(): Promise<void> {
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 分配角色（原型 openAssignRole 第 2344~2367 行） ==================== -->
+    <!-- ==================== 分配职位（原型 openAssignRole 第 2344~2367 行） ==================== -->
     <ProtoDialog v-model="assignOpen" :title="assignTitle" size="md">
-      <div class="notice i mb12">ℹ<div>可多选角色，账号权限为所选角色的<b>并集</b>。</div></div>
+      <div class="notice i mb12">ℹ<div>可多选职位，账号权限为所选职位的<b>并集</b>。</div></div>
       <div
         style="border: 1px solid var(--line); border-radius: 9px; padding: 9px; max-height: 330px; overflow-y: auto"
       >
@@ -1707,7 +1867,7 @@ async function doExport(): Promise<void> {
       <div class="mt12" style="border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: #FBF8F5">
         <div v-if="!assignRoleIds.length" class="empty" style="padding: 18px">
           <div class="ic">🎭</div>
-          尚未选择角色，账号将无任何权限
+          尚未选择职位，账号将无任何权限
         </div>
         <template v-else>
           <div style="font-size: 12.5px; margin-bottom: 8px">
@@ -1726,28 +1886,38 @@ async function doExport(): Promise<void> {
       </div>
       <template #footer>
         <div class="lft">
-          当前角色：{{ assignTarget?.roleNames.join('、') || '无' }}
+          当前职位：{{ assignTarget?.roleNames.join('、') || '无' }}
         </div>
         <button class="btn" type="button" @click="assignOpen = false">取消</button>
-        <button class="btn pri" type="button" @click="submitAssignRole">保存角色分配</button>
+        <button class="btn pri" type="button" @click="submitAssignRole">保存职位分配</button>
       </template>
     </ProtoDialog>
 
     <!-- ==================== 重置密码（原型 resetPwd 第 2398~2426 行） ==================== -->
     <ProtoDialog v-model="resetOpen" :title="resetTitle" size="sm">
+      <!-- ★ 2026-10-16：把「什么时候才用这个按钮」写在弹窗最上面 ——
+           它是【本人忘记密码、登不进系统】时，由权限管理员代他重置的通道，
+           本人自己能登录的话不该走这里（走右上角「修改密码」自助修改）。 -->
+      <div class="notice i mb12">
+        ℹ<div>
+          <b>适用场景：</b>本人<b>忘记密码、登不进系统</b>时，由权限管理员在此代他重置一个新密码，
+          再把新密码告知本人（本人用「账号 + 新密码」登录）。
+          <span class="desc">本人自己能登录的话，请让他在右上角「修改密码」自行修改。</span>
+        </div>
+      </div>
       <div class="notice w mb12">
         ⚠<div>
           重置后原密码立即失效，请通过<strong>手机号 {{ resetPhoneMasked }}</strong> 告知本人。
         </div>
       </div>
       <div class="fm" style="grid-template-columns: 1fr">
+        <!-- ★ 2026-10-16 按用户要求：不再让管理员从「系统默认/随机/自定义」里挑，
+             直接把密码规则摆出来；下面的新密码就按这条规则【随机生成】。 -->
         <div class="f">
-          <label>初始密码规则</label>
-          <select v-model="resetRule" class="inp" @change="rpRule">
-            <option value="sys">系统默认：Ab@123456</option>
-            <option value="random">随机生成强密码</option>
-            <option value="custom">自定义密码</option>
-          </select>
+          <label>密码规则提示</label>
+          <div style="font-size: 12.5px; color: #5F5350; line-height: 1.7; padding: 3px 0">
+            需包含大写字母和数字，长度不低于 8 位
+          </div>
         </div>
         <div class="f">
           <label>新密码</label>
@@ -1799,7 +1969,7 @@ async function doExport(): Promise<void> {
     <!-- ==================== 批量导入（原型 dlgImportUser 第 2524~2542 行） ==================== -->
     <ProtoDialog v-model="importOpen" title="批量导入账号" size="md">
       <div class="notice i mb12">
-        ℹ<div>支持 Excel(.xlsx)/CSV。列顺序：姓名、工号、性别、年龄、手机号、登录账号、所属部门、所属角色。</div>
+        ℹ<div>支持 Excel(.xlsx)/CSV。列顺序：姓名、性别、年龄、手机号、登录账号、所属部门、所属职位。</div>
       </div>
       <div
         style="border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center; cursor: pointer"
@@ -1811,7 +1981,7 @@ async function doExport(): Promise<void> {
       </div>
       <div class="fm mt12" style="grid-template-columns: 1fr 1fr">
         <div class="f">
-          <label>默认所属角色</label>
+          <label>默认所属职位</label>
           <select class="inp">
             <option v-for="r in roles" :key="r.id">{{ r.roleName }}</option>
           </select>
@@ -1844,7 +2014,6 @@ async function doExport(): Promise<void> {
         <thead>
           <tr>
             <th>姓名</th>
-            <th>工号</th>
             <th>账号</th>
             <th>手机号</th>
             <th>校验</th>
@@ -1853,7 +2022,6 @@ async function doExport(): Promise<void> {
         <tbody>
           <tr v-for="r in importFailRows" :key="r.account">
             <td>{{ r.name }}</td>
-            <td class="num">{{ r.gw }}</td>
             <td><code style="font-size: 11.5px">{{ r.account }}</code></td>
             <td class="num">{{ r.phone }}</td>
             <td>

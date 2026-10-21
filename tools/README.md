@@ -55,3 +55,61 @@ node tools\e2e-merged.mjs
 
 > 浏览器路径是写死的几个常见安装位置，找不到会自动退出并提示。
 > 若你机器上浏览器装在别处，改脚本顶部的 `CAND` 数组即可。
+
+---
+
+## 3. `_verify-student-dept.mjs` / `_verify-teaching-dept.mjs` —— 「学段 → 部门」改名回归
+
+**前提**：前后端都在跑（5173 + 8004）。用校长账号 `qiansy` 真实登录（登录页有演示账号列表）。
+
+```bat
+node tools\_verify-student-dept.mjs      rem 学生档案（截图批注那一页）
+node tools\_verify-teaching-dept.mjs     rem 教学管理 9 个合并入口逐页扫
+```
+
+| 脚本 | 断言 |
+|---|---|
+| `_verify-student-dept` | 页面无「学段」字样；筛选标签是「部门」；列表显示「大学部」；部门下拉 = 初高部 / 大学部；选大学部查 1 条、选初高部查 0 条 |
+| `_verify-teaching-dept` | 9 个入口页（学生档案/班级/出勤/考试/成绩/宿舍/催费/退费/休学审批）都有内容、无「学段」、无未捕获异常 |
+
+> 与 `e2e-merged.mjs` 同一套路（CDP 直连本机 Edge/Chrome，零依赖）。
+> 改完教学管理页面的文案/筛选后，先跑这两个脚本再提交。
+
+---
+
+## 4. `_verify-form-fields.mjs` —— 两个弹窗的表单字段回归
+
+```bat
+node tools\_verify-form-fields.mjs
+```
+
+| 弹窗 | 断言 |
+|---|---|
+| 学生档案 · 新增学生 | 没有「上网账号 / 初始密码」；状态下拉没有「预在读」但有「正式在读 / 休学」；不填姓名点保存 → 提示「姓名必填」且弹窗不关（必填被拦住） |
+| 班级管理 · 新增班级（部门选大学部） | 没有「项目经理 / 就业老师 / 大学学号」这几个工号/ID 输入框；有「项目经理姓名 / 就业老师姓名」（权限管理用户下拉）；仍有「班主任姓名 / 教员姓名 / 助教姓名 / 教室 / 开班日期」 |
+| 班级管理 · 部门 → 阶段 联动 | 部门=初高部 → 阶段恰好 `初中部1期/初中部2期/初中部3期/高中部1期/高中部2期/高中部3期`；部门=大学部 → 恰好 `实训/一阶段/二阶段/三阶段/四阶段/五阶段/六阶段`（逐字比对顺序）；初高部不显示「项目经理姓名 / 就业老师姓名」 |
+| 班级管理 · 交棒岗位必填 | 阶段=一阶段 → 两个岗位无红星；阶段=实训 → 两个岗位有红星；此时点保存被两条「实训阶段必填」拦住、弹窗不关 |
+
+> ⚠️ **踩坑（写这类脚本必看）**：Element Plus 的下拉**打不开**如果只用
+> `dispatchEvent(new MouseEvent('click'))` —— 必须用 CDP 的
+> `Input.dispatchMouseEvent` 派发原生 mousePressed/mouseReleased。
+> 另外下拉挂在 body 上的 fixed popper 里，`offsetParent` 恒为 `null`，
+> 判断可见性要用 `getComputedStyle(popper).display` + `getBoundingClientRect()`。
+
+---
+
+## 5. `_verify-teaching-demo-data.mjs` —— 教学管理九个入口「有没有数据」
+
+```bat
+node tools\_verify-teaching-demo-data.mjs
+```
+
+逐页打开 学生档案 / 班级管理 / 出勤管理 / 考试管理 / 成绩管理 / 宿舍管理 /
+催费缴费 / 退费 / 休学退学审批，断言**列表至少 1 行**且**无未捕获异常**，
+每页截图落到 `tools/_out/demo_<域>.png`。
+
+配合 `server-job` 的 `npm run seed:teaching`（教学管理演示数据补齐：幂等、不清库、
+走真实接口）使用 —— 补完数据跑这个脚本，一眼看出哪个页面还是空的。
+
+> 首屏接口慢时会数到 0 行：脚本内部有 8 秒轮询等待，不用手动加 sleep。
+

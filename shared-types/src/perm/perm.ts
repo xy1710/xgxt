@@ -1,7 +1,7 @@
 /**
  * 权限管理模块 · 领域类型
  *
- * 对应《学管系统 · 权限与角色管理模块 PRD》
+ * 对应《学管系统 · 权限与职位管理模块 PRD》
  * 模块：权限管理（林晓）  端口 8006  接口前缀 /api/perm
  *
  * ⚠️ 全系统唯一的三级权限模型：
@@ -41,7 +41,7 @@ export interface PermDept extends BaseEntity {
   remark?: string;
 
   /* ---- 运行时统计（不落库，接口计算后返回） ---- */
-  /** 归属角色数（含子部门） */
+  /** 归属职位数（含子部门） */
   roleCount?: number;
   /** 归属账号数（含子部门） */
   userCount?: number;
@@ -79,55 +79,55 @@ export interface PermDeptSavePayload {
 }
 
 /* ============================================================
- * 二、角色
+ * 二、职位
  * ============================================================ */
 
-/** 角色实体 */
+/** 职位实体 */
 export interface PermRole extends BaseEntity {
-  /** 角色名称 */
+  /** 职位名称 */
   roleName: string;
-  /** 角色编码，正则 ^[A-Z][A-Z0-9_]*$，全局唯一 */
+  /** 职位编码，正则 ^[A-Z][A-Z0-9_]*$，全局唯一 */
   roleCode: string;
   /** 所属部门 ID */
   deptId: string;
-  /** 角色类型 */
+  /** 职位类型 */
   roleType: RoleType;
   /**
-   * ★ 2026-10-08 新增：等价的内置角色码
+   * ★ 2026-10-08 新增：等价的内置职位码
    *
    * 【解决什么问题】
-   *   业务代码里的审批链、权限判定写的是**主包内置角色码**
+   *   业务代码里的审批链、权限判定写的是**主包内置职位码**
    *   （如 `PROJECT_MANAGER`、`TEACH_HEAD`）。而用户在权限管理里
-   *   **自建**的角色（如 `XMJL_000`「项目经理2」）不在主包枚举里，
-   *   于是「项目经理能发起退费」这类判定对自建角色**恒 false** ——
+   *   **自建**的职位（如 `XMJL_000`「项目经理2」）不在主包枚举里，
+   *   于是「项目经理能发起退费」这类判定对自建职位**恒 false** ——
    *   页面能看见，按钮一点就 403。
    *
    * 【怎么用】
-   *   建角色时声明「我等价于哪个内置角色」。
-   *   运行时 `roleAlias.ts` 会读这一列，把自建角色码**动态**并入
-   *   对应内置角色的别名集合，于是所有 `hasRole(roles, 'PROJECT_MANAGER')`
+   *   建职位时声明「我等价于哪个内置职位」。
+   *   运行时 `roleAlias.ts` 会读这一列，把自建职位码**动态**并入
+   *   对应内置职位的别名集合，于是所有 `hasRole(roles, 'PROJECT_MANAGER')`
    *   对 `XMJL_000` 自动成立 —— 无需改任何业务代码。
    *
    * 【取值】
-   *   · 为空 / null：不声明（内置角色无需填，它们自己就是权威码）
-   *   · 填内置角色码：必须是主包 `RoleCode` 的取值，如 `PROJECT_MANAGER`
+   *   · 为空 / null：不声明（内置职位无需填，它们自己就是权威码）
+   *   · 填内置职位码：必须是主包 `RoleCode` 的取值，如 `PROJECT_MANAGER`
    *
-   * ⚠️ 只填「内置角色码」，不要填另一个自建角色码（不做链式解析，避免环）。
+   * ⚠️ 只填「内置职位码」，不要填另一个自建职位码（不做链式解析，避免环）。
    */
   equivRoleCode?: string | null;
   /** 是否系统预置（预置不可删除） */
   isSys: boolean;
   /** 状态 */
   roleStatus: RoleStatus;
-  /** 权限数 = 该角色已勾选动作总数 */
+  /** 权限数 = 该职位已勾选动作总数 */
   permCount: number;
   /** 排序号 */
   sortNo: number;
-  /** 角色定位 / 权限特征说明 */
+  /** 职位定位 / 权限特征说明 */
   remark?: string;
 }
 
-/** 角色列表项 */
+/** 职位列表项 */
 export interface PermRoleListItem {
   id: string;
   roleName: string;
@@ -135,7 +135,7 @@ export interface PermRoleListItem {
   deptId: string;
   deptName: string;
   roleType: RoleType;
-  /** ★ 2026-10-08：等价的内置角色码（自建角色声明自己等价于谁），见 PermRole.equivRoleCode */
+  /** ★ 2026-10-08：等价的内置职位码（自建职位声明自己等价于谁），见 PermRole.equivRoleCode */
   equivRoleCode?: string | null;
   isSys: boolean;
   /** 是否可删除：预置不可删，有关联账号不可删 */
@@ -147,51 +147,56 @@ export interface PermRoleListItem {
   createTime: string;
 }
 
-/** 角色查询参数 */
+/** 职位查询参数 */
 export interface PermRoleQuery extends PageQuery {
-  /** 角色名称 / 编码模糊搜索 */
+  /** 职位名称 / 编码模糊搜索 */
   keyword?: string;
   roleType?: RoleType;
   roleStatus?: RoleStatus;
   deptId?: string;
 }
 
-/** 角色新增/编辑参数 */
+/** 职位新增/编辑参数 */
 export interface PermRoleSavePayload {
   id?: string;
   roleName: string;
-  roleCode: string;
+  /**
+   * ★ 2026-10-19：界面已去掉「职位编码」——改为可选。
+   *   不传由后端自动生成（t_perm_role.role_code 是 NOT NULL + 唯一索引，
+   *   且是跨模块鉴权连接键，所以列与字段必须保留，只是不再由用户填写）。
+   */
+  roleCode?: string;
   deptId?: string;
   roleType?: RoleType;
-  /** ★ 2026-10-08：等价的内置角色码，见 PermRole.equivRoleCode */
+  /** ★ 2026-10-08：等价的内置职位码，见 PermRole.equivRoleCode */
   equivRoleCode?: string | null;
   roleStatus?: RoleStatus;
   sortNo?: number;
   remark?: string;
-  /** 权限草稿：{ '模块key||功能点名': ['动作名', ...] }，随角色一起保存 */
+  /** 权限草稿：{ '模块key||功能点名': ['动作名', ...] }，随职位一起保存 */
   perms?: RolePermMap;
 }
 
-/** 角色详情（含权限） */
+/** 职位详情（含权限） */
 export interface PermRoleDetail extends PermRole {
   deptName: string;
   userCount: number;
-  /** 该角色的完整权限映射 */
+  /** 该职位的完整权限映射 */
   perms: RolePermMap;
 }
 
 /* ============================================================
  * 三、账号（用户）
  *
- * ⚠️ 归属决策：账号归【权限管理模块】所有（用户管理是权限管理的第 3 个功能页）。
- *    登录模块通过 GET /api/perm/user/auth-profile 取账号 + 角色 + 权限。
+ * ⚠️ 归属决策：账号归【权限管理模块】所有（账号管理是权限管理的第 3 个功能页）。
+ *    登录模块通过 GET /api/perm/user/auth-profile 取账号 + 职位 + 权限。
  * ============================================================ */
 
 /** 账号实体 */
 export interface PermUser extends BaseEntity {
   /** 姓名，仅汉字且不低于 2 位 */
   userName: string;
-  /** 工号，格式 GW + 4 位数字 */
+  /** 工号：2026-10-16 起界面不再维护（所有职位统一去掉），由后端自动生成 */
   gwNo: string;
   /** 登录账号，字母/数字，4-20 位，全局唯一 */
   account: string;
@@ -227,24 +232,28 @@ export interface PermUserListItem {
   age: number;
   deptId: string;
   deptName: string;
-  /** 角色 ID 数组 */
+  /** 职位 ID 数组 */
   roleIds: string[];
-  /** 角色名称数组 */
+  /** 职位名称数组 */
   roleNames: string[];
-  /** 主角色名（列表展示用，取第一个） */
+  /** 主职位名（列表展示用，取第一个） */
   roleName: string;
-  /** 有效权限动作数 = 所有角色权限并集去重后的动作总数 */
+  /** 有效权限动作数 = 所有职位权限并集去重后的动作总数 */
   effectivePermCount: number;
   userStatus: UserStatus;
   needChangePwd: boolean;
   lastLoginTime?: string;
   createTime: string;
   createBy: string;
+  /** ★ 2026-10-16：该登录名在门户账号表里的可访问模块（没有门户账号时为空数组） */
+  portalModules?: string[];
+  /** ★ 该登录名在门户是否已有账号（false = 现在登不进系统） */
+  hasPortalAccount?: boolean;
 }
 
 /** 账号查询参数 */
 export interface PermUserQuery extends PageQuery {
-  /** 姓名 / 手机号 / 账号 / 工号 模糊搜索 */
+  /** 姓名 / 手机号 / 账号 模糊搜索 */
   keyword?: string;
   deptId?: string;
   roleId?: string;
@@ -257,14 +266,21 @@ export interface PermUserQuery extends PageQuery {
 export interface PermUserSavePayload {
   id?: string;
   userName: string;
-  gwNo: string;
+  /** 工号（可选）：不传=后端自动生成，编辑不传=保持原值 */
+  gwNo?: string;
   account: string;
   phone: string;
   gender: number;
   age: number;
   deptId: string;
   userStatus?: UserStatus;
-  /** 所属角色（多选，权限取并集） */
+  /**
+   * ★ 2026-10-16：可访问模块（门户登录后能进哪几个模块）
+   *   新增账号时必填 ≥1 —— 门户要求至少一个模块，否则该账号登不进去；
+   *   编辑时不传 = 不动门户那边的模块配置。
+   */
+  modules?: string[];
+  /** 所属职位（多选，权限取并集） */
   roleIds: string[];
   /** 新增时必填；编辑时留空表示不修改 */
   password?: string;
@@ -291,13 +307,13 @@ export interface PermAuthProfile {
   deptId: string;
   deptName: string;
   userStatus: UserStatus;
-  /** 角色编码数组，写进 token 的 roles[] */
+  /** 职位编码数组，写进 token 的 roles[] */
   roles: string[];
   roleIds: string[];
   roleNames: string[];
-  /** 该账号全部角色的权限并集，元素形如 'market:预到校名单:查看' */
+  /** 该账号全部职位的权限并集，元素形如 'market:预到校名单:查看' */
   permissions: string[];
-  /** 有效数据范围（取所有角色中最宽的一档） */
+  /** 有效数据范围（取所有职位中最宽的一档） */
   dataScope: DataScope;
   /** 是否需要强制修改密码 */
   needChangePwd: boolean;
@@ -338,8 +354,90 @@ export interface PermItem {
   actions: PermActionItem[];
   /** 备注（如「咨询经理有审批权限，普通咨询老师没有」） */
   remark?: string;
-  /** 该角色在此功能点下已勾选的动作名（角色权限详情接口返回） */
+  /** 该职位在此功能点下已勾选的动作名（职位权限详情接口返回） */
   checked?: string[];
+  /**
+   * ★ 2026-10-19 新增：是否用户自建
+   *
+   * true  = 在「新增权限」里自己加的（可改可删）
+   * false / 未传 = 系统预置（不可改删，改动会破坏业务代码里的权限串）
+   */
+  isCustom?: boolean;
+}
+
+/* ============================================================
+ * 三之二、权限点维护（用户自建权限点）
+ *
+ * 【背景】系统预置 8 个板块 / 55 个功能点是「系统能力清单」，
+ *   新加的部门（如招生部）与职位（如招生老师）往往需要一批
+ *   「预置清单里没有」的功能点。这一组类型就是那条维护通道的契约：
+ *   新增后与预置权限**格式完全一致**（模块 → 功能点 → 动作），
+ *   直接进入权限树，可以在「职位权限分配」里勾选给任何职位。
+ * ============================================================ */
+
+/** 自建权限点里的一个动作（提交用） */
+export interface PermItemActionSavePayload {
+  /** 动作编码，如 view / add / followUp；留空时后端按基类自动生成 */
+  actionCode?: string;
+  /** 动作中文名，如 查看 / 新建 / 跟进 */
+  actionName: string;
+  /** 动作基类 1查看 2新增 3编辑 4删除 5审批 6导出 */
+  baseAction: number;
+  remark?: string;
+}
+
+/** 自建权限点的新增 / 编辑参数 */
+export interface PermItemSavePayload {
+  /** 编辑时必传 */
+  id?: string;
+  /** 所属板块 key；传 __new__ 或留空 = 新建板块 */
+  moduleKey: string;
+  /** 板块名称（新建板块时必填） */
+  moduleName?: string;
+  /** 板块图标 emoji */
+  moduleIcon?: string;
+  /** 板块排序（不传则排到最后） */
+  moduleSort?: number;
+  /** 功能点名称 */
+  itemName: string;
+  /** 上级功能点名称（做二级功能点时用，可空） */
+  parentItemName?: string | null;
+  /** 备注 */
+  remark?: string;
+  /** 该功能点下的动作，至少 1 个 */
+  actions: PermItemActionSavePayload[];
+}
+
+/** 权限点维护列表项（「新增权限」弹窗左侧列表用） */
+export interface PermMenuItemAdmin {
+  /** 功能点 id（t_perm_menu.id） */
+  id: string;
+  moduleKey: string;
+  moduleName: string;
+  moduleIcon: string;
+  moduleSort: number;
+  itemName: string;
+  parentItemName?: string;
+  itemSort: number;
+  remark?: string;
+  /** 是否用户自建 */
+  isCustom: boolean;
+  /** 动作清单 */
+  actions: PermActionItem[];
+  /** 有多少个职位勾选了它（删前提示用） */
+  grantedRoleCount: number;
+}
+
+/** 权限点新增 / 编辑结果 */
+export interface PermItemSaveResult {
+  id: string;
+  moduleKey: string;
+  moduleName: string;
+  itemName: string;
+  /** 落库的动作数 */
+  actionCount: number;
+  /** true = 本次新建，false = 本次修改 */
+  created: boolean;
 }
 
 /** 权限模块（一级节点） */
@@ -352,11 +450,11 @@ export interface PermModule {
   sortNo: number;
   /** 该模块下的功能点 */
   items: PermItem[];
-  /** 已授权功能点数（角色权限详情接口返回） */
+  /** 已授权功能点数（职位权限详情接口返回） */
   grantedItemCount?: number;
   /** 功能点总数 */
   itemCount?: number;
-  /** 该模块已勾选动作数（角色权限详情接口返回） */
+  /** 该模块已勾选动作数（职位权限详情接口返回） */
   checkedCount?: number;
 }
 
@@ -371,7 +469,7 @@ export interface PermTreeStats {
 }
 
 /**
- * 角色权限映射
+ * 职位权限映射
  *
  * key   = `模块key||功能点名`，如 'market||预到校名单'
  * value = 该功能点下**已勾选的动作编码**数组（对应 PermAction.actionCode，如 ['view','edit']）
@@ -382,26 +480,26 @@ export interface PermTreeStats {
 export type RolePermMap = Record<string, string[]>;
 
 /* ============================================================
- * 五、角色-权限分配
+ * 五、职位权限分配
  * ============================================================ */
 
-/** 权限树查询参数（含某角色的勾选态） */
+/** 权限树查询参数（含某职位的勾选态） */
 export interface RolePermQuery {
   roleId: string;
 }
 
-/** 保存角色权限 */
+/** 保存职位权限 */
 export interface RolePermSavePayload {
   roleId: string;
   /** 全量覆盖（非增量合并） */
   perms: RolePermMap;
 }
 
-/** 从其他角色复制权限 */
+/** 从其他职位复制权限 */
 export interface RolePermCopyPayload {
-  /** 目标角色 */
+  /** 目标职位 */
   targetRoleId: string;
-  /** 来源角色 */
+  /** 来源职位 */
   sourceRoleId: string;
 }
 
@@ -425,7 +523,7 @@ export interface PermLog extends BaseEntity {
   logTime: string;
   /** 操作人 */
   operatorName: string;
-  /** 操作人角色 */
+  /** 操作人职位 */
   operatorRole: string;
   /** 所属模块：市场咨询 / 教学部门 / 实训-教学 / 就业管理 / 教务部门 / 财务管理 / 审批中心 / 权限管理 */
   moduleName: string;
@@ -520,7 +618,7 @@ export interface PermRuleSavePayload {
 
 /** 总览 KPI */
 export interface PermOverview {
-  /** 角色总数 */
+  /** 职位总数 */
   roleTotal: number;
   /** 其中启用数 */
   roleEnabled: number;
@@ -548,13 +646,13 @@ export interface DeptOverview {
   deptTotal: number;
   /** 下设学段（3） */
   stageTotal: number;
-  /** 归属角色数 */
+  /** 归属职位数 */
   roleTotal: number;
   /** 归属账号数 */
   userTotal: number;
 }
 
-/** 角色管理 KPI */
+/** 职位管理 KPI */
 export interface RoleOverview {
   roleTotal: number;
   presetTotal: number;
@@ -562,7 +660,7 @@ export interface RoleOverview {
   disabledTotal: number;
 }
 
-/** 用户管理 KPI（5 个，均可点击筛选） */
+/** 账号管理 KPI（5 个，均可点击筛选） */
 export interface UserOverview {
   userTotal: number;
   normalTotal: number;
@@ -580,7 +678,7 @@ export interface LogOverview {
   approveTotal: number;
 }
 
-/** 角色-权限分配 左栏角色项 */
+/** 职位权限分配 左栏职位项 */
 export interface AssignRoleItem {
   id: string;
   roleName: string;
@@ -588,7 +686,7 @@ export interface AssignRoleItem {
   deptName: string;
   roleType: RoleType;
   isSys: boolean;
-  /** 角色状态（停用的角色在权限配置页会标出来，防止误配） */
+  /** 职位状态（停用的职位在权限配置页会标出来，防止误配） */
   roleStatus: RoleStatus;
   permCount: number;
 }

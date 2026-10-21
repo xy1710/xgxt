@@ -27,7 +27,7 @@
  */
 
 import { db } from '../perm/utils/db';
-import { PAGE_REGISTRY, ALL_REGISTRY_PATHS } from '../perm/config/pageRegistry';
+import { PAGE_REGISTRY, ALL_REGISTRY_PATHS, pageCodesOf } from '../perm/config/pageRegistry';
 
 /** 一个角色的台账覆盖情况 */
 export interface RolePageOverride {
@@ -58,17 +58,30 @@ export function rolePageKey(moduleKey: string, pagePath: string): string {
  *    `codeOfPath()` 返回 undefined —— 调用方遇到 undefined 直接跳过即可。
  * ============================================================ */
 
-const CODE_BY_PATH = new Map<string, string>();
+const CODES_BY_PATH = new Map<string, string[]>();
 
 for (const board of PAGE_REGISTRY) {
   for (const p of board.pages) {
-    if (p.pageCode) CODE_BY_PATH.set(p.path, p.pageCode);
+    const codes = pageCodesOf(p);
+    if (codes.length) CODES_BY_PATH.set(p.path, codes);
   }
 }
 
-/** 页面 path → 该页面的权限码（没有则 undefined） */
+/**
+ * 页面 path → 该页面的**全部**权限码（没有则空数组）
+ *
+ * ★ 2026-10-20 合并板块：一个 path 现在可能挂多个学段码
+ *   （/teaching/attendance → classjh / class / job 三个）。
+ *   台账按 path 开关，落到权限码上必须**整组一起**增删，
+ *   否则会出现「页面关了但某个学段的码还在，换个角色又能进」的漏网。
+ */
+export function codesOfPath(pagePath: string): string[] {
+  return CODES_BY_PATH.get(pagePath) || [];
+}
+
+/** 页面 path → 该页面的权限码（取第一个；没有则 undefined，仅供需要单值的旧调用点使用） */
 export function codeOfPath(pagePath: string): string | undefined {
-  return CODE_BY_PATH.get(pagePath);
+  return codesOfPath(pagePath)[0];
 }
 
 /** 全部登记过的页面 path（= 台账管辖范围，前端菜单过滤用） */
@@ -166,15 +179,17 @@ export async function applyLedgerToCodes(roleCode: string, codes: string[]): Pro
 
   for (const key of ov.denied) {
     const path = key.split('||')[1];
-    const code = codeOfPath(path);
-    if (code && set.delete(code)) touched = true;
+    for (const code of codesOfPath(path)) {
+      if (set.delete(code)) touched = true;
+    }
   }
   for (const key of ov.allowed) {
     const path = key.split('||')[1];
-    const code = codeOfPath(path);
-    if (code && !set.has(code)) {
-      set.add(code);
-      touched = true;
+    for (const code of codesOfPath(path)) {
+      if (!set.has(code)) {
+        set.add(code);
+        touched = true;
+      }
     }
   }
 

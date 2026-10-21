@@ -102,7 +102,7 @@ function copyLogId(): void {
     <div class="kpi">
       <div class="k" @click="go(PERM_ROUTE.role)">
         <div class="n b">{{ data?.roleTotal ?? '—' }}</div>
-        <div class="l">👥 角色总数 <span class="tag g">启用 {{ data?.roleEnabled ?? 0 }}</span></div>
+        <div class="l">👥 职位总数 <span class="tag g">启用 {{ data?.roleEnabled ?? 0 }}</span></div>
       </div>
       <div class="k" @click="go(PERM_ROUTE.user)">
         <div class="n g">{{ data?.userTotal ?? '—' }}</div>
@@ -176,7 +176,7 @@ function copyLogId(): void {
           <div class="f"><label>操作时间</label><div class="num">{{ cur.logTime }}</div></div>
           <div class="f"><label>操作人</label><div><b>{{ cur.operatorName }}</b></div></div>
           <div class="f">
-            <label>所属角色</label>
+            <label>所属职位</label>
             <div><span class="tag b">{{ cur.operatorRole }}</span></div>
           </div>
           <div class="f"><label>操作模块</label><div>{{ cur.moduleName }}</div></div>

@@ -40,7 +40,8 @@ const listSchema = z.object({
   classId: z.string().optional(),
   deptCode: z.coerce.number().int().optional(),
   billType: z.coerce.number().int().min(1).max(2).optional(),
-  feeType: z.coerce.number().int().min(1).max(5).optional(),
+  // ★ 2026-10-15：上限 5 → 7（押金 / 校服）
+  feeType: z.coerce.number().int().min(1).max(8).optional(),
   operatorName: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),

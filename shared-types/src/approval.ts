@@ -324,7 +324,7 @@ export function canApprove(bizType: string, step: number, roles: string[]): bool
  *
  * 【「必须遵循权限管理设置」怎么办】
  *   这一层只表达「校长默认能发起」（静态基准）。
- *   「管理员在「角色-权限分配」里撤掉了某动作」＝ 显式撤销，
+ *   「管理员在「职位权限分配」里撤掉了某动作」＝ 显式撤销，
  *   由**接口层的 overlay**（`resolveActionWithOverlay` / `getRemovedActionCodesForRoles`）
  *   再叠一层盖掉 —— 见 server-job/src/classes 各 route 的用法。
  *   两层合起来才既满足「校长全权」，又满足「遵循权限管理设置」。

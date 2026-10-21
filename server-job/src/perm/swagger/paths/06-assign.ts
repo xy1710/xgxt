@@ -1,5 +1,5 @@
 /**
- * Swagger 注解 —— 角色-权限分配（5 个接口）
+ * Swagger 注解 —— 职位权限分配（5 个接口）
  */
 
 /**
@@ -7,8 +7,8 @@
  * /api/perm/assign/role-list:
  *   get:
  *     tags:
- *       - 角色-权限分配
- *     summary: 左栏角色清单
+ *       - 职位权限分配
+ *     summary: 左栏职位清单
  *     responses:
  *       200:
  *         description: 成功
@@ -39,7 +39,7 @@
  *                         example: SYS_ADMIN
  *                       roleType:
  *                         type: string
- *                         example: 管理角色
+ *                         example: 管理职位
  *                       roleStatus:
  *                         type: string
  *                         enum: [启用, 停用]
@@ -56,7 +56,7 @@
  * /api/perm/assign/tree:
  *   get:
  *     tags:
- *       - 角色-权限分配
+ *       - 职位权限分配
  *     summary: 权限树 + 勾选态 + 实时统计
  *     parameters:
  *       - name: roleId
@@ -115,17 +115,17 @@
  * /api/perm/assign/save:
  *   put:
  *     tags:
- *       - 角色-权限分配
- *     summary: 保存角色权限（全量覆盖）
+ *       - 职位权限分配
+ *     summary: 保存职位权限（全量覆盖）
  *     description: |
  *       权限标识 `perm:权限配置:editPerm`。**这是本模块最关键的一个接口。**
  *
- *       语义：**提交的勾选状态 = 该角色的最终权限**。后端在事务里先 `WHERE role_id = ?` 全删、
+ *       语义：**提交的勾选状态 = 该职位的最终权限**。后端在事务里先 `WHERE role_id = ?` 全删、
  *       再分片（每 200 条）插入，最后回填 `t_perm_role.perm_count`。
  *
  *       > 为什么必须全量覆盖？做成增量合并的话，用户**取消勾选后权限会残留** ——
  *       > 这类「幽灵权限」在真实系统里属于安全事故，所以这里刻意不做增量。
- *       > 代价是每次保存都要重写该角色的全部权限行，但单个角色最多 185 行，完全可接受。
+ *       > 代价是每次保存都要重写该职位的全部权限行，但单个职位最多 185 行，完全可接受。
  *
  *       提交空对象会返回 40025（权限全量覆盖内容为空）。
  *     requestBody:
@@ -184,8 +184,8 @@
  * /api/perm/assign/copy:
  *   post:
  *     tags:
- *       - 角色-权限分配
- *     summary: 从其他角色复制权限
+ *       - 职位权限分配
+ *     summary: 从其他职位复制权限
  *     description: '权限标识 `perm:权限配置:editPerm`。'
  *     requestBody:
  *       required: true
@@ -230,7 +230,7 @@
  * /api/perm/assign/reset:
  *   post:
  *     tags:
- *       - 角色-权限分配
+ *       - 职位权限分配
  *     summary: 清空 / 全给权限
  *     description: '权限标识 `perm:权限配置:editPerm`。`mode = full` 是调试用（一键全给 185 个权限点）。'
  *     requestBody:

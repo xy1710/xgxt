@@ -1,15 +1,15 @@
 <script setup lang="ts">
 /**
- * 角色管理
+ * 职位管理
  *
  * 页面结构严格对齐高保真原型《学管系统-权限体系高保真原型.html》：
- *   · 第 1491~1551 行 renderRoleList()      —— 筛选条 + 角色表格 + 行内操作
- *   · 第 1554~1598 行 openRoleDetail()      —— 角色详情弹窗（基本信息 + 权限覆盖 + 角色下账号）
- *   · 第 1599~1612 行 openRoleUsers()       —— 角色下人员弹窗
- *   · 第 1613~1625 行 removeRoleFromUser()  —— 移出角色确认
+ *   · 第 1491~1551 行 renderRoleList()      —— 筛选条 + 职位表格 + 行内操作
+ *   · 第 1554~1598 行 openRoleDetail()      —— 职位详情弹窗（基本信息 + 权限覆盖 + 职位下账号）
+ *   · 第 1599~1612 行 openRoleUsers()       —— 职位下人员弹窗
+ *   · 第 1613~1625 行 removeRoleFromUser()  —— 移出职位确认
  *   · 第 1626~1640 行 toggleRole()          —— 停用 / 启用确认
  *   · 第 1641~1671 行 delRole()             —— 删除确认（预置不可删 / 有关联账号不可删）
- *   · 第 1675~1740 行 openRoleForm()        —— 新建 / 编辑角色弹窗（含模板 + 权限预览）
+ *   · 第 1675~1740 行 openRoleForm()        —— 新建 / 编辑职位弹窗（含模板 + 权限预览）
  *   · 第 1740~1783 行 permPreviewHtml / openFormPermTree / applyFormPerm
  *   · 第 1784~1807 行 ROLE_TPL / applyRoleTpl  —— 权限模板
  *   · 第 1808~1857 行 submitRoleForm()      —— 校验 + 确认后落库
@@ -28,14 +28,14 @@
  *       /api/perm/menu/tree 的 approve 模块只有「教质/学术审批」这一个功能点
  *       （自带 view/agree/reject 三个动作），并没有「休学/退学审批」「退费审批」两个子项，
  *       所以按原型「功能点 → 动作」的单层结构渲染即可。
- *    ③ 原型表单里的「关联部门（该角色可见的数据部门）」在开发版没有落库字段
+ *    ③ 原型表单里的「关联部门（该职位可见的数据部门）」在开发版没有落库字段
  *       （PermRoleSavePayload 无此字段），开发版把「数据范围」建模成了权限点
  *       （perm 模块的「数据权限（行级）」功能点：本人/本班级/本部门/全部数据），
  *       所以这一段不渲染，改由权限树勾选。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { PERM_ROUTE, permUserEditRoute } from '@/perm/utils/links';
+import { PERM_ROUTE } from '@/perm/utils/links';
 import type {
   PermDeptTreeNode,
   PermItem,
@@ -48,7 +48,7 @@ import type {
   RoleStatus,
   RoleType,
 } from 'shared-types/perm';
-import { assignApi, deptApi, exportApi, roleApi, userApi } from '@/perm/api/perm';
+import { deptApi, exportApi, roleApi, userApi } from '@/perm/api/perm';
 import { useOptionStore } from '@/perm/stores/option';
 import { usePermStore } from '@/perm/stores/perm';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
@@ -61,7 +61,7 @@ const router = useRouter();
 const optionStore = useOptionStore();
 const permStore = usePermStore();
 
-/** 极简 HTML 转义（弹窗标题 / 确认框 desc·detail 走 v-html，角色名是用户输入） */
+/** 极简 HTML 转义（弹窗标题 / 确认框 desc·detail 走 v-html，职位名是用户输入） */
 function esc(s: string): string {
   return String(s ?? '').replace(/[&<>"]/g, (c) =>
     c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;',
@@ -103,11 +103,14 @@ function countModules(p: RolePermMap): number {
   return mods.size;
 }
 
-/** 角色图标 —— 统一走 @/perm/utils/roleIcon（列表 / 弹窗 / 详情三处共用一份映射表） */
+/** 职位图标 —— 统一走 @/perm/utils/roleIcon（列表 / 弹窗 / 详情三处共用一份映射表） */
 const roleIcon = roleIconOf;
 
-/** 角色类型标签配色（原型第 1534 行：系统角色→p、管理角色→w、其余→n） */
-const typeTag = (t: string): string => (t === '系统角色' ? 'p' : t === '管理角色' ? 'w' : 'n');
+/* ★ 2026-10-20：职位类型（业务/管理/职能/系统职位）已按用户要求从界面上整列移除 ——
+ *   列表列、筛选下拉、详情弹窗、新建/编辑表单、批量导入、导出表都不再展示或让人填。
+ *   ⚠️ 字段本身（t_perm_role.role_type）与接口里的一律保留：
+ *      数据仍按原值存着，编辑职位时原样带回、保存时原样提交，不会被重置成「业务职位」。
+ *      原先用于给类型标签配色的 typeTag() 因此一并删除（没有落点了）。 */
 
 /* ============================================================
  * 一、列表（原型 ROLE_FILTER + renderRoleList）
@@ -116,14 +119,13 @@ const typeTag = (t: string): string => (t === '系统角色' ? 'p' : t === '管�
 const loading = ref(false);
 const list = ref<PermRoleListItem[]>([]);
 const total = ref(0);
-/** KPI 数据：本页不展示 KPI，仅用于「预置角色共 N 个」这句文案 */
+/** KPI 数据：本页不展示 KPI，仅用于「预置职位共 N 个」这句文案 */
 const overview = ref<RoleOverview | null>(null);
 
 const query = reactive({
   page: 1,
   size: 10,
   keyword: '',
-  roleType: '',
   roleStatus: '',
   deptId: '',
 });
@@ -165,12 +167,6 @@ const defaultDeptId = computed(
 );
 
 const deptNameOf = (id: string): string => flatDepts.value.find((d) => d.id === id)?.deptName || '—';
-
-const roleTypes = computed<{ value: string; label: string }[]>(() =>
-  optionStore.roleTypes.length
-    ? optionStore.roleTypes.map((o) => ({ value: String(o.value), label: o.label }))
-    : ['业务角色', '管理角色', '职能角色', '系统角色'].map((v) => ({ value: v, label: v })),
-);
 
 const roleStatuses = computed<{ value: string; label: string }[]>(() =>
   optionStore.roleStatuses.length
@@ -225,7 +221,7 @@ function onKeywordInput(): void {
 }
 
 function resetFilter(): void {
-  Object.assign(query, { page: 1, keyword: '', roleType: '', roleStatus: '', deptId: '' });
+  Object.assign(query, { page: 1, keyword: '', roleStatus: '', deptId: '' });
   void load();
   toast('已重置筛选条件', 'warn');
 }
@@ -285,7 +281,7 @@ function onConfirmOk(): void {
 }
 
 /* ============================================================
- * 五、角色详情（原型 openRoleDetail）
+ * 五、职位详情（原型 openRoleDetail）
  * ============================================================ */
 
 const detailOpen = ref(false);
@@ -294,7 +290,7 @@ const detailUsers = ref<PermUserListItem[]>([]);
 const detailLoading = ref(false);
 
 const detailTitle = computed(
-  () => `角色详情 · <span class="em">${esc(detail.value?.roleName || '')}</span>`,
+  () => `职位详情 · <span class="em">${esc(detail.value?.roleName || '')}</span>`,
 );
 
 /** 权限覆盖情况：某模块下「已授权功能点」的文案 */
@@ -325,22 +321,18 @@ async function openDetail(row: PermRoleListItem): Promise<void> {
 
 /* ============================================================
  * 六、权限树（原型 openPermTree / renderPermTree / treeXxx / updatePermStat）
- *    三种模式：
- *      view —— 只读查看（列表「权限数」、详情「查看完整权限树」）
- *      edit —— 编辑并保存（详情「编辑权限」）  → assignApi.save
- *      form —— 角色表单草稿（表单「＋ 配置权限」）→ 应用到表单
+ *    两种模式（★ 2026-10-20：原为三种，edit 随「职位详情 → 编辑权限」按钮一起删除）：
+ *      view —— 只读查看（列表「权限数」）。编辑权限改去「职位权限分配」页
+ *      form —— 职位表单草稿（表单「＋ 配置权限」）→ 应用到表单
  * ============================================================ */
 
-type TreeMode = 'view' | 'edit' | 'form';
+type TreeMode = 'view' | 'form';
 
 const treeOpen = ref(false);
 const treeMode = ref<TreeMode>('view');
 const treeTitle = ref('');
 const treeDraft = ref<RolePermMap>({});
-const treeTargetId = ref('');
 const treeRoleName = ref('');
-const treeRoleCode = ref('');
-const treeUserCount = ref(0);
 /** 模块折叠（原型 treeTog） */
 const collapsed = reactive<Record<string, boolean>>({});
 
@@ -418,59 +410,40 @@ function collapseAll(): void {
   });
 }
 
-function openTreeWith(
-  id: string,
-  roleName: string,
-  roleCode: string,
-  mode: TreeMode,
-  perms: RolePermMap,
-  userCount: number,
-): void {
-  treeTargetId.value = id;
+function openTreeWith(roleName: string, perms: RolePermMap): void {
   treeRoleName.value = roleName;
-  treeRoleCode.value = roleCode;
-  treeUserCount.value = userCount;
-  treeMode.value = mode;
+  treeMode.value = 'view';
   treeDraft.value = clonePerms(perms);
   collapseAll();
 
-  const em = `<span class="em">${esc(roleName)}</span>`;
-  treeTitle.value =
-    mode === 'view'
-      ? `查看权限 · ${em} <span class="tag n" style="font-weight:400">只读模式</span>`
-      : `编辑权限 · ${em} <span class="tag n" style="font-weight:400">改动需点击「保存」生效</span>`;
+  /* ★ 2026-10-20 只剩「查看权限」一种口径：原来按 mode 分两套标题，
+     编辑模式随详情弹窗那个按钮一起删掉了。 */
+  treeTitle.value = `查看权限 · <span class="em">${esc(roleName)}</span> <span class="tag n" style="font-weight:400">只读模式</span>`;
   treeOpen.value = true;
 }
 
-/** 列表「权限数」→ 查看权限 */
-async function openPermTree(row: PermRoleListItem, mode: 'view' | 'edit'): Promise<void> {
+/** 列表「权限数」→ 查看权限（只读；编辑权限请去「职位权限分配」页） */
+async function openPermTree(row: PermRoleListItem): Promise<void> {
   try {
     const d = await roleApi.detail(row.id);
-    openTreeWith(row.id, row.roleName, row.roleCode, mode, d.perms || {}, row.userCount);
+    openTreeWith(row.roleName, d.perms || {});
   } catch {
     /* 已提示 */
   }
 }
 
-/** 详情弹窗底部「查看完整权限树 / 编辑权限」（原型先关详情再开权限树） */
-function openPermTreeFromDetail(mode: 'view' | 'edit'): void {
-  const d = detail.value;
-  if (!d) return;
-  detailOpen.value = false;
-  openTreeWith(d.id, d.roleName, d.roleCode, mode, d.perms || {}, d.userCount || 0);
-}
+/* ★ 2026-10-20 删除 openPermTreeFromDetail()：它只服务「职位详情」底栏那个
+   「编辑权限」按钮，按钮已按用户要求删除 → 函数失去唯一调用方，属死代码。
+   权限编辑入口现在只剩「职位权限分配」页（那边是完整的编辑 UI）。 */
 
 /** 表单「＋ 配置权限」（原型 openFormPermTree） */
 function openFormTree(): void {
   treeMode.value = 'form';
-  treeTargetId.value = '';
   treeRoleName.value = form.roleName;
-  treeRoleCode.value = form.roleCode;
-  treeUserCount.value = 0;
   treeDraft.value = clonePerms(draftPerms.value);
   collapseAll();
   treeTitle.value =
-    '配置权限（角色表单草稿） <span class="tag n" style="font-weight:400">保存后回到角色表单</span>';
+    '配置权限（职位表单草稿） <span class="tag n" style="font-weight:400">保存后回到职位表单</span>';
   treeOpen.value = true;
 }
 
@@ -514,16 +487,23 @@ function onModToggle(m: PermModule, e: Event): void {
   treeDraft.value = next;
 }
 
-function treeSelectAll(on: boolean): void {
+/**
+ * 全选全部权限（原型 treeSelectAll）。
+ * ★ 2026-10-20：原签名 `treeSelectAll(on: boolean)`，`false` 分支是"取消全部勾选"，
+ *   对应按钮已按用户要求删除（与「一键清空」重复、又与关弹窗的「取消」撞名）。
+ *   这里收敛成无参 —— 不留一个永远走不到的分支。
+ *   要清空请用 treeClear()（带二次确认）。
+ */
+function treeSelectAll(): void {
   if (readonlyTree.value) return;
   const next: RolePermMap = {};
   modules.value.forEach((m) => {
     m.items.forEach((it) => {
-      next[permKey(m.moduleKey, it.itemName)] = on ? it.actions.map((a) => a.actionCode) : [];
+      next[permKey(m.moduleKey, it.itemName)] = it.actions.map((a) => a.actionCode);
     });
   });
   treeDraft.value = next;
-  toast(on ? '已全选全部权限' : '已取消全部勾选', 'warn');
+  toast('已全选全部权限', 'warn');
 }
 
 function treeClear(): void {
@@ -533,9 +513,9 @@ function treeClear(): void {
       title: '清空权限',
       icon: '🗑',
       iconBg: 'var(--dg-l)',
-      msg: '确认清空该角色的全部权限？',
-      desc: `当前共勾选 <b>${treeActionCount.value}</b> 项动作，清空后该角色将没有任何功能可用。`,
-      warn: '清空后角色下的账号登录将看不到任何菜单，请谨慎操作。',
+      msg: '确认清空该职位的全部权限？',
+      desc: `当前共勾选 <b>${treeActionCount.value}</b> 项动作，清空后该职位将没有任何功能可用。`,
+      warn: '清空后职位下的账号登录将看不到任何菜单，请谨慎操作。',
       okText: '确认清空',
       okClass: 'dg',
     },
@@ -553,41 +533,12 @@ function applyFormPerm(): void {
   toast(`已应用 ${countActions(draftPerms.value)} 项权限到表单`);
 }
 
-/** 编辑模式：保存权限（原型 treeSave），走 assignApi.save 全量覆盖 */
-function saveRolePerms(): void {
-  const n = treeActionCount.value;
-  openConfirm(
-    {
-      title: '保存权限配置',
-      icon: '💾',
-      msg: `确认保存 ${treeRoleName.value} 的权限配置？`,
-      detail: [
-        {
-          k: '角色',
-          v: `${esc(treeRoleName.value)} <span class="desc">${esc(treeRoleCode.value)}</span>`,
-        },
-        { k: '勾选动作', v: `<b>${n}</b> 项` },
-        { k: '影响账号', v: `<b>${treeUserCount.value}</b> 个账号` },
-      ],
-      tip: '保存后立即生效，相关账号下次刷新页面即可看到新菜单。',
-      okText: '确认保存',
-    },
-    () => {
-      void doSaveRolePerms(n);
-    },
-  );
-}
-
-async function doSaveRolePerms(n: number): Promise<void> {
-  try {
-    await assignApi.save(treeTargetId.value, cleanPerms(treeDraft.value));
-    treeOpen.value = false;
-    toast(`已保存 ${n} 项权限，${treeUserCount.value} 个账号已生效`);
-    await Promise.all([load(), loadOverview()]);
-  } catch {
-    /* 已提示 */
-  }
-}
+/* ★ 2026-10-20 删除 saveRolePerms() / doSaveRolePerms()：
+   这两个只服务权限树的「编辑模式」，而编辑模式的唯一入口是
+   「职位详情 → 编辑权限」按钮（已按用户要求删除）。
+   按钮没了 → 编辑模式不可达 → 保存链路成死代码，一并清掉。
+   连带的 assignApi 已从 import 移除（本页再无调用）。
+   权限编辑走「职位权限分配」页（assignApi.save 在那里仍是主路径）。 */
 
 /* ============================================================
  * 七、停用 / 启用（原型 toggleRole）
@@ -598,10 +549,10 @@ function toggleRole(row: PermRoleListItem): void {
   const n = row.userCount || 0;
   openConfirm(
     {
-      title: toOn ? '启用角色' : '停用角色',
+      title: toOn ? '启用职位' : '停用职位',
       icon: toOn ? '✅' : '⏸',
       iconBg: toOn ? 'var(--ok-l)' : 'var(--warn-l)',
-      msg: `确认${toOn ? '启用' : '停用'}角色「${row.roleName}」？`,
+      msg: `确认${toOn ? '启用' : '停用'}职位「${row.roleName}」？`,
       detail: [
         { k: '关联账号', v: `<b>${n}</b> 个` },
         { k: '当前状态', v: row.roleStatus },
@@ -609,11 +560,11 @@ function toggleRole(row: PermRoleListItem): void {
       ],
       warn:
         !toOn && n > 0
-          ? `停用后，该角色下的 ${n} 个账号将无法登录系统（账号状态不变，但角色失效）。`
+          ? `停用后，该职位下的 ${n} 个账号将无法登录系统（账号状态不变，但职位失效）。`
           : '',
       tip: toOn
-        ? '启用后该角色权限立即恢复生效。'
-        : '若只是临时冻结，建议改用"停用账号"而非停用角色。',
+        ? '启用后该职位权限立即恢复生效。'
+        : '若只是临时冻结，建议改用"停用账号"而非停用职位。',
       okText: toOn ? '确认启用' : '确认停用',
       okClass: toOn ? 'pri' : 'wn',
     },
@@ -630,7 +581,7 @@ async function doToggleRole(row: PermRoleListItem, toOn: boolean): Promise<void>
   const target: string = toOn ? '启用' : '停用';
   try {
     await roleApi.setStatus(row.id, target);
-    toast(`角色「${row.roleName}」已${toOn ? '启用' : '停用'}`, toOn ? 'ok' : 'warn');
+    toast(`职位「${row.roleName}」已${toOn ? '启用' : '停用'}`, toOn ? 'ok' : 'warn');
     await Promise.all([load(), loadOverview()]);
   } catch {
     /* 已提示 */
@@ -650,10 +601,10 @@ function delRole(row: PermRoleListItem): void {
         title: '无法删除',
         icon: '🚫',
         iconBg: 'var(--dg-l)',
-        msg: '系统预置角色不可删除',
-        desc: `「${esc(row.roleName)}」是系统预置的 <b>${overview.value?.presetTotal ?? 0}</b> 个基础角色之一，只能编辑权限或停用。`,
+        msg: '系统预置职位不可删除',
+        desc: `「${esc(row.roleName)}」是系统预置的 <b>${overview.value?.presetTotal ?? 0}</b> 个基础职位之一，只能停用，或到「职位权限分配」页调整它的权限。`,
         tip: '如确认不再需要，可改为"停用"，效果等同但可随时恢复。',
-        okText: '改为停用该角色',
+        okText: '改为停用该职位',
         okClass: 'wn',
       },
       () => {
@@ -669,10 +620,10 @@ function delRole(row: PermRoleListItem): void {
         title: '有关联账号，不可删除',
         icon: '🚫',
         iconBg: 'var(--dg-l)',
-        msg: `该角色下有 ${n} 个账号，不可删除`,
-        desc: '存在账号关联时删除会造成这些账号失去权限依据。请先将其移至其他角色。',
+        msg: `该职位下有 ${n} 个账号，不可删除`,
+        desc: '存在账号关联时删除会造成这些账号失去权限依据。请先将其移至其他职位。',
         detail: [
-          { k: '角色', v: esc(row.roleName) },
+          { k: '职位', v: esc(row.roleName) },
           { k: '关联账号', v: `<b>${n}</b> 个` },
         ],
         okText: '查看关联账号',
@@ -687,17 +638,16 @@ function delRole(row: PermRoleListItem): void {
 
   openConfirm(
     {
-      title: '删除角色',
+      title: '删除职位',
       icon: '🗑',
       iconBg: 'var(--dg-l)',
-      msg: `确认删除角色「${row.roleName}」？`,
+      msg: `确认删除职位「${row.roleName}」？`,
       detail: [
-        { k: '角色编码', v: esc(row.roleCode) },
         { k: '所属部门', v: esc(row.deptName || '—') },
         { k: '已配权限', v: `${row.permCount} 项` },
         { k: '关联账号', v: '0 个' },
       ],
-      warn: '删除后该角色的权限配置将永久丢失，无法恢复。',
+      warn: '删除后该职位的权限配置将永久丢失，无法恢复。',
       okText: '确认删除',
       okClass: 'dg',
     },
@@ -710,7 +660,7 @@ function delRole(row: PermRoleListItem): void {
 async function doRemove(row: PermRoleListItem): Promise<void> {
   try {
     await roleApi.remove(row.id);
-    toast(`角色「${row.roleName}」已删除`, 'err');
+    toast(`职位「${row.roleName}」已删除`, 'err');
     await Promise.all([load(), loadOverview()]);
   } catch {
     /* 已提示 */
@@ -718,7 +668,7 @@ async function doRemove(row: PermRoleListItem): Promise<void> {
 }
 
 /* ============================================================
- * 九、角色下人员（原型 openRoleUsers / removeRoleFromUser）
+ * 九、职位下人员（原型 openRoleUsers / removeRoleFromUser）
  * ============================================================ */
 
 const usersOpen = ref(false);
@@ -726,7 +676,7 @@ const roleUsers = ref<PermUserListItem[]>([]);
 const usersRole = ref<PermRoleListItem | null>(null);
 
 const usersTitle = computed(
-  () => `角色下人员 · <span class="em">${esc(usersRole.value?.roleName || '')}</span>`,
+  () => `职位下人员 · <span class="em">${esc(usersRole.value?.roleName || '')}</span>`,
 );
 
 async function openRoleUsers(row: PermRoleListItem): Promise<void> {
@@ -749,31 +699,31 @@ function removeRoleFromUser(u: PermUserListItem): void {
   const remain = (u.roleNames || []).filter((_, i) => i !== outIdx);
   const remainIds = ids.filter((id) => id !== row.id);
 
-  /* ⚠️ 这是该账号【唯一】的角色 —— 移不掉。
+  /* ⚠️ 这是该账号【唯一】的职位 —— 移不掉。
    *
-   * 【用户反馈】「移除角色后这个角色还在页面里」
-   * 根因：后端硬性要求「账号至少保留一个角色」（BizCode.USER_NO_ROLE），
+   * 【用户反馈】「移除职位后这个职位还在页面里」
+   * 根因：后端硬性要求「账号至少保留一个职位」（BizCode.USER_NO_ROLE），
    * 而这里原来照样弹出「确认移出」——弹窗还写着「移出后账号将无法登录系统！」，
    * 用户点了确认 → doRemoveRoleFromUser 静默 return（只飘一条 3 秒的 toast）
    * → 账号仍旧留在列表里，看起来就像「移出没生效」。
    *
-   * 改法：唯一角色时【不给可执行按钮】，直接解释清楚 + 指个去处，
-   * 与 delRole() 里「系统预置角色不可删除 → 改为停用」是同一套写法。 */
+   * 改法：唯一职位时【不给可执行按钮】，直接解释清楚 + 指个去处，
+   * 与 delRole() 里「系统预置职位不可删除 → 改为停用」是同一套写法。 */
   if (!remainIds.length) {
     openConfirm(
       {
-        title: '无法移出（这是唯一角色）',
+        title: '无法移出（这是唯一职位）',
         icon: '🚫',
         iconBg: 'var(--dg-l)',
-        msg: `「${esc(u.userName)}」只有「${esc(row.roleName)}」这一个角色，无法直接移出`,
-        desc: '系统强制<b>每个账号至少保留一个角色</b>——否则该账号会失去全部权限依据、无法登录。',
+        msg: `「${esc(u.userName)}」只有「${esc(row.roleName)}」这一个职位，无法直接移出`,
+        desc: '系统强制<b>每个账号至少保留一个职位</b>——否则该账号会失去全部权限依据、无法登录。',
         detail: [
           { k: '账号', v: `${esc(u.userName)} (${esc(u.account)})` },
-          { k: '当前角色', v: esc((u.roleNames || []).join('、') || '—') },
-          { k: '正确的做法', v: '先去「用户管理」给该账号分配另一个角色，再回来移出本角色' },
+          { k: '当前职位', v: esc((u.roleNames || []).join('、') || '—') },
+          { k: '正确的做法', v: '先去「账号管理」给该账号分配另一个职位，再回来移出本职位' },
         ],
-        tip: '如果这个账号本身已不再需要，请到「用户管理」里直接停用或删除它。',
-        okText: '去用户管理分配角色',
+        tip: '如果这个账号本身已不再需要，请到「账号管理」里直接停用或删除它。',
+        okText: '去账号管理分配职位',
         okClass: 'wn',
       },
       () => {
@@ -786,13 +736,13 @@ function removeRoleFromUser(u: PermUserListItem): void {
 
   openConfirm(
     {
-      title: '移出角色',
+      title: '移出职位',
       icon: '⚠',
       iconBg: 'var(--warn-l)',
-      msg: `确认将「${u.userName}」移出角色「${row.roleName}」？`,
+      msg: `确认将「${u.userName}」移出职位「${row.roleName}」？`,
       detail: [
         { k: '账号', v: `${esc(u.userName)} (${esc(u.account)})` },
-        { k: '当前角色', v: esc((u.roleNames || []).join('、') || '—') },
+        { k: '当前职位', v: esc((u.roleNames || []).join('、') || '—') },
         { k: '移出后剩余', v: esc(remain.join('、')) },
       ],
       okText: '确认移出',
@@ -806,9 +756,9 @@ function removeRoleFromUser(u: PermUserListItem): void {
 
 async function doRemoveRoleFromUser(u: PermUserListItem, row: PermRoleListItem): Promise<void> {
   const remainIds = (u.roleIds || []).filter((id) => id !== row.id);
-  /* 兜底：上层已拦住「唯一角色」，这里再守一次，防绕过 */
+  /* 兜底：上层已拦住「唯一职位」，这里再守一次，防绕过 */
   if (!remainIds.length) {
-    toast('账号至少需要保留一个角色，请先在「用户管理」中为其分配其他角色', 'warn');
+    toast('账号至少需要保留一个职位，请先在「账号管理」中为其分配其他职位', 'warn');
     return;
   }
   try {
@@ -817,7 +767,6 @@ async function doRemoveRoleFromUser(u: PermUserListItem, row: PermRoleListItem):
     await userApi.update({
       id: d.id,
       userName: d.userName,
-      gwNo: d.gwNo,
       account: d.account,
       phone: d.phone,
       gender: d.gender,
@@ -839,8 +788,8 @@ async function doRemoveRoleFromUser(u: PermUserListItem, row: PermRoleListItem):
  * 九之二、账号详情（就地弹窗）
  *
  * 【用户反馈】「点击账号详情后有问题，应该弹出相应的页面」
- * 原先「账号详情」只是 router.push('/user') 跳回用户管理列表页，不弹详情。
- * 现在就地弹与「用户管理」完全一致的详情（同一份 UserDetailDialog）。
+ * 原先「账号详情」只是 router.push('/user') 跳回账号管理列表页，不弹详情。
+ * 现在就地弹与「账号管理」完全一致的详情（同一份 UserDetailDialog）。
  * ============================================================ */
 
 const userDetailOpen = ref(false);
@@ -853,31 +802,28 @@ function openUserDetail(u: PermUserListItem): void {
   userDetailOpen.value = true;
 }
 
-/** 详情里的「去编辑」→ 关掉弹窗，去用户管理把该账号的编辑表单打开 */
-function openUserEditById(id: string): void {
-  usersOpen.value = false;
-  userDetailOpen.value = false;
-  void router.push(permUserEditRoute(id));
-}
+/**
+ * ★ 2026-10-19 按用户要求：详情弹窗里的「去编辑」按钮已删除（共享组件里也彻底去掉了），
+ *   随之 `openUserEditById()` 成了死代码，一并删除（`permUserEditRoute` 导入也清掉）。
+ * ⚠️ 副作用要说清楚：本页「职位下人员」的行操作只有「移出该职位」「账号详情」，
+ *   去掉这个按钮后，在职位管理这一页已经**没有任何编辑账号的入口** ——
+ *   要改账号请走左侧「账号管理」→ 该行「编辑」。
+ */
 
 /* ============================================================
- * 十、新建 / 编辑角色（原型 openRoleForm + submitRoleForm）
+ * 十、新建 / 编辑职位（原型 openRoleForm + submitRoleForm）
  * ============================================================ */
 
 interface RoleForm {
   id: string;
   roleName: string;
-  roleCode: string;
   deptId: string;
-  roleType: string;
   /**
-   * ★ 2026-10-08 新增：等价的内置角色码
-   *
-   * 自建角色声明「我等价于哪个内置角色」。
-   * 不声明的话，业务单据（退费/休学等）的角色判定认不出自建角色
-   * → 页面看得见但一提交就 40302。
+   * ★ 2026-10-20：界面上已没有「职位类型」这个字段，但模型里**必须留着**——
+   *   编辑职位时从详情带回原值、保存时原样提交，否则后端会把类型重置成默认的「业务职位」
+   *   （存量里「管理职位 / 职能职位」的 5 个职位会被悄悄改掉）。新建时填默认值即可。
    */
-  equivRoleCode: string;
+  roleType: string;
   roleStatus: string;
   /** 弹窗里不展示（原型无此字段），但保存时要带上，避免把排序号覆盖掉 */
   sortNo: number;
@@ -886,15 +832,13 @@ interface RoleForm {
 }
 
 const formOpen = ref(false);
-const formTitle = ref('新建角色');
+const formTitle = ref('新建职位');
 const submitting = ref(false);
 const form = reactive<RoleForm>({
   id: '',
   roleName: '',
-  roleCode: '',
   deptId: '',
-  roleType: '业务角色',
-  equivRoleCode: '',
+  roleType: '业务职位',
   roleStatus: '启用',
   sortNo: 99,
   remark: '',
@@ -902,32 +846,11 @@ const form = reactive<RoleForm>({
 });
 
 /**
- * ★ 2026-10-08：可选的「等价内置角色」下拉项
- *
- * 只列**业务上是「身份」的内置角色** —— 即会被审批链 / 权限判定
- * 当作「谁」来认的那些。像 SYS_ADMIN（系统管理员）这种不列：
- * 它不是业务身份，自建角色声明等价于它等于变相给自己全权限，很危险。
+ * ★ 2026-10-08：可选的「等价内置职位」下拉项 —— 已随 2026-10-16 界面清理一并移除，
+ *   该列（列表/表单/确认弹窗）不再展示；后端 equiv_role_code 逻辑保持不变。
  */
-const EQUIV_ROLE_OPTIONS: { value: string; label: string }[] = [
-  { value: 'PROJECT_MANAGER', label: '项目经理' },
-  { value: 'TEACH_HEAD', label: '班主任' },
-  { value: 'TEACH_DEAN', label: '学管主任（教质/学术经理）' },
-  { value: 'TEACH_TUTOR', label: '教员' },
-  { value: 'TEACH_ASSIST', label: '助教' },
-  { value: 'ACAD_STAFF', label: '教务老师' },
-  { value: 'JOB_STAFF', label: '就业老师' },
-  { value: 'FIN_STAFF', label: '财务' },
-  { value: 'MKT_MANAGER', label: '咨询经理' },
-  { value: 'MKT_CONSULT', label: '咨询老师' },
-  { value: 'RM_PRINCIPAL', label: '校长' },
-];
 
-/** 角色码 → 中文标签（列表里显示用；未知码原样显示，便于排查） */
-function equivRoleLabel(code: string): string {
-  return EQUIV_ROLE_OPTIONS.find((o) => o.value === code)?.label || code;
-}
-
-/** 角色表单里的权限草稿（原型 FORM_PERM） */
+/** 职位表单里的权限草稿（原型 FORM_PERM） */
 const draftPerms = ref<RolePermMap>({});
 const draftActionCount = computed(() => countActions(draftPerms.value));
 const draftModuleCount = computed(() => countModules(draftPerms.value));
@@ -945,17 +868,15 @@ function openAdd(): void {
   Object.assign(form, {
     id: '',
     roleName: '',
-    roleCode: '',
     deptId: defaultDeptId.value,
-    roleType: '业务角色',
-    equivRoleCode: '',
+    roleType: '业务职位',
     roleStatus: '启用',
     sortNo: 99,
     remark: '',
     isSys: false,
   });
   draftPerms.value = {};
-  formTitle.value = '新建角色';
+  formTitle.value = '新建职位';
   formOpen.value = true;
 }
 
@@ -965,17 +886,15 @@ async function openEdit(row: PermRoleListItem): Promise<void> {
     Object.assign(form, {
       id: d.id,
       roleName: d.roleName,
-      roleCode: d.roleCode,
       deptId: d.deptId || defaultDeptId.value,
       roleType: d.roleType,
-      equivRoleCode: (d as any).equivRoleCode || '',
       roleStatus: d.roleStatus,
       sortNo: d.sortNo ?? 99,
       remark: d.remark || '',
       isSys: d.isSys,
     });
     draftPerms.value = clonePerms(d.perms || {});
-    formTitle.value = `编辑角色 · <span class="em">${esc(d.roleName)}</span>`;
+    formTitle.value = `编辑职位 · <span class="em">${esc(d.roleName)}</span>`;
     formOpen.value = true;
   } catch {
     /* 已提示 */
@@ -1062,12 +981,9 @@ function applyRoleTpl(tpl: string): void {
 /** 提交（原型 submitRoleForm：校验 → 确认 → 落库） */
 function submitForm(): void {
   const name = form.roleName.trim();
-  const code = form.roleCode.trim();
   const err: string[] = [];
 
-  if (!name) err.push('角色名称必填');
-  if (!code) err.push('角色编码必填');
-  if (code && !/^[A-Z][A-Z0-9_]*$/.test(code)) err.push('角色编码需为大写字母/数字/下划线');
+  if (!name) err.push('职位名称必填');
   if (!form.deptId) err.push('所属部门必填');
 
   if (err.length) {
@@ -1077,41 +993,34 @@ function submitForm(): void {
   }
 
   const isEdit = !!form.id;
-  const equivLabel = EQUIV_ROLE_OPTIONS.find((o) => o.value === form.equivRoleCode)?.label;
   openConfirm(
     {
-      title: isEdit ? '保存角色修改' : '创建角色确认',
+      title: isEdit ? '保存职位修改' : '创建职位确认',
       icon: isEdit ? '💾' : '✨',
-      msg: isEdit ? `确认保存对「${name}」的修改？` : `确认创建角色「${name}」？`,
+      msg: isEdit ? `确认保存对「${name}」的修改？` : `确认创建职位「${name}」？`,
       detail: [
-        { k: '角色名称', v: `<b>${esc(name)}</b>` },
-        { k: '角色编码', v: `<code>${esc(code)}</code>` },
-        { k: '类型 / 部门', v: `${esc(form.roleType)} · ${esc(deptNameOf(form.deptId))}` },
-        // ★ 2026-10-08：等价内置角色 —— 让用户确认「这个自建角色对外以什么身份出现」
-        { k: '等价内置角色', v: equivLabel ? `<b>${esc(equivLabel)}</b>` : '未声明（不参与业务身份判定）' },
+        { k: '职位名称', v: `<b>${esc(name)}</b>` },
+        { k: '所属部门', v: esc(deptNameOf(form.deptId)) },
         { k: '已配权限', v: `<b>${draftActionCount.value}</b> 项动作` },
       ],
       tip: isEdit
         ? `修改后立即对 ${detail.value?.userCount ?? 0} 个账号生效。`
-        : '创建后可在「用户管理」中为该角色分配账号。',
+        : '创建后可在「账号管理」中为该职位分配账号。',
       okText: isEdit ? '确认保存' : '确认创建',
     },
     () => {
-      void saveForm(isEdit, name, code);
+      void saveForm(isEdit, name);
     },
   );
 }
 
-async function saveForm(isEdit: boolean, name: string, code: string): Promise<void> {
+async function saveForm(isEdit: boolean, name: string): Promise<void> {
   submitting.value = true;
   try {
     const payload = {
       roleName: name,
-      roleCode: code,
       deptId: form.deptId,
       roleType: form.roleType as RoleType,
-      // ★ 2026-10-08：等价内置角色（空串 = 明确清除声明，后端归一成 null）
-      equivRoleCode: form.equivRoleCode || null,
       roleStatus: form.roleStatus as RoleStatus,
       sortNo: form.sortNo,
       remark: form.remark.trim(),
@@ -1119,10 +1028,10 @@ async function saveForm(isEdit: boolean, name: string, code: string): Promise<vo
     };
     if (isEdit) {
       await roleApi.update({ ...payload, id: form.id });
-      toast(`已保存角色「${name}」`);
+      toast(`已保存职位「${name}」`);
     } else {
       await roleApi.add(payload);
-      toast(`已创建角色「${name}」，共 ${draftActionCount.value} 项权限`);
+      toast(`已创建职位「${name}」，共 ${draftActionCount.value} 项权限`);
     }
     formOpen.value = false;
     await Promise.all([load(), loadOverview()]);
@@ -1139,19 +1048,19 @@ async function saveForm(isEdit: boolean, name: string, code: string): Promise<vo
 
 interface ImportRow {
   roleName: string;
-  roleCode: string;
-  roleType: string;
   deptName: string;
   remark: string;
   ok: boolean;
   reason: string;
 }
 
-const IMPORT_HEADER = '角色名称,角色编码,类型,所属部门,角色说明';
+/* ★ 2026-10-20：模板去掉「类型」列（职位类型已不在界面出现）。
+ *   导入时后端 roleType 不传 → 按默认「业务职位」落库（与新建职位同一套兜底）。 */
+const IMPORT_HEADER = '职位名称,所属部门,职位说明';
 const IMPORT_TEMPLATE = [
   IMPORT_HEADER,
-  '实训助教,TRAIN_ASSIST,业务角色,实训教学部,导入创建',
-  '财务主管,FIN_LEADER,管理角色,财务管理部,导入创建',
+  '实训助教,实训管理,导入创建',
+  '财务主管,财务管理部,导入创建',
 ].join('\n');
 
 const importOpen = ref(false);
@@ -1209,8 +1118,8 @@ function downloadText(fileName: string, text: string): void {
 }
 
 function downloadTpl(): void {
-  downloadText('角色导入模板.csv', IMPORT_TEMPLATE);
-  toast('已下载《角色导入模板.csv》');
+  downloadText('职位导入模板.csv', IMPORT_TEMPLATE);
+  toast('已下载《职位导入模板.csv》');
 }
 
 /** 原型 dlgImportPreview：先校验再导入 */
@@ -1223,17 +1132,15 @@ function toImportPreview(): void {
     toast('请先选择文件', 'warn');
     return;
   }
-  if (lines[0].includes('角色名称') || lines[0].toLowerCase().includes('rolename')) lines.shift();
+  if (lines[0].includes('职位名称') || lines[0].toLowerCase().includes('rolename')) lines.shift();
 
   const seen = new Set<string>();
   const rows: ImportRow[] = lines.map((line) => {
-    const [roleName, roleCode, roleType, deptName, remark] = line
+    const [roleName, deptName, remark] = line
       .split(',')
       .map((s) => (s || '').trim());
     const r: ImportRow = {
       roleName: roleName || '',
-      roleCode: roleCode || '',
-      roleType: roleType || '业务角色',
       deptName: deptName || '',
       remark: remark || '',
       ok: true,
@@ -1241,18 +1148,12 @@ function toImportPreview(): void {
     };
     if (!r.roleName) {
       r.ok = false;
-      r.reason = '角色名称必填';
-    } else if (!r.roleCode) {
+      r.reason = '职位名称必填';
+    } else if (seen.has(r.roleName)) {
       r.ok = false;
-      r.reason = '角色编码必填';
-    } else if (!/^[A-Z][A-Z0-9_]*$/.test(r.roleCode)) {
-      r.ok = false;
-      r.reason = '编码格式非法';
-    } else if (seen.has(r.roleCode)) {
-      r.ok = false;
-      r.reason = '文件内编码重复';
+      r.reason = '文件内职位名称重复';
     }
-    seen.add(r.roleCode);
+    seen.add(r.roleName);
     return r;
   });
 
@@ -1269,10 +1170,10 @@ function downloadFailList(): void {
   const text = [
     `${IMPORT_HEADER},失败原因`,
     ...importFail.value.map(
-      (r) => `${r.roleName},${r.roleCode},${r.roleType},${r.deptName},${r.remark},${r.reason}`,
+      (r) => `${r.roleName},${r.deptName},${r.remark},${r.reason}`,
     ),
   ].join('\n');
-  downloadText('角色导入失败清单.csv', text);
+  downloadText('职位导入失败清单.csv', text);
   toast('已下载校验失败清单，请修正后重试', 'warn');
 }
 
@@ -1287,9 +1188,7 @@ async function doImport(): Promise<void> {
     const res = await roleApi.importList(
       rows.map((r) => ({
         roleName: r.roleName,
-        roleCode: r.roleCode,
         deptName: r.deptName,
-        roleType: r.roleType,
         remark: r.remark,
       })),
     );
@@ -1300,7 +1199,7 @@ async function doImport(): Promise<void> {
         'warn',
       );
     } else {
-      toast(`已成功导入 ${res.success} 个角色`);
+      toast(`已成功导入 ${res.success} 个职位`);
     }
     await Promise.all([load(), loadOverview()]);
   } catch {
@@ -1348,23 +1247,19 @@ async function doExport(): Promise<void> {
 
 <template>
   <div>
-    <!-- ==================== 角色列表（原型 renderRoleList 第 1496~1550 行） ==================== -->
+    <!-- ==================== 职位列表（原型 renderRoleList 第 1496~1550 行） ==================== -->
     <div class="card">
       <div class="card-h">
-        <div class="t"><span class="bar"></span>角色列表 <span class="sub">共 {{ total }} 个</span></div>
+        <div class="t"><span class="bar"></span>职位列表 <span class="sub">共 {{ total }} 个</span></div>
         <div class="r">
           <input
             v-model="query.keyword"
             class="inp"
-            placeholder="搜索角色名称 / 编码"
+            placeholder="搜索职位名称"
             style="width: 200px"
             @input="onKeywordInput"
             @keyup.enter="reloadFromFirstPage"
           />
-          <select v-model="query.roleType" class="inp" @change="reloadFromFirstPage">
-            <option value="">全部类型</option>
-            <option v-for="t in roleTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-          </select>
           <select v-model="query.roleStatus" class="inp" @change="reloadFromFirstPage">
             <option value="">全部状态</option>
             <option v-for="s in roleStatuses" :key="s.value" :value="s.value">{{ s.label }}</option>
@@ -1376,26 +1271,29 @@ async function doExport(): Promise<void> {
           <button class="btn" type="button" @click="resetFilter">重置</button>
           <button class="btn" type="button" @click="importOpen = true">批量导入</button>
           <button class="btn" type="button" @click="openExport">导出</button>
-          <button class="btn pri" type="button" @click="openAdd">＋ 新建角色</button>
+          <button class="btn pri" type="button" @click="openAdd">＋ 新建职位</button>
         </div>
       </div>
 
       <div class="card-b p0">
         <div class="tb-wrap">
-          <table class="tb">
+          <table class="tb tb-role">
             <thead>
               <tr>
-                <th style="width: 180px">角色名称</th>
-                <th style="width: 130px">角色编码</th>
-                <th style="width: 120px">所属部门</th>
-                <th style="width: 92px">类型</th>
-                <!-- ★ 2026-10-08：等价内置角色（自建角色的业务身份） -->
-                <th style="width: 118px">等价内置角色</th>
-                <th style="width: 74px">关联人数</th>
-                <th style="width: 80px">权限数</th>
-                <th style="width: 72px">状态</th>
-                <th style="width: 112px">创建时间</th>
-                <th style="width: 230px">操作</th>
+                <!-- ★ 2026-10-20 列宽改百分比（合计 100）+ .tb-role 固定布局。
+                     原来写死 220/170/74/80/72/112/230px，但 table-layout 是 auto：
+                     声明的 px 只是建议值，浏览器按内容把多余宽度全砸给前两列
+                     （实测 1520 视口、表宽 1264 时「职位名称」220→290、「所属部门」170→224，
+                     两列富余 282px 占全表富余 423px 的 67%），看着就是大片空洞。
+                     新比例＝各列「内容宽 + 同样的呼吸空间」反算（每列富余 69~75px 均摊），
+                     不再让某一列独自吃掉富余（操作列实测只需 193px，给 23% 即够）。 -->
+                <th style="width: 17%">职位名称</th>
+                <th style="width: 13%">所属部门</th>
+                <th style="width: 10%">关联人数</th>
+                <th style="width: 10%">权限数</th>
+                <th style="width: 11%">状态</th>
+                <th style="width: 16%">创建时间</th>
+                <th style="width: 23%">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -1406,21 +1304,10 @@ async function doExport(): Promise<void> {
                   </span>
                   <span v-if="r.isSys" class="tag n" style="margin-left: 4px">预置</span>
                 </td>
-                <td>
-                  <code style="font-size: 11.5px; background: #FBF7F4; padding: 1px 6px; border-radius: 4px">{{ r.roleCode }}</code>
-                </td>
                 <td>{{ r.deptName || '—' }}</td>
-                <td><span class="tag" :class="typeTag(r.roleType)">{{ r.roleType }}</span></td>
-                <!-- ★ 2026-10-08：等价内置角色 -->
-                <td>
-                  <span v-if="r.equivRoleCode" class="tag w" :title="r.equivRoleCode">
-                    {{ equivRoleLabel(r.equivRoleCode) }}
-                  </span>
-                  <span v-else style="color: #bbb">—</span>
-                </td>
                 <td class="num">{{ r.userCount }} 人</td>
                 <td class="num">
-                  <span class="lk" @click="openPermTree(r, 'view')">{{ r.permCount }} 项</span>
+                  <span class="lk" @click="openPermTree(r)">{{ r.permCount }} 项</span>
                 </td>
                 <td>
                   <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>
@@ -1430,7 +1317,7 @@ async function doExport(): Promise<void> {
                 <td>
                   <div class="acts">
                     <span class="lk" @click="openDetail(r)">查看</span>
-                    <span class="lk" @click="openRoleUsers(r)">查看角色下人员</span>
+                    <span class="lk" @click="openRoleUsers(r)">查看职位下人员</span>
                     <span
                       class="lk"
                       :class="r.roleStatus === '启用' ? 'wn' : 'gr'"
@@ -1439,16 +1326,16 @@ async function doExport(): Promise<void> {
                     <span
                       class="lk"
                       :class="r.isSys ? 'dis' : 'dg'"
-                      @click="r.isSys ? toast('系统预置角色不可删除', 'err') : delRole(r)"
+                      @click="r.isSys ? toast('系统预置职位不可删除', 'err') : delRole(r)"
                     >删除</span>
                   </div>
                 </td>
               </tr>
               <tr v-if="!list.length">
-                <td colspan="9">
+                <td colspan="7">
                   <div class="empty">
                     <div class="ic">🔍</div>
-                    {{ loading ? '加载中…' : '没有符合条件的角色，试试调整筛选条件' }}
+                    {{ loading ? '加载中…' : '没有符合条件的职位，试试调整筛选条件' }}
                   </div>
                 </td>
               </tr>
@@ -1470,22 +1357,10 @@ async function doExport(): Promise<void> {
       </div>
     </div>
 
-    <!-- ==================== 角色详情（原型 openRoleDetail 第 1554~1598 行） ==================== -->
+    <!-- ==================== 职位详情（原型 openRoleDetail 第 1554~1598 行） ==================== -->
     <ProtoDialog v-model="detailOpen" :title="detailTitle" size="lg">
       <div class="fm" style="grid-template-columns: repeat(3, 1fr)">
-        <div class="f"><label>角色名称</label><div style="font-weight: 600">{{ detail?.roleName || '—' }}</div></div>
-        <div class="f">
-          <label>角色编码</label>
-          <div>
-            <code style="background: #FBF7F4; padding: 2px 7px; border-radius: 4px">{{ detail?.roleCode || '—' }}</code>
-          </div>
-        </div>
-        <div class="f">
-          <label>角色类型</label>
-          <div>
-            <span class="tag" :class="detail?.roleType === '系统角色' ? 'p' : 'n'">{{ detail?.roleType || '—' }}</span>
-          </div>
-        </div>
+        <div class="f"><label>职位名称</label><div style="font-weight: 600">{{ detail?.roleName || '—' }}</div></div>
         <div class="f"><label>所属部门</label><div>{{ detail?.deptName || '—' }}</div></div>
         <div class="f">
           <label>状态</label>
@@ -1494,7 +1369,7 @@ async function doExport(): Promise<void> {
             <span v-else class="tag gy">停用</span>
           </div>
         </div>
-        <div class="f full"><label>角色说明</label><div class="desc">{{ detail?.remark || '—' }}</div></div>
+        <div class="f full"><label>职位说明</label><div class="desc">{{ detail?.remark || '—' }}</div></div>
         <div class="f"><label>关联账号</label><div><b>{{ detail?.userCount ?? 0 }}</b> 人</div></div>
         <div class="f"><label>已配权限</label><div><b>{{ detail?.permCount ?? 0 }}</b> 项动作</div></div>
         <div class="f"><label>更新时间</label><div class="desc num">{{ detail?.updateTime || '—' }}</div></div>
@@ -1514,16 +1389,15 @@ async function doExport(): Promise<void> {
       </div>
 
       <div class="divider"></div>
-      <div class="sec-t"><span class="bar"></span>角色下账号 <span class="desc">（{{ detailUsers.length }} 人）</span></div>
+      <div class="sec-t"><span class="bar"></span>职位下账号 <span class="desc">（{{ detailUsers.length }} 人）</span></div>
       <div v-if="detailUsers.length" class="tb-wrap">
         <table class="tb">
           <thead>
-            <tr><th>姓名</th><th>工号</th><th>部门</th><th>状态</th><th>最后登录</th></tr>
+            <tr><th>姓名</th><th>部门</th><th>状态</th><th>最后登录</th></tr>
           </thead>
           <tbody>
             <tr v-for="u in detailUsers" :key="u.id">
               <td><b>{{ u.userName }}</b></td>
-              <td class="num">{{ u.gwNo }}</td>
               <td>{{ u.deptName }}</td>
               <td>
                 <span v-if="u.userStatus === '正常'" class="tag g">正常</span>
@@ -1536,42 +1410,43 @@ async function doExport(): Promise<void> {
       </div>
       <div v-else class="empty">
         <div class="ic">👤</div>
-        {{ detailLoading ? '加载中…' : '该角色下暂无账号' }}
+        {{ detailLoading ? '加载中…' : '该职位下暂无账号' }}
       </div>
 
       <template #footer>
-        <div class="lft">角色 ID：{{ detail?.id || '—' }}</div>
+        <div class="lft">职位 ID：{{ detail?.id || '—' }}</div>
+        <!-- ★ 2026-10-20 按用户要求删掉这里的「编辑权限」按钮。
+             职责归位：本弹窗是「职位详情」（只读查看），
+             改权限请回「职位权限分配」页（那边有 全选 / 一键清空 / 保存权限 的完整编辑 UI），
+             不在详情里再开一个编辑入口 —— 与「详情＝只读」的语义一致。 -->
         <button class="btn" type="button" @click="detailOpen = false">关闭</button>
-        <button class="btn" type="button" @click="openPermTreeFromDetail('view')">查看完整权限树</button>
-        <button class="btn pri" type="button" @click="openPermTreeFromDetail('edit')">编辑权限</button>
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 角色下人员（原型 openRoleUsers 第 1599~1612 行） ==================== -->
+    <!-- ==================== 职位下人员（原型 openRoleUsers 第 1599~1612 行） ==================== -->
     <ProtoDialog v-model="usersOpen" :title="usersTitle" size="md">
-      <div class="notice i mb12">ℹ<div>共 <b>{{ roleUsers.length }}</b> 个账号；可在此直接为账号追加/移除本角色。</div></div>
+      <div class="notice i mb12">ℹ<div>共 <b>{{ roleUsers.length }}</b> 个账号；可在此直接为账号追加/移除本职位。</div></div>
       <table v-if="roleUsers.length" class="tb">
         <thead>
-          <tr><th>姓名</th><th>工号</th><th>部门</th><th>状态</th><th>操作</th></tr>
+          <tr><th>姓名</th><th>部门</th><th>状态</th><th>操作</th></tr>
         </thead>
         <tbody>
           <tr v-for="u in roleUsers" :key="u.id">
             <td><b>{{ u.userName }}</b></td>
-            <td class="num">{{ u.gwNo }}</td>
             <td>{{ u.deptName }}</td>
             <td>
               <span v-if="u.userStatus === '正常'" class="tag g">正常</span>
               <span v-else class="tag gy">{{ u.userStatus }}</span>
             </td>
             <td>
-              <span class="lk dg" @click="removeRoleFromUser(u)">移出该角色</span>
+              <span class="lk dg" @click="removeRoleFromUser(u)">移出该职位</span>
               <span class="sep">|</span>
               <span class="lk" @click="openUserDetail(u)">账号详情</span>
             </td>
           </tr>
         </tbody>
       </table>
-      <div v-else class="empty"><div class="ic">👤</div>该角色下暂无账号</div>
+      <div v-else class="empty"><div class="ic">👤</div>该职位下暂无账号</div>
       <template #footer>
         <button class="btn" type="button" @click="usersOpen = false">关闭</button>
       </template>
@@ -1580,7 +1455,7 @@ async function doExport(): Promise<void> {
     <!-- ==================== 权限树（原型 openPermTree / openFormPermTree） ==================== -->
     <ProtoDialog v-model="treeOpen" :title="treeTitle" size="lg">
       <div v-if="treeMode === 'form'" class="notice w mb12">
-        ⚠<div>此处改动仅作用于当前角色表单草稿，点击「应用到表单」后才会写入。</div>
+        ⚠<div>此处改动仅作用于当前职位表单草稿，点击「应用到表单」后才会写入。</div>
       </div>
       <div v-else class="notice i mb12">
         ℹ<div>
@@ -1666,53 +1541,30 @@ async function doExport(): Promise<void> {
           <b style="color: var(--brand)">{{ treeModuleCount }}</b> 个模块
         </div>
         <template v-if="!readonlyTree">
-          <button class="btn" type="button" @click="treeSelectAll(true)">全选</button>
-          <button class="btn" type="button" @click="treeSelectAll(false)">取消</button>
+          <button class="btn" type="button" @click="treeSelectAll()">全选</button>
+          <!-- ★ 2026-10-20 按用户要求删掉这里原来的「取消」（= treeSelectAll(false) 取消全部勾选）：
+               它与右侧关闭弹窗的「取消」在 edit 模式下撞名，一屏两个「取消」分不清；
+               功能上又与「一键清空」重复（后者还带二次确认）。清空请走「一键清空」。
+               现在：全选 / 一键清空 / 取消（关弹窗）/ 保存权限。
+               ⚠️ 权限树在本项目里有【两份独立实现】：本页一套、PermAssign.vue 一套，
+                  改一处必须同步另一处（上轮只改了 PermAssign 导致本页漏改）。 -->
           <button class="btn" type="button" @click="treeClear">一键清空</button>
         </template>
+        <!-- 编辑模式已删（2026-10-20），文案只剩两种：表单模式「放弃」、只读模式「关闭」 -->
         <button class="btn" type="button" @click="treeOpen = false">
-          {{ treeMode === 'form' ? '放弃' : treeMode === 'edit' ? '取消' : '关闭' }}
+          {{ treeMode === 'form' ? '放弃' : '关闭' }}
         </button>
         <button v-if="treeMode === 'form'" class="btn pri" type="button" @click="applyFormPerm">应用到表单</button>
-        <button v-else-if="treeMode === 'edit'" class="btn pri" type="button" @click="saveRolePerms">保存权限</button>
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 新建 / 编辑角色（原型 openRoleForm 第 1675~1740 行） ==================== -->
+    <!-- ==================== 新建 / 编辑职位（原型 openRoleForm 第 1675~1740 行） ==================== -->
     <ProtoDialog v-model="formOpen" :title="formTitle" size="lg">
       <div class="sec-t"><span class="bar"></span>基本信息</div>
       <div class="fm">
         <div class="f">
-          <label>角色名称 <span class="req">*</span></label>
+          <label>职位名称 <span class="req">*</span></label>
           <input v-model="form.roleName" class="inp" placeholder="如：学管主任" />
-        </div>
-        <div class="f">
-          <label>角色编码 <span class="req">*</span></label>
-          <input
-            v-model="form.roleCode"
-            class="inp"
-            :disabled="form.isSys"
-            placeholder="如：TEACH_DEAN（英文大写+下划线）"
-          />
-        </div>
-        <div class="f">
-          <label>角色类型 <span class="req">*</span></label>
-          <select v-model="form.roleType" class="inp">
-            <option v-for="t in roleTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-          </select>
-        </div>
-        <!-- ★ 2026-10-08 新增：等价内置角色（自建角色的「业务身份」声明） -->
-        <div class="f">
-          <label>等价内置角色</label>
-          <select v-model="form.equivRoleCode" class="inp">
-            <option value="">不声明（不参与业务身份判定）</option>
-            <option v-for="o in EQUIV_ROLE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-          <div class="hint" style="font-size: 12px; color: var(--muted, #888); margin-top: 4px; line-height: 1.5">
-            声明后，该自建角色对外以所选的<strong>内置角色身份</strong>参与审批链与权限判定。<br />
-            例如「项目经理2」声明等价于「项目经理」，才能发起退费 / 休学 / 退学等单据。<br />
-            ⚠️ 不声明的话，页面能看见，但提交业务单据会被判定为「无权限」。
-          </div>
         </div>
         <div class="f">
           <label>所属部门 <span class="req">*</span></label>
@@ -1728,8 +1580,8 @@ async function doExport(): Promise<void> {
           </select>
         </div>
         <div class="f full">
-          <label>角色说明</label>
-          <textarea v-model="form.remark" class="inp" placeholder="简述该角色的职责边界，便于后续维护"></textarea>
+          <label>职位说明</label>
+          <textarea v-model="form.remark" class="inp" placeholder="简述该职位的职责边界，便于后续维护"></textarea>
         </div>
       </div>
 
@@ -1765,11 +1617,11 @@ async function doExport(): Promise<void> {
       </div>
 
       <template #footer>
-        <div class="lft">{{ form.id ? '角色 ID：' + form.id : '新建角色将自动生成 ID' }}</div>
+        <div class="lft">{{ form.id ? '职位 ID：' + form.id : '新建职位将自动生成 ID' }}</div>
         <button class="btn" type="button" @click="formOpen = false">取消</button>
-        <button class="btn" type="button" @click="toast('角色草稿已暂存到本地，可稍后继续编辑')">暂存草稿</button>
+        <button class="btn" type="button" @click="toast('职位草稿已暂存到本地，可稍后继续编辑')">暂存草稿</button>
         <button class="btn pri" type="button" :disabled="submitting" @click="submitForm">
-          {{ form.id ? '保存修改' : '创建角色' }}
+          {{ form.id ? '保存修改' : '创建职位' }}
         </button>
       </template>
     </ProtoDialog>
@@ -1786,8 +1638,8 @@ async function doExport(): Promise<void> {
     </ProtoDialog>
 
     <!-- ==================== 批量导入（原型 dlgImportRole 第 1858~1872 行） ==================== -->
-    <ProtoDialog v-model="importOpen" title="批量导入角色" size="md">
-      <div class="notice i mb12">ℹ<div>支持 Excel(.xlsx) / CSV，列顺序：角色名称、角色编码、类型、所属部门、角色说明。</div></div>
+    <ProtoDialog v-model="importOpen" title="批量导入职位" size="md">
+      <div class="notice i mb12">ℹ<div>支持 Excel(.xlsx) / CSV，列顺序：职位名称、类型、所属部门、职位说明。</div></div>
       <div
         style="border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center; cursor: pointer"
         @click="pickFile"
@@ -1816,13 +1668,11 @@ async function doExport(): Promise<void> {
       </div>
       <table class="tb">
         <thead>
-          <tr><th>角色名称</th><th>编码</th><th>类型</th><th>部门</th><th>校验</th></tr>
+          <tr><th>职位名称</th><th>部门</th><th>校验</th></tr>
         </thead>
         <tbody>
           <tr v-for="(r, i) in importRows" :key="i" :style="r.ok ? '' : 'background:var(--dg-l)'">
             <td>{{ r.roleName || '—' }}</td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode || '—' }}</code></td>
-            <td>{{ r.roleType }}</td>
             <td>{{ r.deptName || '—' }}</td>
             <td>
               <span v-if="r.ok" class="tag g">通过</span>
@@ -1832,7 +1682,7 @@ async function doExport(): Promise<void> {
         </tbody>
       </table>
       <template #footer>
-        <div class="lft">将新增 {{ importValid.length }} 个角色</div>
+        <div class="lft">将新增 {{ importValid.length }} 个职位</div>
         <button class="btn" type="button" @click="previewOpen = false">取消</button>
         <button v-if="importFail.length" class="btn" type="button" @click="downloadFailList">下载失败清单</button>
         <button class="btn pri" type="button" :disabled="importing || !importValid.length" @click="doImport">
@@ -1844,7 +1694,7 @@ async function doExport(): Promise<void> {
     <!-- ==================== 导出（原型 exportDlg 第 1896~1913 行） ==================== -->
     <ProtoDialog
       v-model="exportOpen"
-      title='导出数据 <span class="tag n" style="font-weight:400">角色列表</span>'
+      title='导出数据 <span class="tag n" style="font-weight:400">职位列表</span>'
       size="sm"
     >
       <div class="notice i mb12">ℹ<div>将导出 <b>{{ total }}</b> 条数据，可在导出中心查看进度。</div></div>
@@ -1889,12 +1739,13 @@ async function doExport(): Promise<void> {
       @ok="onConfirmOk"
     />
 
-    <!-- ==================== 账号详情（就地弹窗，与用户管理同一份组件） ==================== -->
+    <!-- ==================== 账号详情（就地弹窗，与账号管理同一份组件） ==================== -->
+    <!-- ★ 2026-10-19：「去编辑」按钮已从共享组件里彻底删除，故这里不再传开关。
+         本页「职位下人员」没有行级编辑，要改该账号请走「账号管理」列表里的「编辑」。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
-      @edit="openUserEditById"
     />
   </div>
 </template>

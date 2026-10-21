@@ -62,11 +62,35 @@
  */
 const dbOf = (knex) => knex.client.config.connection.database || 'sms_common';
 
+/**
+ * ⚠️ 2026-10-15 修复：information_schema 的列名必须【大小写不敏感】地读。
+ *
+ * 【原来的 bug —— 会让整条 npm run migrate 链断掉】
+ *   原代码直接读 `r.index_name` / `r.non_unique`。
+ *   但 MySQL/MariaDB 从 information_schema 返回的列名一律是 **大写**
+ *   （实测 keys = ["INDEX_NAME","NON_UNIQUE","COLUMN_NAME","SEQ_IN_INDEX"]），
+ *   于是 `r.index_name` 恒为 undefined → hasIndex() 恒返回 false
+ *   → 明明索引在，也去执行 `ALTER TABLE ... ADD INDEX` →
+ *     报 `Duplicate key name 'idx_exam_class_date'` → 本迁移失败。
+ *
+ *   而 package.json 的 migrate 是 `... && --env class-common && --env class-jh`，
+ *   前一步失败 → **`--env class-jh` 永远不会执行** →
+ *   sms_class_jh 库里一张表都没有（31 个迁移全 pending）→
+ *   初高/学生档案（合并页）查 t_student_base 报 ER_NO_SUCH_TABLE
+ *   → 前端显示「数据表不存在（请先执行 npm run migrate）」（极具误导）。
+ */
+function lowerKeys(row) {
+  if (!row) return row;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) out[k.toLowerCase()] = v;
+  return out;
+}
+
 async function columnType(knex, table, column) {
   const r = await knex('information_schema.COLUMNS')
     .where({ TABLE_SCHEMA: dbOf(knex), TABLE_NAME: table, COLUMN_NAME: column })
     .first();
-  return r ? String(r.COLUMN_TYPE) : null;
+  return r ? String(lowerKeys(r).column_type) : null;
 }
 
 /**

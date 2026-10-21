@@ -28,7 +28,7 @@ import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
 const STAGE_ORDER: TeachingStage[] = ['jh', 'class', 'job'];
-const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高', class: '大学', job: '实训' };
+const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高部', class: '大学部', job: '实训' };
 
 const availableStages = computed(() => STAGE_ORDER.filter((s) => stageVisible('exam', s)));
 
@@ -187,7 +187,7 @@ async function openForm(row?: ExamRow) {
 
 async function submitForm() {
   const stage = formStage.value as TeachingStage;
-  if (!stage) return ElMessage.warning('请选择学段');
+  if (!stage) return ElMessage.warning('请选择部门');
   if (!form.examName.trim()) return ElMessage.warning('请填写考试名称');
   if (!form.classId) return ElMessage.warning('请选择班级');
   if (!form.contentTypes.length) return ElMessage.warning('请至少选择一个考试内容项');
@@ -230,7 +230,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   <div class="te-page">
     <div class="te-bar">
       <span class="te-bar-title">考试管理</span>
-      <span class="te-bar-tag">统一入口 · 三学段合一</span>
+      <span class="te-bar-tag">统一入口 · 三部门合一</span>
       <el-radio-group v-model="query.stage" size="small" class="te-stage">
         <el-radio-button label="">全部</el-radio-button>
         <el-radio-button v-for="s in availableStages" :key="s" :label="s">
@@ -270,7 +270,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <el-table v-loading="loading" :data="rows" size="small" border stripe>
       <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column prop="examDate" label="日期" width="112" align="center" sortable />
-      <el-table-column prop="stageName" label="学段" width="70" align="center">
+      <el-table-column prop="stageName" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain" :type="row.stage === 'jh' ? 'warning' : row.stage === 'class' ? 'primary' : 'success'">
             {{ row.stageName }}
@@ -301,7 +301,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="没有考试记录（换个学段或日期试试）" />
+        <el-empty description="没有考试记录（换个部门或日期试试）" />
       </template>
     </el-table>
 
@@ -324,7 +324,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
       <div v-loading="detailLoading">
         <template v-if="detail">
           <el-descriptions :column="3" size="small" border>
-            <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+            <el-descriptions-item label="部门">{{ detail.record.stageName }}</el-descriptions-item>
             <el-descriptions-item label="考试名称">{{ detail.record.examName }}</el-descriptions-item>
             <el-descriptions-item label="类型">{{ detail.record.examTypeName }}</el-descriptions-item>
             <el-descriptions-item label="日期">{{ detail.record.examDate }}</el-descriptions-item>
@@ -348,7 +348,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
             <el-table-column prop="name" label="字段" width="160" />
             <el-table-column prop="type" label="类型" width="120" />
             <template #empty>
-              <span class="te-muted">该学段没有自定义字段</span>
+              <span class="te-muted">该部门没有自定义字段</span>
             </template>
           </el-table>
         </template>
@@ -358,8 +358,8 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <!-- 新增 / 编辑 -->
     <el-dialog v-model="formVisible" :title="form.id ? '编辑考试' : '新建考试'" width="680px">
       <el-form label-width="90px" size="small">
-        <el-form-item label="学段">
-          <el-select v-model="form.stage" placeholder="选择学段" style="width: 140px">
+        <el-form-item label="部门">
+          <el-select v-model="form.stage" placeholder="选择部门" style="width: 140px">
             <el-option v-for="s in availableStages" :key="s" :label="STAGE_LABEL[s]" :value="s" />
           </el-select>
         </el-form-item>

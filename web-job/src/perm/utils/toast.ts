@@ -10,7 +10,7 @@
 
 export type ToastType = 'ok' | 'err' | 'warn';
 
-/** 极简 HTML 转义（toast 内容可能带用户输入的角色名、部门名） */
+/** 极简 HTML 转义（toast 内容可能带用户输入的职位名、部门名） */
 function esc(s: string): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => {
     switch (c) {

@@ -17,7 +17,7 @@ const props = withDefaults(
     modules: PermModule[];
     perms?: RolePermMap;
     readonly?: boolean;
-    /** 角色/账号名，用于副标题 */
+    /** 职位/账号名，用于副标题 */
     subtitle?: string;
   }>(),
   { title: '配置权限', readonly: false, subtitle: '' },
@@ -32,6 +32,16 @@ const panelRef = ref<InstanceType<typeof PermTreePanel>>();
 const keyword = ref('');
 
 const stats = ref({ checkedActionCount: 0, coveredModuleCount: 0, totalActionCount: 0 });
+
+/**
+ * ★ 2026-10-16：已选统计挪到标题右侧括号里（原来在底部 footer）——
+ *   「查看权限·咨询老师（已选 25 / 185 个权限点，覆盖 2 个模块）」。
+ *   stats 由 PermTreePanel 的 @change 实时推送，勾选变化标题同步刷新。
+ */
+const dialogTitle = computed(() => {
+  const s = stats.value;
+  return `${props.title}（已选 ${s.checkedActionCount} / ${s.totalActionCount} 个权限点，覆盖 ${s.coveredModuleCount} 个模块）`;
+});
 
 const visible = computed({
   get: () => props.modelValue,
@@ -48,7 +58,7 @@ function confirm() {
 <template>
   <el-dialog
     v-model="visible"
-    :title="title"
+    :title="dialogTitle"
     width="920px"
     top="5vh"
     class="perm-dialog"
@@ -84,17 +94,8 @@ function confirm() {
 
     <template #footer>
       <div class="dlg-foot">
-        <div class="stat">
-          已选
-          <b>{{ stats.checkedActionCount }}</b>
-          / {{ stats.totalActionCount }} 个权限点 · 覆盖
-          <b>{{ stats.coveredModuleCount }}</b>
-          个模块
-        </div>
-        <div>
-          <el-button @click="visible = false">{{ readonly ? '关闭' : '取消' }}</el-button>
-          <el-button v-if="!readonly" type="primary" @click="confirm">确定</el-button>
-        </div>
+        <el-button @click="visible = false">{{ readonly ? '关闭' : '取消' }}</el-button>
+        <el-button v-if="!readonly" type="primary" @click="confirm">确定</el-button>
       </div>
     </template>
   </el-dialog>
@@ -147,18 +148,7 @@ function confirm() {
 .dlg-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
-}
-
-.stat {
-  font-size: 13px;
-  color: #7A6C67;
-}
-
-.stat b {
-  color: #CD3A33;
-  font-size: 15px;
-  margin: 0 2px;
 }
 </style>

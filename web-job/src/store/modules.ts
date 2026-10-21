@@ -99,6 +99,33 @@ export function moduleOfPageCode(pageCode?: string): string {
   return '';
 }
 
+/**
+ * ★ 2026-10-19：**跨模块共用**的页面码
+ *
+ * 待接收学员（`class:consult:view`）改成「初高中 + 大学」共用：
+ *   初高班主任也要接收咨询推来的学员，而他的门户 modules 只有 `class-jh`，
+ *   按 `class:` 前缀判定会被模块门槛挡在门外（菜单不显示 + 直连 URL 被踢走）。
+ *
+ * ⚠️ 只登记**确实两段共用**的页面；别把整组 class:* 都放开 ——
+ *    那等于给初高账号开了大学部班级管理的后门。
+ */
+const SHARED_PAGE_MODULES: Record<string, string[]> = {
+  'class:consult:view': ['class', 'class-jh'],
+};
+
+/**
+ * 页面级「模块门槛」判定（菜单 + 路由守卫统一用这个）
+ *
+ * 普通页面 = 按前缀映射到唯一模块；共用页面 = 命中其中任一模块即放行。
+ */
+export function pageModuleAllowed(pageCode?: string): boolean {
+  if (!pageCode) return true;
+  const shared = SHARED_PAGE_MODULES[pageCode];
+  if (shared) return shared.some((m) => moduleAllowed(m));
+  const m = moduleOfPageCode(pageCode);
+  return !m || moduleAllowed(m);
+}
+
 /** 当前账号能否访问某模块的某页面（menuKey 为空则不校验页面级） */
 export function menuAllowed(moduleKey: string, menuKey?: string): boolean {
   const portal = usePortalStore();

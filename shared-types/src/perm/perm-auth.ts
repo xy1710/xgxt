@@ -7,9 +7,9 @@
  *   「这是权限模块，将权限模块加入学管里面，和咨询财务是同一级标题」
  *
  * ⚠️ 与财务模块的区别：
- *   财务模块的角色是「自己定义」的（FINANCE_ADMIN / ACCOUNTANT / CASHIER）。
- *   而权限模块【本身就是权限系统的数据源】—— 它维护 14 个角色、185 个权限点。
- *   如果这里再造一套角色，就会出现「权限模块自己说一套、它管理的角色表又是另一套」的矛盾。
+ *   财务模块的职位是「自己定义」的（FINANCE_ADMIN / ACCOUNTANT / CASHIER）。
+ *   而权限模块【本身就是权限系统的数据源】—— 它维护 14 个职位、185 个权限点。
+ *   如果这里再造一套职位，就会出现「权限模块自己说一套、它管理的职位表又是另一套」的矛盾。
  *
  *   所以本模块的页面可见性口径定为【按门户身份】：
  *      ① 系统管理员（kind = sys_admin）→ 全部 7 页
@@ -44,9 +44,9 @@ export type PermMenuKey = (typeof PERM_MENU_KEYS)[number];
 export const PERM_MENU_NAME: Record<string, string> = {
   overview: '权限总览',
   dept: '部门管理',
-  role: '角色管理',
-  user: '用户管理',
-  assign: '角色-权限分配',
+  role: '职位管理',
+  user: '账号管理',
+  assign: '职位权限分配',
   page: '页面管理',
   log: '操作日志',
 };

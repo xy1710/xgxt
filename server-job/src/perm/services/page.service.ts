@@ -14,7 +14,7 @@
  *     · 库里已有的行 → **只更新标题/路径/排序等展示信息，绝不动 enabled**
  *       （否则重启一次服务，管理员刚取消的勾选就被悄悄恢复了）
  *
- * 【保存语义】按板块【全量覆盖】，与角色-权限分配一致：
+ * 【保存语义】按板块【全量覆盖】，与职位权限分配一致：
  *   先把该板块全部置 enabled=0，再把提交的那批置 1 —— 不会留下幽灵页面。
  * ============================================================
  */
@@ -22,7 +22,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../utils/db';
 import type { PermPageBoard, PermPageItem } from 'shared-types/perm';
-import { PAGE_REGISTRY, ALL_REGISTRY_PATHS, findRegistryBoard } from '../config/pageRegistry';
+import { PAGE_REGISTRY, ALL_REGISTRY_PATHS, findRegistryBoard, pageCodesOf } from '../config/pageRegistry';
 
 export const PAGE_TABLE = 't_perm_page';
 
@@ -101,7 +101,11 @@ async function syncRegistry(): Promise<void> {
         module_sort: board.sortNo,
         page_key: p.key,
         page_title: p.title,
-        page_code: p.pageCode ?? null,
+        /* ⚠️ page_code 是 varchar(64) 单值列，装不下多个码。
+         *   合并页（pageCodes）只落第一个码 —— 这一列在库里仅作「这是哪个学段的页」的
+         *   人肉线索，真正的可见性判定走注册表（pageCodesOf），不读这一列。
+         *   所以取首值不会造成任何判定偏差。 */
+        page_code: pageCodesOf(p)[0] ?? null,
         page_sort: i + 1,
         locked: p.locked ? 1 : 0,
         remark: p.remark ?? null,
@@ -160,6 +164,8 @@ export async function loadPageBoards(): Promise<PermPageBoard[]> {
       pageTitle: p.title,
       pagePath: p.path,
       pageCode: p.pageCode,
+      /* ★ 合并页把整组码也下发，前端要展示「这一页管哪几个学段」时用得上 */
+      pageCodes: p.pageCodes,
       pageSort: i + 1,
       // 库里查不到（理论上不会）→ 按「有」处理，宁可多显示也不能凭空藏页面
       enabled: flagMap.get(`${board.moduleKey}||${p.path}`) !== false,

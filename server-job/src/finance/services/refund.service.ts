@@ -103,9 +103,23 @@ export function buildRefundQuery(q: any) {
 }
 
 /**
- * 提交退费申请（班主任侧，财务可代提交）
+ * 提交退费申请（上游模块审批通过后上报；财务也可代提交）
  *
- * 新建的退费单默认落在「1 待提交」，需要按审批链往下走。
+ * ⭐ 2026-10-15 修正：落库状态从「1 待提交」改为「4 待财务出款」
+ *
+ * 【原来的错】
+ *   这里硬编码 `RefundStatus.DRAFT`（待提交），但本接口的实际调用方
+ *   **全都是已经走完自己审批链的上游模块**：
+ *     · 咨询 → 经理审批通过后上报
+ *     · 就业 / 教学·初高 / 班级 → 各自审批通过后上报（utils/financeClient）
+ *   咨询侧的映射常量 `CONSULT_TO_FINANCE_REFUND_STATUS` 也白纸黑字写着
+ *     「经理批准后上报 → 财务侧 4 待财务出款」。
+ *   落成「待提交」的后果：列表项 `canRefund=false` → **财务看不到「出款」按钮，
+ *   整条退费流程卡死在财务这一步**（用户 2026-10-15 反馈的现象）。
+ *
+ * 【为什么是 4 而不是别的】
+ *   财务侧不需要再走一遍审批 —— 上游已经审过了，财务的职责只是「出款」。
+ *   所以上报即落到「待财务出款」；财务点「退费」后由 payRefund 转「6 已退费」。
  */
 export async function applyRefund(
   body: any,
@@ -133,7 +147,7 @@ export async function applyRefund(
       : 1,
     refund_amount: body.refundAmount,
     refund_reason: body.refundReason,
-    refund_status: RefundStatus.DRAFT,
+    refund_status: RefundStatus.PENDING_FINANCE,
     source_type: body.sourceType ?? 1,
     apply_time: now,
     applicant_id: operator.userId,

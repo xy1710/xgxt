@@ -12,13 +12,35 @@
  * 【数据从哪来（改的时候两边一起改）】
  *   · 新模块 consult / finance / perm
  *       → `shared-types/src/portal/portal.ts` 的 `MODULES.menus`
- *   · legacy 模块 job / edu / class / class-jh
+ *   · 教学管理（原 legacy job / edu / class / class-jh 四板块合并）
  *       → `web-job/src/config/menu.ts` 的 `MENU`（path + pageCode）
+ *       → `web-job/src/teaching/domainConfig.ts`（合并业务域的标题）
  *   · 路由真实性以 `web-job/src/router/index.ts` 为准
- *   三处任何一处加/删页面，本文件都要同步，否则页面管理里会
- *   列出不存在、或漏掉新加的页面。
  *
- * ⚠️ 2026-10-06 汇总口径：《系统板块与页面总览.md》第 3.1~3.8 节（共 7 板块 56 页）。
+ * ⚠️⚠️ 2026-10-20 用户要求：「按左侧菜单栏改写页面管理的内容」
+ *   系统这一轮把 **就业管理 / 教务管理 / 班级管理（大学部）/ 教学管理（初高）
+ *   四个板块合并成了一个「教学管理」**（侧栏只剩一个分组，15 项），
+ *   并把「工作台」提为置顶单层菜单项。台账原来还是「7 板块 56 页」的老口径，
+ *   与菜单对不上，本次按菜单重写为 **5 板块 34 页**：
+ *
+ *     | 板块     | 页数 | 来源                                    |
+ *     |---------|-----|----------------------------------------|
+ *     | 工作台   |  1  | 侧栏置顶单层项（'/'，locked 不可取消）      |
+ *     | 市场咨询 |  5  | MODULES.consult                         |
+ *     | 财务管理 |  6  | MODULES.finance（顺序按菜单：冻结在退费前）  |
+ *     | 权限管理 |  7  | MODULES.perm                            |
+ *     | 教学管理 | 15  | MENU（五学段合并后的 15 项）               |
+ *
+ *   合并后旧的 4 个板块 key（job / edu / class / class-jh）在台账里**不再出现**
+ *   —— `syncRegistry()` 会把库里多出来的行逻辑删除（不物理删，可回滚）。
+ *
+ * 【★ 合并页面的权限码为什么要用 `pageCodes` 数组】
+ *   合并前的「出勤管理」有三套页面、三个权限码（初高 / 大学 / 实训各一个），
+ *   合并后只剩一页 `/teaching/attendance`，但**权限判定仍按学段**走
+ *   （`web-job/src/teaching/access.ts` 的 STAGE_ACCESS）。
+ *   所以一页要挂多个码，`pageCode` 单值装不下 → 用 `pageCodes: string[]`。
+ *   职位页面默认值推导按「任一码命中即可见」算（见 rolePageDefaults.ts）。
+ *
  * ⚠️ 不收录「已注册但无菜单入口的详情页」（成绩汇总 / 班级花名册 / 复盘信息 /
  *    就业日志记录 4 个）—— 它们是列表页点进去的子页，不是板块里的独立菜单，
  *    去勾后会让父页面点不动。它们跟着各自的父页面走。
@@ -32,8 +54,16 @@ export interface RegistryPage {
   title: string;
   /** 路由 path（台账的自然主键，全系统唯一） */
   path: string;
-  /** legacy 模块的页面权限码；新模块留空 */
+  /** 单权限码（老口径，仍保留给单学段页面用） */
   pageCode?: string;
+  /**
+   * 多权限码（★ 2026-10-20 合并板块用）
+   *
+   * 一个页面跨多个学段时，每个学段有自己的权限码，全列在这里；
+   * 判定口径 = **任一命中即可见**（与前端 STAGE_ACCESS 的 anyStageAccessible 一致）。
+   * 与 `pageCode` 同时存在时以本字段为准。
+   */
+  pageCodes?: string[];
   /** 锁定：不允许取消勾选（用于防止把自己锁在门外） */
   locked?: boolean;
   /** 一句话说明（页面管理列表的副标题） */
@@ -41,7 +71,7 @@ export interface RegistryPage {
 }
 
 export interface RegistryBoard {
-  /** 板块 key（= 门户模块 key） */
+  /** 板块 key（= 门户模块 key；合并后的教学管理用 'teach'） */
   moduleKey: string;
   /** 板块名（页面管理左栏显示） */
   moduleName: string;
@@ -58,6 +88,29 @@ export interface RegistryBoard {
 }
 
 /* ============================================================
+ * 0. 工作台（★ 2026-10-20 新增：侧栏置顶单层菜单项）
+ * ============================================================ */
+const WORKBENCH: RegistryBoard = {
+  moduleKey: 'workbench',
+  moduleName: '工作台',
+  moduleIcon: '🏠',
+  moduleDesc: '系统首页 · 每个角色进门第一页',
+  legacy: false,
+  sortNo: 1,
+  pages: [
+    {
+      key: 'dashboard',
+      title: '工作台',
+      path: '/',
+      /* ⚠️ locked：这是全站首页，也是登录后的落地页。
+       *   取消勾选等于把所有人关在门外（且没有任何入口能改回来）→ 锁死。 */
+      locked: true,
+      remark: '待办清单、KPI、快捷入口（全角色可见，不可取消）',
+    },
+  ],
+};
+
+/* ============================================================
  * 1. 市场咨询（原 01-王寒逸-consult · 8001）
  * ============================================================ */
 const CONSULT: RegistryBoard = {
@@ -66,7 +119,7 @@ const CONSULT: RegistryBoard = {
   moduleIcon: '📣',
   moduleDesc: '学生 · 缴费 · 审批 · 退费 · 流失',
   legacy: false,
-  sortNo: 1,
+  sortNo: 2,
   pages: [
     { key: 'student', title: '学生管理', path: '/consult/student', remark: '咨询学生名单、跟进记录' },
     { key: 'fee', title: '收款与缴费', path: '/consult/fee', remark: '咨询端收款（学费 / 试学费）' },
@@ -83,15 +136,17 @@ const FINANCE: RegistryBoard = {
   moduleKey: 'finance',
   moduleName: '财务管理',
   moduleIcon: '💰',
-  moduleDesc: '概览 · 缴费 · 退费 · 冻结 · 账单 · 标准',
+  moduleDesc: '概览 · 缴费 · 冻结 · 退费 · 账单 · 标准',
   legacy: false,
-  sortNo: 2,
+  sortNo: 3,
   pages: [
     // ⚠️ path 必须是 /finance/overview（真实路由），不是 portal.ts 里那个历史笔误 /finance
     { key: 'finance', title: '财务概览', path: '/finance/overview', remark: '收支总览、KPI' },
     { key: 'fee', title: '缴费管理', path: '/finance/fee', remark: '缴费总记录、到期预警、凭证 OCR' },
-    { key: 'refund', title: '退费管理', path: '/finance/refund', remark: '退费审批与执行' },
+    /* ★ 2026-10-20：顺序按侧栏菜单改 —— 菜单里「冻结名单」在「退费管理」之前，
+     *   台账原来反了（退费在前），页面管理里看到的顺序与菜单对不上。 */
     { key: 'freeze', title: '冻结名单', path: '/finance/freeze', remark: '批量冻结 / 解冻' },
+    { key: 'refund', title: '退费管理', path: '/finance/refund', remark: '退费审批与执行' },
     { key: 'bill', title: '账单明细', path: '/finance/bill', remark: '逐笔账单流水' },
     { key: 'standard', title: '费用标准', path: '/finance/standard', remark: '各类型费用标准配置' },
   ],
@@ -104,15 +159,15 @@ const PERM: RegistryBoard = {
   moduleKey: 'perm',
   moduleName: '权限管理',
   moduleIcon: '🔐',
-  moduleDesc: '部门 · 角色 · 账号 · 授权 · 页面 · 日志',
+  moduleDesc: '部门 · 职位 · 账号 · 授权 · 页面 · 日志',
   legacy: false,
-  sortNo: 3,
+  sortNo: 4,
   pages: [
     { key: 'overview', title: '权限总览', path: '/perm/overview', remark: '权限体系总览、最近操作动态' },
     { key: 'dept', title: '部门管理', path: '/perm/dept', remark: '组织架构 / 部门两级树' },
-    { key: 'role', title: '角色管理', path: '/perm/role', remark: '14 个内置角色 + 自建角色' },
-    { key: 'user', title: '用户管理', path: '/perm/user', remark: '全系统账号维护（唯一入口）' },
-    { key: 'assign', title: '角色-权限分配', path: '/perm/assign', remark: '角色 → 功能点/动作授权' },
+    { key: 'role', title: '职位管理', path: '/perm/role', remark: '14 个内置职位 + 自建职位' },
+    { key: 'user', title: '账号管理', path: '/perm/user', remark: '全系统账号维护（唯一入口）' },
+    { key: 'assign', title: '职位权限分配', path: '/perm/assign', remark: '职位 → 功能点/动作授权' },
     {
       key: 'page',
       title: '页面管理',
@@ -127,81 +182,95 @@ const PERM: RegistryBoard = {
 };
 
 /* ============================================================
- * 4. 就业管理（实训 9 + 就业 5）
+ * 4. 教学管理（★ 2026-10-20 由 job / edu / class / class-jh 四板块合并）
+ *
+ *   侧栏现在只有一个「教学管理」分组，15 项（初高 / 大学 / 实训 / 就业 / 教务）。
+ *   顺序 = `web-job/src/config/menu.ts` 的 MENU 顺序 = 用户截图里的菜单顺序。
  * ============================================================ */
-const JOB: RegistryBoard = {
-  moduleKey: 'job',
-  moduleName: '就业管理',
-  moduleIcon: '💼',
-  moduleDesc: '实训阶段 9 页 + 就业阶段 5 页',
+const TEACH: RegistryBoard = {
+  moduleKey: 'teach',
+  moduleName: '教学管理',
+  moduleIcon: '🎓',
+  moduleDesc: '初高 · 大学 · 实训 · 就业 · 教务（五学段合一，15 页）',
   legacy: true,
-  sortNo: 4,
+  sortNo: 5,
   pages: [
-    /* ---- 实训阶段 ---- */
+    {
+      key: 'student',
+      title: '学生档案',
+      path: '/teaching/student',
+      pageCodes: ['classjh:student:view', 'class:student:view', 'job:empArchive:view', 'edu:student:view'],
+      remark: '学生主档与花名册：四个学段合并一页，「全部」按学号去重',
+    },
     {
       key: 'class',
-      title: '班级信息管理',
-      path: '/class',
-      pageCode: 'job:class:view',
-      remark: '实训班级主档 + 花名册、结业转就业',
+      title: '班级管理',
+      path: '/teaching/class',
+      pageCodes: ['classjh:classInfo:view', 'class:info:view', 'job:class:view'],
+      remark: '班级主档与生命周期：建班、封班、阶段推进、师资分配',
     },
     {
       key: 'classTransfer',
-      title: '班级管理',
+      title: '班级交接',
       path: '/class-transfer',
       pageCode: 'job:classTransfer:view',
-      remark: '换班交接：整班换负责人并留快照',
+      remark: '换班交接：整班换负责人（班主任/教员/助教），学生不动，留快照',
+    },
+    {
+      key: 'consult',
+      title: '待接收学员',
+      path: '/class/consult',
+      pageCode: 'class:consult:view',
+      remark: '咨询端推来的待接收学员：接收 / 拒绝',
     },
     {
       key: 'attendance',
       title: '出勤管理',
-      path: '/attendance',
-      pageCode: 'job:attendance:view',
-      remark: '登记各班每日出勤，自动算出勤率',
+      path: '/teaching/attendance',
+      pageCodes: ['classjh:attendance:view', 'class:attendance:view', 'job:attendance:view'],
+      remark: '各学段出勤登记与统计（一个页面 + 学段筛选）',
     },
     {
-      key: 'examScore',
+      key: 'exam',
+      title: '考试管理',
+      path: '/teaching/exam',
+      pageCodes: ['classjh:exam:view', 'class:exam:view', 'job:exam:view'],
+      remark: '各学段考试排期与成绩表管理',
+    },
+    {
+      key: 'score',
       title: '成绩管理',
-      path: '/exam-score',
-      pageCode: 'job:examScore:view',
-      remark: '卷面/机试/面试两次加权算综合成绩',
-    },
-    { key: 'exam', title: '考试管理', path: '/exam', pageCode: 'job:exam:view', remark: '考试排期与成绩表管理' },
-    {
-      key: 'feeCall',
-      title: '催费管理',
-      path: '/fee-call',
-      pageCode: 'job:feeCall:view',
-      remark: '住宿费/保险费/餐费催缴，只催办不收款',
-    },
-    {
-      key: 'refund',
-      title: '退费申请',
-      path: '/refund',
-      pageCode: 'job:refund:view',
-      remark: '班主任发起 → 学管 → 校长 → 财务执行',
-    },
-    {
-      key: 'suspendApproval',
-      title: '休学/退学/复学审批',
-      path: '/suspend-approval',
-      pageCode: 'job:suspendApproval:view',
-      remark: '通过后改学籍状态 + 花名册进出班 + 通知财务',
+      path: '/teaching/score',
+      pageCodes: ['classjh:score:view', 'class:grade:view', 'job:examScore:view'],
+      remark: '各学段成绩录入与统计（列由后端成绩公式配置驱动）',
     },
     {
       key: 'dorm',
       title: '宿舍管理',
-      path: '/dorm',
-      pageCode: 'job:dorm:view',
-      remark: '实训基地宿舍：床位分配 + 调换/退宿申请',
+      path: '/teaching/dorm',
+      pageCodes: ['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view'],
+      remark: '各学段宿舍分派、调换与退宿',
     },
-    /* ---- 就业阶段 ---- */
     {
-      key: 'empArchive',
-      title: '信息档案',
-      path: '/archive/basic-info',
-      pageCode: 'job:empArchive:view',
-      remark: '就业阶段学生名单，待就业可「确认就业」',
+      key: 'fee',
+      title: '催费 / 缴费',
+      path: '/teaching/fee',
+      pageCodes: ['classjh:fee:view', 'class:urge:view', 'job:feeCall:view', 'edu:fee:view'],
+      remark: '各学段费用催办与缴费台账',
+    },
+    {
+      key: 'refund',
+      title: '退费',
+      path: '/teaching/refund',
+      pageCodes: ['classjh:refund:view', 'class:refund:view', 'job:refund:view'],
+      remark: '审批链三学段统一（实训那套）：学管 → 校长 → 通知财务出款',
+    },
+    {
+      key: 'approval',
+      title: '休学 / 退学审批',
+      path: '/teaching/approval',
+      pageCodes: ['classjh:approval:view', 'class:suspend:view', 'job:suspendApproval:view'],
+      remark: '休学/复学 1 步，退学 2 步（学管 → 校长）',
     },
     {
       key: 'employmentLog',
@@ -225,215 +294,18 @@ const JOB: RegistryBoard = {
       remark: '就业率 / offer 数 / 人均投递 + KPI 达成',
     },
     {
-      key: 'empDorm',
-      title: '就业基地宿舍',
-      path: '/archive/dorm-assign',
-      pageCode: 'job:empDorm:view',
-      remark: '就业基地宿舍，直接分配不走审批',
-    },
-  ],
-};
-
-/* ============================================================
- * 5. 教务管理
- * ============================================================ */
-const EDU: RegistryBoard = {
-  moduleKey: 'edu',
-  moduleName: '教务管理',
-  moduleIcon: '📚',
-  moduleDesc: '学生档案 · 宿舍 · 缴费',
-  legacy: true,
-  sortNo: 5,
-  pages: [
-    {
-      key: 'student',
-      title: '学生档案',
-      path: '/edu/student',
-      pageCode: 'edu:student:view',
-      remark: '全校学生档案、Excel 导入；改状态连带冻结缴费记录',
-    },
-    {
-      key: 'dorm',
-      title: '宿舍管理',
-      path: '/edu/dorm',
-      pageCode: 'edu:dorm:view',
-      remark: '宿舍总名单 + 分派 + 调换/退宿审批 + 导出',
-    },
-    {
-      key: 'fee',
-      title: '缴费管理',
-      path: '/edu/fee',
-      pageCode: 'edu:fee:view',
-      remark: '缴费总记录 + 到期预警 + 凭证 OCR + 批量冻结',
-    },
-  ],
-};
-
-/* ============================================================
- * 6. 班级管理 · 大学部（库 sms_class）
- * ============================================================ */
-const CLASS: RegistryBoard = {
-  moduleKey: 'class',
-  moduleName: '班级管理（大学部）',
-  moduleIcon: '🗂️',
-  moduleDesc: 'Q1~Q6 阶段 · 花名册/出勤/成绩/考试/催费',
-  legacy: true,
-  sortNo: 6,
-  pages: [
-    {
-      key: 'student',
-      title: '班级信息管理',
-      path: '/class/roster',
-      pageCode: 'class:student:view',
-      remark: '学员花名册、学员详情、升实训交接入口',
-    },
-    {
-      key: 'info',
-      title: '班级管理',
-      path: '/class/info',
-      pageCode: 'class:info:view',
-      remark: '建/改/删班、阶段推进、交接班、班主任分配',
-    },
-    {
-      key: 'consult',
-      title: '待接收学员',
-      path: '/class/consult',
-      pageCode: 'class:consult:view',
-      remark: '咨询端推来的待接收学员：接收 / 拒绝',
-    },
-    {
-      key: 'attendance',
-      title: '出勤管理',
-      path: '/class/attendance',
-      pageCode: 'class:attendance:view',
-      remark: '学员出勤打卡与统计（班级侧）',
-    },
-    {
-      key: 'grade',
-      title: '成绩管理',
-      path: '/class/grade',
-      pageCode: 'class:grade:view',
-      remark: '成绩录入与 Excel 批量导入',
-    },
-    {
-      key: 'exam',
-      title: '考试管理',
-      path: '/class/exam',
-      pageCode: 'class:exam:view',
-      remark: '考试安排与末班判定；读满第六阶段可「升实训」',
-    },
-    {
-      key: 'urge',
-      title: '催费管理',
-      path: '/class/urge',
-      pageCode: 'class:urge:view',
-      remark: '催费发起与催缴记录',
-    },
-    { key: 'refund', title: '退费', path: '/class/refund', pageCode: 'class:refund:view', remark: '退费申请与审批' },
-    {
-      key: 'suspend',
-      title: '休学/退学审批',
-      path: '/class/approval',
-      pageCode: 'class:suspend:view',
-      remark: '休学/退学/复学审批 + 升实训交接记录',
-    },
-    {
-      key: 'dorm',
-      title: '宿舍管理',
-      path: '/class/dorm',
-      pageCode: 'class:dorm:view',
-      remark: '床位分配、换宿/退宿申请（审批在教务）',
-    },
-  ],
-};
-
-/* ============================================================
- * 7. 教学管理 · 初高（库 sms_class_jh）
- * ============================================================ */
-const CLASS_JH: RegistryBoard = {
-  moduleKey: 'class-jh',
-  moduleName: '教学管理（初高）',
-  moduleIcon: '🎓',
-  moduleDesc: '初高中部（J/G 班）· 与大学部班级管理是两套模块',
-  legacy: true,
-  sortNo: 7,
-  pages: [
-    {
-      key: 'dashboard',
-      title: '工作台',
-      path: '/class-jh/dashboard',
-      pageCode: 'classjh:dashboard:view',
-      remark: '在读人数、今日出勤率、临期缴费与待办',
-    },
-    {
-      key: 'student',
-      title: '基础数据',
-      path: '/class-jh/student',
-      pageCode: 'classjh:student:view',
-      remark: '学生主档与学籍状态 + 7 页签详情',
-    },
-    {
-      key: 'classInfo',
-      title: '班级管理',
-      path: '/class-jh/class',
-      pageCode: 'classjh:classInfo:view',
-      remark: '班级生命周期、师资交接、学期管理',
-    },
-    {
-      key: 'attendance',
-      title: '出勤管理',
-      path: '/class-jh/attendance',
-      pageCode: 'classjh:attendance:view',
-      remark: '按班级+日期考勤台账、上传出勤表、缺勤明细',
-    },
-    {
-      key: 'exam',
-      title: '考试管理',
-      path: '/class-jh/exam',
-      pageCode: 'classjh:exam:view',
-      remark: '月考/质素/阶段/结业四类 + 自定义考试',
-    },
-    {
-      key: 'score',
-      title: '成绩管理',
-      path: '/class-jh/score',
-      pageCode: 'classjh:score:view',
-      remark: '成绩录入与查询（按成绩/时间/班主任筛选）',
-    },
-    {
-      key: 'dorm',
-      title: '宿舍管理',
-      path: '/class-jh/dorm',
-      pageCode: 'classjh:dorm:view',
-      remark: '分派宿舍、调宿申请（审批在教务）',
-    },
-    {
-      key: 'fee',
-      title: '催费管理',
-      path: '/class-jh/fee',
-      pageCode: 'classjh:fee:view',
-      remark: '临期/逾期名单、分享推送催费单',
-    },
-    {
-      key: 'refund',
-      title: '退费',
-      path: '/class-jh/refund',
-      pageCode: 'classjh:refund:view',
-      remark: '退学退费申请与审批',
-    },
-    {
-      key: 'approval',
-      title: '教职·学术审批',
-      path: '/class-jh/approval',
-      pageCode: 'classjh:approval:view',
-      remark: '休学/复学/换人/退学/就业协议五条流程审批',
-    },
-    {
       key: 'setting',
       title: '系统设置',
       path: '/class-jh/setting',
       pageCode: 'classjh:setting:view',
       remark: '出勤达标线、催费提醒天数、封班可转入类型等',
+    },
+    {
+      key: 'building',
+      title: '楼栋设置',
+      path: '/class-jh/building',
+      pageCode: 'classjh:building:view',
+      remark: '宿舍楼栋字典，与宿舍管理楼栋下拉实时一致（可独立授权给教务）',
     },
   ],
 };
@@ -444,16 +316,14 @@ const CLASS_JH: RegistryBoard = {
 
 /** 全部板块（顺序 = 页面管理左栏顺序 = 侧栏板块顺序） */
 export const PAGE_REGISTRY: RegistryBoard[] = [
+  WORKBENCH,
   CONSULT,
   FINANCE,
   PERM,
-  JOB,
-  EDU,
-  CLASS,
-  CLASS_JH,
+  TEACH,
 ];
 
-/** 全部页面总数（当前 7 板块 56 页） */
+/** 全部页面总数（当前 5 板块 34 页） */
 export const PAGE_REGISTRY_TOTAL = PAGE_REGISTRY.reduce((n, b) => n + b.pages.length, 0);
 
 /** 拍平：全部页面的 path（用于「这个 path 有没有被台账管」的判定） */
@@ -464,4 +334,14 @@ export const ALL_REGISTRY_PATHS: string[] = PAGE_REGISTRY.flatMap((b) =>
 /** 按 moduleKey 取板块 */
 export function findRegistryBoard(moduleKey: string): RegistryBoard | undefined {
   return PAGE_REGISTRY.find((b) => b.moduleKey === moduleKey);
+}
+
+/**
+ * 取一个页面挂的全部权限码（单码 / 多码统一入口）
+ *
+ * ★ 2026-10-20 新增：合并板块一页挂多学段码，判定处不要各写一遍 `pageCode || pageCodes`。
+ */
+export function pageCodesOf(p: RegistryPage): string[] {
+  if (p.pageCodes?.length) return p.pageCodes;
+  return p.pageCode ? [p.pageCode] : [];
 }

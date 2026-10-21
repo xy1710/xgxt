@@ -60,6 +60,7 @@ const SETTINGS = [
     remark: '分母=在读/试学/预读，分子=出勤+迟到',
   },
   { key: 'feeRemindDays', name: '催费提前提醒天数', value: '7', remark: '剩余天数<=该值标红' },
+  { key: 'feeUrgeWindowDays', name: '催费列表窗口天数', value: '20', remark: '到期日距今<=该值才进催费列表（含已逾期）' },
   { key: 'refundThresholdAmount', name: '退费审批阈值（分）', value: '500000', remark: '超阈值走校长审批' },
   { key: 'closedClassIntakeTypes', name: '封班可转入类型', value: JSON.stringify([1, 2]), remark: '休学复学/末班' },
   { key: 'allowStudentAdd', name: '是否允许手动新增学生', value: 'false', remark: '默认关闭' },
@@ -82,8 +83,22 @@ async function seedSettings() {
 }
 
 /* ============================================================
- * 2. 学习阶段字典
+ * 2. 学习阶段字典（★ 2026-10-16 改成「阶段方案 → 多个阶段」）
  * ============================================================ */
+
+/** 阶段方案（一个部门一个默认方案） */
+const STAGE_PLANS = [
+  { id: 'seed-plan-jh', name: '初高部阶段方案', dept: 1 },
+  { id: 'seed-plan-uni', name: '大学部阶段方案', dept: 2 },
+];
+
+async function seedStagePlans() {
+  let i = 0;
+  for (const p of STAGE_PLANS) {
+    await ensure('t_class_stage_plan', p.id, { plan_name: p.name, dept_code: p.dept, sort_no: i });
+    i += 1;
+  }
+}
 
 const STAGES = [
   { code: 101, name: '预科', dept: 1, months: 3 },
@@ -99,15 +114,60 @@ const STAGES = [
   { code: 204, name: '四阶段', dept: 2, months: 4 },
 ];
 
+/** 部门 → 默认方案 ID */
+const DEFAULT_PLAN = { 1: 'seed-plan-jh', 2: 'seed-plan-uni' };
+
 async function seedStages() {
   let i = 0;
   for (const s of STAGES) {
     await ensureBy(
       't_class_stage',
       { stage_code: s.code, dept_code: s.dept },
-      { id: `seed-stage-${s.code}`, stage_code: s.code, stage_name: s.name, dept_code: s.dept, study_months: s.months, sort_no: i },
+      {
+        id: `seed-stage-${s.code}`,
+        stage_code: s.code,
+        stage_name: s.name,
+        dept_code: s.dept,
+        plan_id: DEFAULT_PLAN[s.dept],
+        study_months: s.months,
+        sort_no: i,
+      },
     );
     i += 1;
+  }
+}
+
+/* ============================================================
+ * 2b. 阶段方案（★ 2026-10-16 新增：阶段字典升级为「方案 + 多阶段」）
+ *
+ *   一个部门一个默认方案，阶段明细直接取自上面的 STAGES ——
+ *   让「系统设置 · 阶段方案」页和班级表单开箱就有数据可选。
+ *   按（方案名 + 部门）判重：迁移里已搬过的不会被重复插入。
+ * ============================================================ */
+
+const SCHEMES = [
+  { id: 'seed-scheme-1', name: '初高部阶段方案', dept: 1 },
+  { id: 'seed-scheme-2', name: '大学部阶段方案', dept: 2 },
+];
+
+async function seedStageSchemes() {
+  for (const sc of SCHEMES) {
+    await ensureBy(
+      't_class_stage_scheme',
+      { scheme_name: sc.name, dept_code: sc.dept },
+      { id: sc.id, scheme_name: sc.name, dept_code: sc.dept, sort_no: sc.dept },
+    );
+
+    const rows = STAGES.filter((s) => s.dept === sc.dept);
+    let i = 0;
+    for (const s of rows) {
+      await ensureBy(
+        't_class_stage_scheme_stage',
+        { scheme_id: sc.id, stage_name: s.name },
+        { id: `${sc.id}-s${i + 1}`, scheme_id: sc.id, stage_name: s.name, study_months: s.months, sort_no: i },
+      );
+      i += 1;
+    }
   }
 }
 
@@ -845,8 +905,12 @@ async function main() {
   console.log('开始灌入演示种子数据（幂等）...');
   await seedSettings();
   console.log('  ✓ 系统设置');
+  await seedStagePlans();
+  console.log('  ✓ 阶段方案');
   await seedStages();
   console.log('  ✓ 学习阶段字典');
+  await seedStageSchemes();
+  console.log('  ✓ 阶段方案');
   await seedClasses();
   console.log('  ✓ 班级');
   const students = await seedStudents();

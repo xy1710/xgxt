@@ -87,6 +87,17 @@ accountRouter.get(
     // ⚠️ 兼容门户 token：accountId 可能是门户的主键，查不到就用登录名兜底
     const row = await findByTokenOrAccount(user.accountId, user.account);
 
+    /**
+     * ★ 2026-10-16 咨询师不下发「审批中心」菜单
+     *
+     * 口径：咨询师发起退费 → 咨询经理审批 → 财务打款。
+     * 审批中心接口已加 requireManager，咨询师点进去只会 403；
+     * 而菜单来源是权限模块的分配结果（那边不知道咨询模块内部的这条链），
+     * 所以在这里统一摘掉，避免「有菜单但点不动」。
+     */
+    const menuForRole = (keys: string[]) =>
+      user.role === ConsultRole.CONSULT ? keys.filter((k) => k !== 'approve') : keys;
+
     // ⭐ 系统管理员判定（2026-10-03）：
     //    门户系统管理员（permissions 含 '*'，或角色为 SYS_ADMIN）→ 全部页面可见。
     //    咨询库中查不到该账号时也按此口径给全量菜单，避免进来一片空白。
@@ -98,14 +109,17 @@ accountRouter.get(
     // ---- ⭐ 系统管理员：全开，不查权限库 ----
     if (isSysAdmin) {
       const rowView = row
-        ? { ...toAccountView(row, true), menuKeys: menusOf(row.role, { isSysAdmin }) }
+        ? {
+            ...toAccountView(row, true),
+            menuKeys: menuForRole(menusOf(row.role, { isSysAdmin })),
+          }
         : {
             accountId: user.accountId,
             account: user.account,
             userName: user.userName,
             active: true,
             createTime: '',
-            menuKeys: menusOf('', { isSysAdmin }),
+            menuKeys: menuForRole(menusOf('', { isSysAdmin })),
           };
       res.json(ok({ ...rowView, menuSource: 'sys_admin', permDegraded: false }));
       return;
@@ -115,7 +129,7 @@ accountRouter.get(
     const perm = await fetchPermProfile(user.account || '');
 
     if (perm.profile) {
-      const menuKeys = consultMenusFromPerm(perm.profile);
+      const menuKeys = menuForRole(consultMenusFromPerm(perm.profile));
       // ⚠️ 权限库里确实有这个人，但一个咨询功能点都没勾 →
       //    仍给首页兜底，否则进来是全白页 + 路由守卫死循环
       const finalKeys = menuKeys.length ? menuKeys : ['student'];
@@ -153,7 +167,7 @@ accountRouter.get(
           dept: user.dept,
           active: true,
           createTime: '',
-          menuKeys: menusOf('', { isSysAdmin: false }),
+          menuKeys: menuForRole(menusOf('', { isSysAdmin: false })),
           menuSource: 'fallback',
           permDegraded: true,
           permTip: perm.degradeReason || '权限模块暂时不可用，当前使用本地兜底菜单。',
@@ -165,7 +179,7 @@ accountRouter.get(
     res.json(
       ok({
         ...toAccountView(row, true),
-        menuKeys: menusOf(row.role),
+        menuKeys: menuForRole(menusOf(row.role)),
         menuSource: 'fallback',
         permDegraded: true,
         permTip: perm.degradeReason || '权限模块暂时不可用，当前使用本地兜底菜单。',

@@ -104,7 +104,7 @@
  *     summary: 去登录模块取账号档案（跨模块业务调用示例）
  *     description: |
  *       调用登录模块（8001）的 `GET /api/auth/profile?account=xxx`，
- *       拿账号的角色 / 权限 / 数据范围，并透传调用方的 `Authorization`。
+ *       拿账号的职位 / 权限 / 数据范围，并透传调用方的 `Authorization`。
  *
  *       ⚠️ 与上面两个探活接口不同，**这个接口不吞异常**：
  *       如果登录模块没启动，会返回一条

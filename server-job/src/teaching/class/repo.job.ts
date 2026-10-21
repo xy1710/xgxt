@@ -37,6 +37,9 @@ import type {
   ClassSaveBody,
 } from '../shared/dto';
 import { fmtDate, fmtDateTime } from '../shared/format';
+// ★ 2026-10-19 实训与就业部共用「就业部」阶段方案（dept_code=3）：
+//   阶段名优先读 t_class_stage，PHASE_NAME 只兜底老数据
+import { resolveStageName } from '../../class-jh/utils/stageDict';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 
@@ -71,7 +74,7 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
 
 /** 行 → 统一结构 */
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
@@ -86,7 +89,11 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
+    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -140,7 +147,11 @@ async function applyScope(qb: any, user: any): Promise<void> {
 }
 
 function buildBase(q: ClassListQuery) {
-  const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', false);
+  // ★ 2026-10-19：实训与就业部共用这张表、dept 都是就业部(3)，
+  //   靠 stage_key 区分（实训='job'，就业部='emp'）
+  const qb = tbl(db, 'sms_job', T, STAGE)
+    .where('is_deleted', false)
+    .andWhere('stage_key', 'job');
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.classStatus) qb.andWhere('class_status', q.classStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
@@ -161,8 +172,13 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
   const rows = (await tbl(db, 'sms_job', ROSTER_T, STAGE)
     .whereIn('class_id', classIds)
     .where({ is_deleted: false, status: 1 })
+    // ★ 2026-10-16 修：必须 groupBy，否则 only_full_group_by 模式下
+    //   「select class_id, count(*) 无 group by」直接报 1140 错误。
+    .groupBy('class_id')
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    // ⚠️ 同上：ONLY_FULL_GROUP_BY 下必须 group by（现在只有 1 个实训班没暴露，别等 2 个班）
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }
@@ -218,9 +234,13 @@ export const repo: ClassRepo = {
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('class_name', body.className);
+    set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
+    // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
+    set('scheme_id', body.schemeId);
+    set('scheme_stage_id', body.schemeStageId);
+    set('scheme_stage_name', body.schemeStageName);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
@@ -251,6 +271,12 @@ export const repo: ClassRepo = {
             `班级状态不可从「${CLASS_STATUS_NAME[from]}」流转为「${CLASS_STATUS_NAME[body.classStatus]}」`,
           );
         }
+        // ★ 2026-10-19：改状态挪进「编辑班级」后，保存这条路径也要补上原来
+        //   changeStatus 做的事 —— 结业写结业日期 + 记住上一个状态。
+        if (from !== body.classStatus && body.classStatus === CLASS_STATUS.GRADUATED) {
+          if (!payload.close_date) payload.close_date = now;
+          payload.prev_class_status = from;
+        }
       }
       await tbl(db, 'sms_job', T, STAGE).where({ id: body.id }).update(payload);
       return { id: body.id };
@@ -259,24 +285,29 @@ export const repo: ClassRepo = {
     // 新增：编号必填 + 唯一；同部门内名称不重复（原实现口径）
     const classCode = String(body.classCode || '').trim();
     if (!classCode) throw new Error('班级编号必填');
-    // ★ 这张表的 head_teacher_id / open_date 是 NOT NULL（实测）——
-    //   前端不传就 insert 报 ER_BAD_NULL_ERROR，错误信息很难懂，这里提前拦并说人话
-    if (!String(body.headTeacherId || '').trim()) throw new Error('班主任必填');
     if (!String(body.openDate || '').trim()) throw new Error('开班日期必填');
-    const deptCode = Number(body.deptCode ?? 1);
+    // ★ 2026-10-15 放宽：班主任允许不选（head_teacher_id 已迁改为可空）。
+    //   班级名称留空时自动占位（class_name 列 NOT NULL + 部门内不重复）
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const className =
+      String(body.className || '').trim() ||
+      `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
+    const deptCode = Number(body.deptCode ?? 3);
     const dupCode = (await tbl(db, 'sms_job', T, STAGE).where({ class_code: classCode, is_deleted: false }).first()) as
       | Record<string, any>
       | undefined;
     if (dupCode) throw new Error(`班级编号「${classCode}」已存在`);
     const dupName = (await tbl(db, 'sms_job', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) throw new Error(`该部门下已有班级叫「${className}」`);
 
     const id = randomUUID();
     await tblIns(db, 'sms_job', T, STAGE, {
       id,
       class_code: classCode,
+      stage_key: 'job',
+      class_name: className, // ★ create 时名称可能被自动占位（见上）
       // ★ 新建默认封班（"开放"已废弃）
       class_status: body.classStatus ?? CLASS_STATUS.CLOSED,
       // ★ `stage`（阶段码）/ `dept_code` 在这张表都是 NOT NULL，前端没传时给兜底值
@@ -398,8 +429,8 @@ export const repo: ClassRepo = {
 /** 允许流转到的目标状态 */
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
-    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED, CLASS_STATUS.GRADUATING],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATING],
+    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATED]: [],
   };

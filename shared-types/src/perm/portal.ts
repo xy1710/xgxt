@@ -1,7 +1,7 @@
 /**
  * ⭐ 统一账号与模块注册表（全系统契约）
  *
- * ⚠️⚠️ 2026-10-02 新增：一个账号表管跨模块角色 + 目录树按模块展开
+ * ⚠️⚠️ 2026-10-02 新增：一个账号表管跨模块职位 + 目录树按模块展开
  *
  * 背景（用户指令）：
  *   「给财务也补录账号，然后系统管理员也能看到财务的模块，全部糅合到一个系统中，
@@ -63,7 +63,7 @@ export interface ModuleDef {
   /** 该模块有哪些页面（顺序即菜单顺序） */
   menus: ModuleMenuItem[];
   /**
-   * 允许进入本模块的角色（**模块内角色**，不是全局岗位）
+   * 允许进入本模块的职位（**模块内职位**，不是全局岗位）
    * ⚠️ 留空数组 = 任何被授权访问本模块的账号都能进
    */
   allowedRoles?: string[];
@@ -107,14 +107,14 @@ export const MODULES: ModuleDef[] = [
   {
     key: ModuleKey.PERM,
     title: '权限管理',
-    desc: '部门 · 角色 · 账号 · 授权 · 日志',
+    desc: '部门 · 职位 · 账号 · 授权 · 日志',
     entryUrl: 'http://127.0.0.1:5176',
     menus: [
       { key: 'overview', title: '权限总览', path: '/overview' },
       { key: 'dept', title: '部门管理', path: '/dept' },
-      { key: 'role', title: '角色管理', path: '/role' },
-      { key: 'user', title: '用户管理', path: '/user' },
-      { key: 'assign', title: '角色-权限分配', path: '/assign' },
+      { key: 'role', title: '职位管理', path: '/role' },
+      { key: 'user', title: '账号管理', path: '/user' },
+      { key: 'assign', title: '职位权限分配', path: '/assign' },
       { key: 'log', title: '操作日志', path: '/log' },
       // ⚠️ 2026-10-06：规则配置页面已删除（与 portal/portal.ts 同步，勿只改一处）。
     ],

@@ -80,6 +80,8 @@ export enum BizCode {
   ORDER_NOT_FOUND = 40406,
   /** 账号不存在 */
   ACCOUNT_NOT_FOUND = 40407,
+  /** ★ 2026-10-16 分期计划 / 期次不存在 */
+  INSTALLMENT_NOT_FOUND = 40408,
 
   // ---- 500xx 系统错误 ----
   INTERNAL_ERROR = 50001,

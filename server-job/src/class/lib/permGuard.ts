@@ -8,7 +8,7 @@ import {
   hasAnyRole,
   isFullAccess,
 } from './authUser';
-// ★ 2026-10-07：接口级打通 —— 把「角色-权限分配」的显式改动叠加到本模块的静态写白名单上。
+// ★ 2026-10-07：接口级打通 —— 把「职位权限分配」的显式改动叠加到本模块的静态写白名单上。
 //   见 src/utils/roleActionOverlay.ts 的 §7。
 import {
   preloadRoleActionOverrides,
@@ -26,7 +26,7 @@ import {
  *
  * ★ 2026-10-07 接口级打通：
  *   静态矩阵（本文件的 WRITE_ROLES）仍是**基线**；
- *   管理员在「角色-权限分配」里对该角色做出的**显式改动**会叠加其上
+ *   管理员在「职位权限分配」里对该角色做出的**显式改动**会叠加其上
  *   （撤销 → 接口 403；新增 → 放行）。没被改动过的码，行为与从前完全一致。
  *
  *   对应关系：`requirePerm('student', PermAction.ADD)` → 操作码 `class:student:add`
@@ -150,7 +150,7 @@ function staticCan(resource: string, action: PermAction, user: AuthUser): boolea
  * 是否允许（静态白名单 ∪ 权限树的显式改动）
  *
  * ★ 2026-10-07 起为 async：先去预热叠加层缓存（15s TTL，热态零查库成本），
- *   再把「角色-权限分配」里的显式撤销/授权叠加上去。
+ *   再把「职位权限分配」里的显式撤销/授权叠加上去。
  */
 export async function can(
   resource: string,
@@ -189,7 +189,7 @@ export function requirePerm(resource: string, action: PermAction) {
  *    别改成 WRITE_FULL_ACCESS_ROLES，那样学管就批不了了。
  *
  * ⚠️ 本守卫不参与权限树叠加：它是「审批链的角色门槛」，
- *    与「角色-权限分配」里的动作勾选是两件事（审批权由审批流定义）。
+ *    与「职位权限分配」里的动作勾选是两件事（审批权由审批流定义）。
  */
 export function requireApprover() {
   return (req: Request, _res: Response, next: NextFunction): void => {

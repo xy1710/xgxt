@@ -21,10 +21,12 @@ import {
   FormalPayMode,
   SourceModule,
   ConsultFeeStatus,
+  CONSULT_FEE_STATUS_NAME,
+  ConsultRole,
   nameOf,
 } from 'shared-types/consult';
 import type { ConsultToFormalResult } from 'shared-types/consult';
-import { FEE_ORDER_TABLE } from '../services/fee-order.service';
+import { FEE_ORDER_TABLE, parseOrderItemDetail } from '../services/fee-order.service';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
@@ -43,15 +45,23 @@ import {
   today,
 } from '../services/student.service';
 import { changeState, syncStudentStatusOnly } from '../services/state.service';
+import { terminateStudentPlans } from '../services/installment.service';
 import {
   getStudentFeeStatMap,
   checkFullFeeArrived,
   createFees,
+  createCombinedFees,
   getSupplementPlan,
   centToYuan,
 } from '../services/fee-order.service';
 import { listConsultants } from '../services/account.service';
 import { financeClient } from '../services/finance.client';
+// ★ 2026-10-16 数据范围：咨询师只看/只操作自己名下的学生
+import {
+  applyStudentScope,
+  assertStudentInScope,
+  guardOwnStudent,
+} from '../services/data-scope';
 // ★ 2026-10-05：入班 = 推送到班级管理模块（上游 → 班级 的统一出口）
 import { classSync } from '../../utils/classSync';
 
@@ -89,6 +99,7 @@ const listSchema = z.object({
   sourceChannel: z.coerce.number().int().optional(),
   intendCourse: z.string().optional(),
   consultState: z.coerce.number().int().optional(),
+  deptCode: z.coerce.number().int().optional(),
   keyword: z.string().optional(),
 });
 
@@ -100,6 +111,9 @@ studentRouter.get(
 
     const query = db(STUDENT_TABLE).where('is_deleted', false);
 
+    // ★ 2026-10-16 数据范围：咨询师只看分配给自己的（＋自己录入还没分配的）
+    applyStudentScope(query, req.user);
+
     if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
     if (q.phone) query.andWhere('phone', 'like', `%${q.phone}%`);
     if (q.ownerName) query.andWhere('owner_name', 'like', `%${q.ownerName}%`);
@@ -107,6 +121,8 @@ studentRouter.get(
     if (q.sourceChannel) query.andWhere('source_channel', q.sourceChannel);
     if (q.intendCourse) query.andWhere('intend_course', 'like', `%${q.intendCourse}%`);
     if (q.consultState) query.andWhere('consult_state', q.consultState);
+    // ★ 2026-10-15 部门筛选（前端「全部部门」下拉）：1=初高部 2=大学部
+    if (q.deptCode) query.andWhere('dept_code', q.deptCode);
 
     // 全字段模糊搜索（对应原型的「全部字段」搜索）
     if (q.keyword) {
@@ -155,6 +171,8 @@ studentRouter.get(
     if (!row) {
       throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     }
+    // ★ 2026-10-16 数据范围：咨询师不能看别人名下的学生
+    assertStudentInScope(row, req.user);
 
     const detail = toDetail(row);
     const history = await listHistory(id);
@@ -164,20 +182,128 @@ studentRouter.get(
       .where({ consult_student_id: id, is_deleted: false })
       .orderBy('create_time', 'desc');
 
-    const fees = feeRows.map((r) => ({
-      orderId: r.id,
-      orderNo: r.order_no,
-      feeType: r.fee_type,
-      amount: r.amount,
-      amountYuan: centToYuan(r.amount),
-      status: r.status,
-      voucherUrl: r.voucher_url || undefined,
-      createTime: formatTime(r.create_time),
-    }));
+    /**
+     * ★ 2026-10-16 用户口径：学生档案里的「缴费单」只保留【总金额】一行，
+     *    总金额下面再列出它包含的费用项。
+     *
+     *   一次勾选多项费用发起收费时，库里是「一张单据一个费用类型」（同 batch_no），
+     *   照原样平铺会出现 学费/住宿费/押金/保险费/餐费/校服 六行，同一张凭证重复六次。
+     *   → 这里按 batch_no 合并成一行：金额 = 合计（总金额），凭证 = 共享凭证，
+     *     included 列出包含的费用项，前端挂在总金额下面显示。
+     *   （单张合并单本身就带 item_detail 的，也按 item_detail 展开成子项）
+     */
+    const grouped = new Map<string, any[]>();
+    for (const r of feeRows) {
+      const key = String(r.batch_no || r.id);
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(r);
+    }
+
+    const fees: any[] = [...grouped.values()].map((rows) => {
+      /**
+       * 代表单据：优先「学费」，其次单号最小的那张。
+       * （批次里 6 张单据的创建时间相同，直接取第一张会随机命中「保险费」这种，
+       *   展示成「保险费 等 6 项」很怪 —— 学费才是这笔钱的主体。）
+       */
+      const sorted = [...rows].sort((a, b) =>
+        String(a.order_no || '').localeCompare(String(b.order_no || '')),
+      );
+      const main = sorted.find((r) => Number(r.fee_type) === FeeType.TUITION) || sorted[0];
+      const amount = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+      // 状态取「最差的一档」（与收款与缴费列表口径一致）
+      const statuses = rows.map((r) => Number(r.status));
+      const status = statuses.includes(ConsultFeeStatus.REJECTED)
+        ? ConsultFeeStatus.REJECTED
+        : statuses.includes(ConsultFeeStatus.NO_VOUCHER)
+          ? ConsultFeeStatus.NO_VOUCHER
+          : statuses.includes(ConsultFeeStatus.PENDING)
+            ? ConsultFeeStatus.PENDING
+            : ConsultFeeStatus.ARRIVED;
+
+      // 单张合并单：子项取 item_detail；多张单据：子项就是各张单据本身
+      const detailItems =
+        rows.length === 1 ? parseOrderItemDetail(main.item_detail) : [];
+
+      const included =
+        detailItems.length > 0
+          ? detailItems.map((i: any) => ({
+              // ★ 2026-10-19 带上类型码：前端要判断「同一费用项被重复发起」
+              feeType: Number(i.feeType) || undefined,
+              feeTypeName: i.feeTypeName || nameOf(FEE_TYPE_NAME, i.feeType),
+              amountYuan: centToYuan(i.amount),
+              status,
+              statusName: nameOf(CONSULT_FEE_STATUS_NAME, status),
+            }))
+          : sorted.map((r) => ({
+              feeType: Number(r.fee_type) || undefined,
+              feeTypeName: nameOf(FEE_TYPE_NAME, r.fee_type),
+              amountYuan: centToYuan(r.amount),
+              status: Number(r.status),
+              statusName: nameOf(CONSULT_FEE_STATUS_NAME, Number(r.status)),
+              orderId: r.id,
+            }));
+
+      const firstTypeName = included[0]?.feeTypeName || nameOf(FEE_TYPE_NAME, main.fee_type);
+
+      return {
+        orderId: main.id,
+        orderNo: rows.length > 1 ? `${main.order_no} 等 ${rows.length} 单` : main.order_no,
+        orderIds: rows.map((r) => r.id),
+        /**
+         * ★ 2026-10-19 分期单标记：分期每一期都是同一个费用项，
+         *    不能当成「重复收费」，也不在档案里给作废入口（撤期要回到分期计划里处理）。
+         */
+        planId: main.plan_id || undefined,
+        stageNo: main.stage_no ?? undefined,
+        feeTypeName:
+          included.length > 1 ? `${firstTypeName} 等 ${included.length} 项` : firstTypeName,
+        amount,
+        amountYuan: centToYuan(amount),
+        status,
+        statusName: nameOf(CONSULT_FEE_STATUS_NAME, status),
+        // 凭证：整批共用一张，取第一张有值的
+        voucherUrl: rows.map((r) => r.voucher_url).find(Boolean) || undefined,
+        createTime: formatTime(main.create_time),
+        /** 总金额下面列出的费用项 */
+        included,
+      };
+    });
+
+    /**
+     * ★ 2026-10-19 疑似重复收费标注（用户反馈「怎么能缴费好几次」）
+     *
+     * 现象：同一个费用项同时挂在两张【未终结】的单据上，学生档案里就是两组一样的金额，
+     *       老师无法判断哪一张是真的。
+     * 口径：只对「未到账」的单据做标注 —— 已到账之后再补收差额是合法的，不算重复。
+     * 前端把 duplicated=true 的行标红，提示「疑似重复发起，请作废多余的一批」。
+     */
+    const openTypeCount = new Map<number, number>();
+    for (const f of fees) {
+      if (f.status === ConsultFeeStatus.ARRIVED) continue;
+      if (f.planId) continue; // 分期各期本来就重复同一费用项，不算重复收费
+      for (const it of f.included) {
+        if (!it.feeType) continue;
+        openTypeCount.set(it.feeType, (openTypeCount.get(it.feeType) || 0) + 1);
+      }
+    }
+    for (const f of fees) {
+      if (f.status === ConsultFeeStatus.ARRIVED) continue;
+      if (f.planId) continue;
+      const dupTypes = [
+        ...new Set(
+          f.included
+            .filter((it: any) => it.feeType && (openTypeCount.get(it.feeType) || 0) > 1)
+            .map((it: any) => it.feeTypeName),
+        ),
+      ] as string[];
+      if (dupTypes.length) {
+        f.duplicated = true;
+        f.duplicatedTypes = dupTypes;
+      }
+    }
 
     // 退费单
-    const refundRow: any = await db('t_consult_refund')
-      .where({ consult_student_id: id, is_deleted: false })
+    const refundRow: any = await db('t_consult_refund')      .where({ consult_student_id: id, is_deleted: false })
       .orderBy('create_time', 'desc')
       .first();
 
@@ -215,7 +341,11 @@ const addSchema = z.object({
   phone: z.string().min(1, '手机号必填').max(20),
   sourceChannel: z.coerce.number().int().min(1).max(9, '来源渠道取值非法'),
   sourceRemark: optionalStr(100),
-  intendCourse: z.string().min(1, '意向课程必填').max(100),
+  // ★ 2026-10-15 来源=转介绍(3)时填写的招生老师信息
+  referrerName: optionalStr(50),
+  referrerPhone: optionalStr(20),
+  // ★ 2026-10-15 表单已取消「意向课程」输入框，改为选填，避免旧调用方被必填校验挡住
+  intendCourse: optionalStr(100),
   parentContact: optionalStr(50),
   parentPhone: optionalStr(20),
   deptCode: z.coerce.number().int().min(1).max(2).optional(),
@@ -247,12 +377,23 @@ studentRouter.post(
       phone: body.phone,
       source_channel: body.sourceChannel,
       source_remark: body.sourceRemark ?? null,
-      intend_course: body.intendCourse,
+      // ★ 2026-10-15 转介绍招生老师（仅来源=转介绍时前端会传）
+      referrer_name: body.sourceChannel === 3 ? body.referrerName ?? null : null,
+      referrer_phone: body.sourceChannel === 3 ? body.referrerPhone ?? null : null,
+      intend_course: body.intendCourse ?? null,
       parent_contact: body.parentContact ?? null,
       parent_phone: body.parentPhone ?? null,
       dept_code: body.deptCode ?? DeptCode.JUNIOR_SENIOR,
       // 新学生默认「待分配」，等经理分配跟进人
       consult_state: ConsultState.WAIT_ASSIGN,
+      /**
+       * ★ 2026-10-16 咨询师自己录入的先挂到自己名下
+       *    —— 否则「咨询师只看分配给自己的学生」这条规则下，
+       *      他刚录完的学生会立刻从列表里消失（体验上像数据丢了）。
+       *      经理后续仍可以在待分配里改派给别人。
+       */
+      owner_name: operator.role === ConsultRole.CONSULT ? operator.userName : null,
+      owner_title: operator.role === ConsultRole.CONSULT ? '咨询师' : null,
       student_status: 1,
       is_deleted: false,
       create_time: new Date(),
@@ -294,6 +435,7 @@ const extraSchema = z.object({
 studentRouter.put(
   '/update-extra',
   validate(extraSchema),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof extraSchema>;
     const operator = req.user!;
@@ -368,13 +510,17 @@ studentRouter.post(
 );
 
 /* ============================================================
- * 6. 经理本人接待认领
+ * 6. 本人接待认领
  *    POST /api/consult/student/claim
+ *
+ * ★ 2026-10-16：原来只有经理能「认领」（requireManager），
+ *   但前端给咨询师也显示了「领取」按钮 —— 咨询师点了必 403。
+ *   按新口径（咨询师负责分配给自己的学生），认领 = 自己接手，
+ *   所以改成「谁都能认领，owner 记成本人」。经理保留「（本人接待）」后缀。
  * ============================================================ */
 
 studentRouter.post(
   '/claim',
-  requireManager,
   validate(z.object({ consultStudentId: z.string().min(1) })),
   wrap(async (req, res) => {
     const { consultStudentId } = (req as any).validated as { consultStudentId: string };
@@ -383,14 +529,25 @@ studentRouter.post(
     const stu = await findStudent(consultStudentId);
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
-    const ownerLabel = `${operator.userName}（本人接待）`;
+    if (stu.consult_state !== ConsultState.WAIT_ASSIGN) {
+      throw new BizError(
+        BizCode.INVALID_STATUS,
+        `只有「待分配」的学生可以认领，当前状态不是待分配`,
+      );
+    }
+
+    const isMgr = operator.role !== ConsultRole.CONSULT;
+    const ownerLabel = isMgr ? `${operator.userName}（本人接待）` : operator.userName;
 
     await changeState(consultStudentId, ConsultState.WAIT_INTERVIEW, {
       byName: operator.userName,
       byTitle: operator.roleTitle,
       action: 'CLAIM',
-      historyText: '经理本人接待并跟进',
-      extraFields: { owner_name: ownerLabel, owner_title: '咨询经理' },
+      historyText: isMgr ? '经理本人接待并跟进' : '咨询师本人接待认领并跟进',
+      extraFields: {
+        owner_name: ownerLabel,
+        owner_title: isMgr ? '咨询经理' : '咨询师',
+      },
     });
 
     res.json(ok(null, '已接待认领，状态 → 待面试'));
@@ -411,6 +568,7 @@ studentRouter.post(
       remark: optionalStr(200),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as {
       consultStudentId: string;
@@ -461,6 +619,7 @@ studentRouter.post(
       className: z.string().min(1, '请选择班级').max(50),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as { consultStudentId: string; className: string };
     const operator = req.user!;
@@ -518,6 +677,7 @@ studentRouter.post(
       lossReason: z.string().min(1, '请选择流失原因').max(200),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as { consultStudentId: string; lossReason: string };
     const operator = req.user!;
@@ -532,6 +692,9 @@ studentRouter.post(
       historyText: `不试学，流失原因：${body.lossReason}`,
       extraFields: { loss_reason: body.lossReason },
     });
+
+    /* ★ 2026-10-16 分期：流失学生的尾款不再收，终止在途分期计划 */
+    await terminateStudentPlans(body.consultStudentId, `学生流失：${body.lossReason}`);
 
     res.json(ok(null, '已记录流失并计入流失率'));
   }),
@@ -558,6 +721,7 @@ studentRouter.post(
       followUpPlan: z.string().max(300).optional(),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as {
       consultStudentId: string;
@@ -600,6 +764,7 @@ studentRouter.post(
       remark: z.string().max(200).optional(),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as { consultStudentId: string; remark?: string };
     const operator = req.user!;
@@ -632,7 +797,7 @@ studentRouter.post(
  *     POST /api/consult/student/cancel-not-enrolled
  *
  * 用户口径：还未报名的（被记了「未报名·待跟进」），可以取消掉 ——
- * 取消后回到「试学费·待确认」（报名确认态），直接重走缴费报名流程。
+ * 取消后回到「咨询中」（报名确认态），直接重走缴费报名流程。
  *
  * ★ 2026-10-08 二次调整：不再回「待面试」——面试结果只能录一次，
  *   取消未报名是「学生又愿意报了」，不是「要重新面试」，
@@ -647,6 +812,7 @@ studentRouter.post(
       remark: z.string().max(200).optional(),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as { consultStudentId: string; remark?: string };
     const operator = req.user!;
@@ -739,14 +905,26 @@ studentRouter.post(
     z.object({
       consultStudentId: z.string().min(1),
       payMode: z.enum(['FULL', 'INSTALLMENT']).optional().default('FULL'),
-      feeTypes: z.array(z.coerce.number().int().min(1).max(5)).optional(),
+      // ★ 2026-10-15：上限 5 → 7（押金 / 校服）
+      feeTypes: z.array(z.coerce.number().int().min(1).max(7)).optional(),
+      /**
+       * ★ 2026-10-19 用户口径：「只要缴费就要有凭证」。
+       *    转正式会真的建缴费单，凭证必传；
+       *    但「咨询侧无待发起款项」的 noop 分支不建单，所以这里放可选，
+       *    真正建单前由 service 兜底拦截。
+       */
+      voucherUrl: z.string().optional(),
+      voucherNo: z.string().max(100).optional(),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as {
       consultStudentId: string;
       payMode: FormalPayMode;
       feeTypes?: FeeType[];
+      voucherUrl?: string;
+      voucherNo?: string;
     };
     const { consultStudentId, payMode } = body;
     const operator = req.user!;
@@ -870,12 +1048,36 @@ studentRouter.post(
     }
 
     // ---- 3. 建单（金额取财务标准，规则2；来源校验，规则3-①）----
-    const result = await createFees(
-      consultStudentId,
-      ownedByConsult,
-      { name: operator.userName, title: operator.roleTitle },
-      stu.pay_mode || undefined,
-    );
+    /**
+     * ★ 2026-10-19 用户口径：「一张凭证就是交的总金额，总金额下面列小列」
+     *
+     * 以前这里走 createFees —— 勾 4 个类型就建 4 张单，
+     * 家长只转了一笔钱，系统里却出现 4 条缴费记录、4 个凭证位置，
+     * 学生档案里看着像「缴了好几次」。
+     *
+     * 现在：多类型一律合并成【一张合计单】，各项金额存 item_detail，
+     *       财务侧也只有 1 笔待核对，金额 = 凭证上的金额。
+     */
+    const result =
+      ownedByConsult.length > 1
+        ? await createCombinedFees(
+            consultStudentId,
+            ownedByConsult,
+            { name: operator.userName, title: operator.roleTitle },
+            stu.pay_mode || undefined,
+            undefined,
+            body.voucherUrl,
+            body.voucherNo,
+          )
+        : await createFees(
+            consultStudentId,
+            ownedByConsult,
+            { name: operator.userName, title: operator.roleTitle },
+            stu.pay_mode || undefined,
+            undefined,
+            body.voucherUrl,
+            body.voucherNo,
+          );
 
     const okList = result.created.filter((c) => c.success);
     if (!okList.length) {
@@ -918,12 +1120,30 @@ studentRouter.post(
           .join('、')}`
       : '';
 
+    /**
+     * ★ 2026-10-19 文案跟着「一张合计单」改
+     *    合并后 okList 只有 1 条，「1 笔已发起」会让人以为只发了一类费用，
+     *    所以要说清：一张单、合计多少钱、里面包含哪几项。
+     */
+    const merged = ownedByConsult.length > 1;
+    const fullMsg = merged
+      ? `已发起 1 笔合计收费 ¥${centToYuan(paidAmount)}（${ownedByConsult
+          .map((t) => nameOf(FEE_TYPE_NAME, t))
+          .join('/')}），请上传缴费截图${otherTip}`
+      : `1 笔已发起，请上传缴费截图${otherTip}`;
+
     const msg =
       payMode === 'FULL'
-        ? `${okList.length} 笔已发起，请上传缴费截图${otherTip}`
-        : `已发起补缴 ${okList.length} 笔（${paidNames}），仍缺 ${
-            planAfter.missing.map((t) => nameOf(FEE_TYPE_NAME, t)).join('/') || '无'
-          }${otherTip}`;
+        ? fullMsg
+        : merged
+          ? `已发起 1 笔合计补缴 ¥${centToYuan(paidAmount)}（${ownedByConsult
+              .map((t) => nameOf(FEE_TYPE_NAME, t))
+              .join('/')}），仍缺 ${
+              planAfter.missing.map((t) => nameOf(FEE_TYPE_NAME, t)).join('/') || '无'
+            }${otherTip}`
+          : `已发起补缴 1 笔（${paidNames}），仍缺 ${
+              planAfter.missing.map((t) => nameOf(FEE_TYPE_NAME, t)).join('/') || '无'
+            }${otherTip}`;
 
     const payload: ConsultToFormalResult = {
       ...result,
@@ -975,12 +1195,11 @@ studentRouter.post(
     z.object({
       consultStudentId: z.string().min(1),
       accepted: z.coerce.boolean(),
-      /** 接收时的下一歩：是否当场报名（2026-10-08 口径：面试结果直接确定报名还是没报） */
       enrolled: z.coerce.boolean().optional(),
-      /** 不收 / 未报名的原因（可选，用于复盘） */
       reason: z.string().max(200).optional(),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const body = (req as any).validated as {
       consultStudentId: string;
@@ -1033,7 +1252,7 @@ studentRouter.post(
       return;
     }
 
-    // ★ 2026-10-08 面试通过 + 当场报名 → 流转到「试学费·待确认」。
+    // ★ 2026-10-08 面试通过 + 当场报名 → 流转到「咨询中」（缴费阶段）。
     //    状态离开「待面试」，前端「面试」按钮自然消失（杜绝重复面试）；
     //    下一步：到「收费与到账」发起试学费收费，到账后可分班进试学。
     await changeState(body.consultStudentId, ConsultState.TRIAL_FEE_PENDING, {
@@ -1127,7 +1346,7 @@ const ASSIGN_STATE_TEXT: Record<AssignState, string> = {
   pending: '已推送，待班主任接收',
   received: '已接收（已入班）',
   rejected: '已被驳回，可重新分班',
-  jh: '已直接进入初高班级',
+  jh: '已进入初高班级',
   unknown: '分班状态未知',
 };
 
@@ -1207,10 +1426,7 @@ async function assignBlockReason(stu: Record<string, any>): Promise<string | nul
   const no = consultNoOf(stu);
   const [univ, jh] = await Promise.all([classSync.consultStatus([no]), classSync.jhEnrolledStatus([no])]);
 
-  const j = (jh.ok ? jh.data : {}) as Record<string, any>;
-  if (j[no]) {
-    return `「${stu.student_name}」已直接进入教学管理（初高）「${j[no].className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`;
-  }
+  // ★ 2026-10-19：先看推送单（初高现在也走推送，pending/received 都在这里）
   const u = (univ.ok ? univ.data : {}) as Record<string, any>;
   const hit = u[no];
   if (hit) {
@@ -1223,8 +1439,21 @@ async function assignBlockReason(stu: Record<string, any>): Promise<string | nul
     }
     // st === 3（已驳回）→ 放行，允许重新分派
   }
+
+  // 历史上「初高直建入班」的老数据没有推送单 → 仍按初高学籍表兜底拦一次
+  const j = (jh.ok ? jh.data : {}) as Record<string, any>;
+  if (j[no]) {
+    return `「${stu.student_name}」已进入教学管理（初高）「${j[no].className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`;
+  }
   return null;
 }
+
+/**
+ * 全款是否已缴清 —— 已抽到 `services/fee-order.service#isFullFeeSettled`
+ *
+ * ★ 2026-10-20：接收建档（class 侧 doReceive）也要问同一个判断，
+ *   放在 service 里两边共用，避免两套口径打架。
+ */
 
 studentRouter.post(
   '/enroll-to-class',
@@ -1237,6 +1466,7 @@ studentRouter.post(
       module: z.enum(['class', 'class-jh']).optional(),
     }),
   ),
+  guardOwnStudent,
   wrap(async (req, res) => {
     const { id, classId, module } = (req as any).validated as {
       id: string;
@@ -1250,17 +1480,19 @@ studentRouter.post(
 
     // ---- ★ 2026-10-09 退费中的/已退费的学生不可再分班 ----
     //    用户口径：已经退费是不可以再分班的（收款单还是「已到账」，但人已经退出流程）
+    //    ★ 2026-10-15 财务退款后学生流转为「流失」，流失学生同样不允许再分班
     const REFUND_BLOCK_STATES = [
       ConsultState.REFUND_MGR,
       ConsultState.REFUND_FINANCE,
       ConsultState.REFUNDED,
+      ConsultState.LOST,
     ];
     if (REFUND_BLOCK_STATES.includes(stu.consult_state)) {
       throw new BizError(
         BizCode.INVALID_STATUS,
         `「${stu.student_name}」当前状态为「${
           (CONSULT_STATE_NAME as any)[stu.consult_state] || stu.consult_state
-        }」，退费流程中/已退费的学生不能再分班`,
+        }」，退费流程中/已退费/流失的学生不能再分班`,
       );
     }
 
@@ -1284,90 +1516,120 @@ studentRouter.post(
       if (blocked) throw new BizError(BizCode.INVALID_STATUS, blocked);
     }
 
-    // ---- 分流：初高 = 直接入班；大学部 = 推「待接收学员」等班主任同意 ----
+    /* ---- 分流：初高 / 大学部 都推「待接收学员」，由对应学段的班主任接收 ----
+     *
+     * ★ 2026-10-20 最终口径（用户确认，两个学段统一）：
+     *   「初高班主任在班级侧点了接收之后，系统会在初高学籍表建档，并回写咨询侧状态。
+     *     大学侧和初高中一样，都需要老师接收之后入班」
+     *
+     *   → 咨询侧**只负责交人**：推送一条「待接收」单，不建档、不推进状态。
+     *     建档 + 回写状态统一在 class 侧 `doReceive` 里做（见 consult.route.ts）：
+     *       接收 → 建档（学籍按钱落到「试学中 / 正式在读」）→ 调咨询内部接口回写状态。
+     *
+     *   ⚠️ 不要在这里恢复「分班即入班」（auto-receive）：
+     *      那会让班主任看不到人就被动入班，与本次口径相反。
+     */
     let result;
     let msg: string;
 
-    // 目标班名（记回咨询侧 + 大学部推送带班名）
+    /**
+     * 目标班属于哪个学段 / 叫什么
+     *
+     * ⚠️ 不能用 `stu.dept_code` 兜底 —— 那是**学生自己的部门**，
+     *    咨询库里一个初高意向的学生可以被分到大学班（实测踩过：
+     *    dept_code=1 的学生分到 U2601，推送单标成初高 → 接收端跑去初高库找人
+     *    → 「目标班级不存在」）。
+     *   所以两个学段的开放班级都查一遍，**以班级实际归属为准**。
+     */
     let targetName: string | null = null;
+    let targetDept: number | null = null;
     if (classId) {
-      if (module === 'class-jh') {
-        // 初高 toClassInfo 字段是 { classId, className }
-        const jh = (await classSync.classJhOpenOptions()).data as any[] | undefined;
-        targetName = jh?.find((c: any) => c.classId === classId)?.className ?? null;
+      const [jhOpt, univOpt] = await Promise.all([
+        classSync.classJhOpenOptions(),
+        classSync.classOpenOptions(),
+      ]);
+      const jhHit = ((jhOpt.data as any[]) || []).find((c: any) => c.classId === classId);
+      if (jhHit) {
+        targetName = jhHit.className ?? null;
+        targetDept = 1;
       } else {
-        // 大学部 toClassItem 是 rowToCamel 展开：{ id, className }
-        const univ = (await classSync.classOpenOptions()).data as any[] | undefined;
-        targetName = univ?.find((c: any) => c.id === classId)?.className ?? null;
+        const univHit = ((univOpt.data as any[]) || []).find((c: any) => c.id === classId);
+        if (univHit) {
+          targetName = univHit.className ?? null;
+          targetDept = 2;
+        }
       }
     }
+    const isJhTarget = targetDept === 1;
 
-    if (classId && module === 'class-jh') {
-      // 初高侧的目标班级必须是「初高的开放班级」——直接把 classId 传给初高，
-      // 那边 loadClass + 封班校验兜底（classId 对不上初高库会报班级不存在）
-      result = await classSync.consultCreateJh({
+    result = await classSync.consultPush([
+      {
         consultNo,
         studentName: stu.student_name,
-        gender: stu.gender ?? undefined,
+        gender: stu.gender ?? null,
         phone: stu.phone || null,
         parentPhone: stu.parent_phone || null,
         age: stu.age ?? null,
-        school: stu.school || null,
-        address: stu.address || null,
-        classId,
+        // 学历字段咨询侧没有，留空由班主任接收时补
+        origin: stu.source_remark || null,
+        graduateSchool: stu.school || null,
+        homeAddress: stu.address || null,
+        // ★ 目标学段：初高 1 / 大学部 2（接收端据此决定往哪个库建档）
+        //   以「目标班级实际归属」为准，查不到才退回学生自己的部门
+        intendDeptCode: targetDept ?? (stu.dept_code ?? null),
+        intendClassId: classId ?? (stu.class_id || null),
+        intendClassName: targetName ?? (stu.class_name || null),
         remark: stu.remark || null,
-      });
-      if (!result.ok) {
-        throw new BizError(
-          BizCode.DOWNSTREAM_ERROR,
-          `分班到教学管理（初高）失败：${result.message}`,
-        );
-      }
-      const dup = Boolean((result.data as any)?.duplicate);
-      msg = dup
-        ? `「${stu.student_name}」已在初高「${targetName ?? '对应班级'}」里了（未重复建档）`
-        : `「${stu.student_name}」已直接进入教学管理（初高）「${targetName ?? '对应班级'}」`;
-    } else {
-      result = await classSync.consultPush([
-        {
-          consultNo,
-          studentName: stu.student_name,
-          gender: stu.gender ?? null,
-          phone: stu.phone || null,
-          parentPhone: stu.parent_phone || null,
-          age: stu.age ?? null,
-          // 学历字段咨询侧没有，留空由班主任接收时补
-          origin: stu.source_remark || null,
-          graduateSchool: stu.school || null,
-          homeAddress: stu.address || null,
-          intendDeptCode: stu.dept_code ?? null,
-          intendClassId: classId ?? (stu.class_id || null),
-          intendClassName: targetName ?? (stu.class_name || null),
-          remark: stu.remark || null,
-          pushTime: formatTime(new Date()),
-        },
-      ]);
+        pushTime: formatTime(new Date()),
+        // ★ 2026-10-19：「意向阶段」已删除，不再往推送单里塞 intendStage
+      },
+    ]);
 
-      // 用户点出来的动作 → 失败必须让他知道（不能像财务那样静默记日志）
-      if (!result.ok) {
-        throw new BizError(
-          BizCode.DOWNSTREAM_ERROR,
-          `推送到班级管理失败：${result.message}。请确认班级管理模块已启动（CLASS_URL），或联系学管模块负责人。`,
-        );
-      }
-
-      const inserted = Number(result.data?.inserted ?? 0);
-      const skipped = Number(result.data?.skipped ?? 0);
-      const reopened = Number(result.data?.reopened ?? 0);
-      msg =
-        reopened > 0
-          ? `已把「${stu.student_name}」重新推送到班级管理的「待接收学员」（原驳回单已重新激活），请班主任重新接收`
-          : inserted > 0
-            ? `已把「${stu.student_name}」推送到班级管理的「待接收学员」，请班主任接收并建档`
-            : `「${stu.student_name}」已在班级管理的「待接收学员」里了（未重复推送）`;
+    // 用户点出来的动作 → 失败必须让他知道（不能像财务那样静默记日志）
+    if (!result.ok) {
+      throw new BizError(
+        BizCode.DOWNSTREAM_ERROR,
+        `推送到班级管理失败：${result.message}。请确认班级管理模块已启动（CLASS_URL），或联系学管模块负责人。`,
+      );
     }
 
+    /* ---- ★ 2026-10-20 两个学段完全统一：分班 = 推「待接收」，入班在接收端 ----
+     *
+     *   咨询侧到这里就结束了：**不建档、不推进咨询状态**。
+     *   学生什么时候真正入班、咨询状态什么时候从「待分班」走到「试学中 / 正式在读」，
+     *   统一由 class 侧班主任点「接收」时触发（见 class/modules/consult/consult.route.ts
+     *   的 doReceive：建档 + 调 /internal/receive-ack 回写咨询状态）。
+     *
+     *   ⚠️ 不要再加「大学部分班即入班」的分支 —— 2026-10-20 用户明确要求
+     *      「大学侧和初高中一样，都需要老师接收之后入班」。
+     */
+    const inserted = Number(result.data?.inserted ?? 0);
+    const skipped = Number(result.data?.skipped ?? 0);
+    const reopened = Number(result.data?.reopened ?? 0);
+    const where = isJhTarget ? '教学管理（初高）' : '班级管理（大学部）';
+    msg = reopened > 0
+      ? `已把「${stu.student_name}」重新推送到${where}的「待接收学员」（原驳回单已重新激活），请班主任重新接收`
+      : inserted > 0
+        ? `已把「${stu.student_name}」推送到${where}的「待接收学员」，请班主任接收并建档`
+        : `「${stu.student_name}」已在${where}的「待接收学员」里了（未重复推送）`;
+
     await addHistory(id, operator.userName, `分班：${msg}`, operator.roleTitle, 'ENROLL_TO_CLASS');
+
+    /* ---- ★ 2026-10-16 分期：首付到账即可分班，但尾款没缴清的要提醒 ----
+     *
+     *    用户口径：分期的学生首付到账就能分班，尾款挂在待缴余额里继续收。
+     *    这里在分班历史后面补一条欠费提醒，避免老师忘了还有钱没收。
+     */
+    const arrear = Number(stu.arrear_amount || 0);
+    if (arrear > 0) {
+      await addHistory(
+        id,
+        operator.userName,
+        `该学生为分期缴费，尚有尾款 ¥${(arrear / 100).toFixed(2)} 未缴清，请跟进催收`,
+        operator.roleTitle,
+        'CHARGE',
+      );
+    }
 
     // ---- 分班后把目标班级记回咨询侧（学生列表/缴费单可见） ----
     if (classId) {
@@ -1376,12 +1638,16 @@ studentRouter.post(
         .update({ class_id: classId, class_name: targetName, update_time: new Date() });
     }
 
-    const inserted = Number(result.data?.inserted ?? 0);
-    const skipped = Number(result.data?.skipped ?? 0);
-    const reopened = Number(result.data?.reopened ?? 0);
-    // ★ 初高分班直建时透传 duplicate（true=已入档未重复建）
-    const duplicate = Boolean((result.data as any)?.duplicate);
-    res.json(ok({ consultNo, inserted, skipped, reopened, duplicate }, msg));
+    /* ---- ★ 2026-10-20 状态推进挪到「接收」时刻 ----
+     *
+     *   之前大学部是分班即入班，所以在这里把状态从「待分班(4)」推到
+     *   「试学中(5) / 正式在读(7)」。现在两个学段都等班主任接收后才入班，
+     *   人还没进班就把状态改了会出现「试学中但班级里没有这个人」，
+     *   所以状态的推进统一在 class 侧接收成功后回调
+     *   `/api/consult/student/internal/receive-ack` 完成。
+     */
+
+    res.json(ok({ consultNo, inserted, skipped, reopened, duplicate: false }, msg));
   }),
 );
 

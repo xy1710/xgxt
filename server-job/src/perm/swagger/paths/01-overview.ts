@@ -53,10 +53,10 @@
  *                       example: 53
  *                     deptTotal:
  *                       type: integer
- *                       example: 7
+ *                       example: 6
  *                     stageTotal:
  *                       type: integer
- *                       example: 3
+ *                       example: 5
  *                     recentLogs:
  *                       type: array
  *                       items:

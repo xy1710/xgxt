@@ -23,11 +23,22 @@ import { BizError } from '../middleware/errorHandler';
 import { fmtDate } from '../utils/date';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
 import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
+// ★ 2026-10-16：姓名可手填 → 复用「按姓名尽量匹配学生」的共用逻辑
+import { resolveStudentByName } from '../utils/studentResolve';
+// ★ 2026-10-16：班级下拉选项（只读，就业老师也有权限）
+import { listJobClassOptions } from './shared/jobClassOptions';
 
 export const employmentLogRouter = Router();
 
 const TABLE = 't_employment_log';
 const STUDENT = 't_student_base';
+
+/* ============================================================
+ * 0. 班级下拉选项（只读）
+ *    ⚠️ 不要改用 /api/job/class/options —— 就业老师没有「班级管理」页面权限，
+ *       调用会 403（前端弹「您没有该操作的权限」）。详见 routes/shared/jobClassOptions.ts
+ * ============================================================ */
+employmentLogRouter.get('/classes', listJobClassOptions);
 
 const SELECT_FIELDS = [
   'id', 'student_id', 'student_no', 'student_name', 'class_name',
@@ -60,12 +71,13 @@ function toVo(r: any) {
  * 1. 列表查询（含搜索/筛选）
  *    GET /api/job/employment-log/list?studentName=张&company=字节&startDate=&endDate=
  * ============================================================ */
-
 const listSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   size: z.coerce.number().int().min(1).max(100).default(20),
   studentId: z.string().optional(),
   studentName: z.string().optional(),
+  // ★ 2026-10-16：班级筛选下拉
+  classId: z.string().optional(),
   company: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
@@ -80,9 +92,20 @@ employmentLogRouter.get(
     const query = db(TABLE).where('is_deleted', false);
     // ★ t_employment_log 挂在「学生」身上，没有 class_id 列
     //   → via='student'：换成一串「我班上的学生 id」再过滤
-    await applyTrainingScope(query, req, { table: TABLE, via: 'student' });
+    // ★ 2026-10-16 补 ownCreatedBy：姓名可手填 → 匹配不到学生的日志 student_id 为 NULL，
+    //   若只按 student_id 过滤，建单人（就业老师/项目经理）自己反而看不到。
+    //   → 额外放行「我自己创建的」记录。
+    await applyTrainingScope(query, req, { table: TABLE, via: 'student', ownCreatedBy: true });
 
     if (q.studentId) query.andWhere('student_id', q.studentId);
+    // ★ 2026-10-16：班级筛选 —— 日志表没有 class_id（只有 class_name 快照），
+    //   所以经 student_id 反查「当前在该班的学生」。学生调过班也能按新班查到。
+    if (q.classId) {
+      query.whereIn(
+        'student_id',
+        db(STUDENT).select('id').where('class_id', q.classId).where('is_deleted', false),
+      );
+    }
     if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
     if (q.company) query.andWhere('company', 'like', `%${q.company}%`);
     if (q.startDate) query.andWhere('log_date', '>=', q.startDate);
@@ -113,6 +136,12 @@ employmentLogRouter.get(
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
 
+    // ★ 2026-10-16：详情也要过数据范围，否则拿到 id 就能绕过列表看别人的日志。
+    //   不通过时统一抛「不存在」，避免暴露"这条记录存在但你没权限"。
+    const guard: any = db(TABLE).where({ id, is_deleted: false });
+    await applyTrainingScope(guard, req, { table: TABLE, via: 'student', ownCreatedBy: true });
+    if (!(await guard.first())) throw new BizError(BizCode.PARAM_ERROR, '就业日志不存在');
+
     const row = await db(TABLE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '就业日志不存在');
 
@@ -125,8 +154,15 @@ employmentLogRouter.get(
  *    POST /api/job/employment-log/add
  * ============================================================ */
 
+/**
+ * ★ 2026-10-16：姓名改为可直接手填（原先是「必须从学生下拉里选」）。
+ *   studentId 变成可选；studentName 必填。
+ *   后端会拿姓名去学生库精确匹配：唯一命中就自动关联（带出学号/班级），
+ *   匹配不到、或重名不唯一 → 只存姓名，不关联学生（student_id = NULL）。
+ */
 const addSchema = z.object({
-  studentId: z.string().min(1, '请选择学生'),
+  studentId: z.string().optional(),
+  studentName: z.string().min(1, '请输入姓名').max(50, '姓名最长 50 个字'),
   logDate: z.string().min(1, '请选择日志日期'),
   resumeCount: z.coerce.number().int().min(0).max(999).default(0),
   interviewInvite: z.coerce.number().int().min(0).max(999).default(0),
@@ -144,16 +180,16 @@ employmentLogRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
 
-    const student = await db(STUDENT).where({ id: body.studentId, is_deleted: false }).first();
-    if (!student) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在，请重新选择');
+    // ★ 姓名可直接手填：能唯一匹配到学生就自动关联（带出学号/班级），否则只记姓名
+    const student = await resolveStudentByName(body.studentId, body.studentName);
 
     const id = randomUUID();
     await db(TABLE).insert({
       id,
-      student_id: body.studentId,
-      student_no: student.student_no,
-      student_name: student.student_name,
-      class_name: student.class_name,
+      student_id: student ? student.id : null,
+      student_no: student ? student.student_no : null,
+      student_name: body.studentName,
+      class_name: student ? student.class_name : null,
       log_date: body.logDate,
       resume_count: body.resumeCount,
       interview_invite: body.interviewInvite,
@@ -188,14 +224,14 @@ employmentLogRouter.put(
     const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '就业日志不存在或已被删除');
 
-    const student = await db(STUDENT).where({ id: body.studentId, is_deleted: false }).first();
-    if (!student) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在，请重新选择');
+    // ★ 同新增：姓名可直接手填，能唯一匹配到学生就重新关联
+    const student = await resolveStudentByName(body.studentId, body.studentName);
 
     await db(TABLE).where({ id: body.id }).update({
-      student_id: body.studentId,
-      student_no: student.student_no,
-      student_name: student.student_name,
-      class_name: student.class_name,
+      student_id: student ? student.id : null,
+      student_no: student ? student.student_no : null,
+      student_name: body.studentName,
+      class_name: student ? student.class_name : null,
       log_date: body.logDate,
       resume_count: body.resumeCount,
       interview_invite: body.interviewInvite,

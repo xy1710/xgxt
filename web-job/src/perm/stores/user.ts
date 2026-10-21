@@ -9,7 +9,7 @@
  *         调新增的 /api/perm/auth/profile，后端从 token 里解出「我是谁」。
  *
  * ⚠️ 为什么还要保留 userApi.authProfile？
- *    那个接口是给「用户管理」页的『查看权限』抽屉用的
+ *    那个接口是给「账号管理」页的『查看权限』抽屉用的
  *    —— 管理员查任意账号的权限。和「我是谁」不是一回事，两者并存。
  *
  * 数据来源：GET /api/perm/auth/profile（凭门户 token）
@@ -38,7 +38,7 @@ export const useUserStore = defineStore('perm-user', {
     userName: (s): string => s.profile?.userName || '未登录',
     /** 登录账号 */
     account: (s): string => s.profile?.account || '',
-    /** 角色名数组（接入门户后，顶栏显示身份头衔） */
+    /** 职位名数组（接入门户后，顶栏显示身份头衔） */
     roleNames: (s): string[] => {
       if (!s.profile) return [];
       return s.profile.isSysAdmin ? ['系统管理员'] : ['权限管理员'];

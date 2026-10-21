@@ -29,7 +29,7 @@ function mapRow(r: Record<string, any>, contents: ExamContentItem[] = []): ExamR
   return {
     id: String(r.id),
     stage: STAGE,
-    stageName: '大学',
+    stageName: '大学部',
     examName: String(r.exam_name ?? ''),
     examType: Number(r.exam_type ?? 0),
     examTypeName: EXAM_TYPE_NAME[Number(r.exam_type)] ?? '未知',

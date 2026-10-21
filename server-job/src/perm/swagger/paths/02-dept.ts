@@ -110,10 +110,10 @@
  *                   properties:
  *                     deptTotal:
  *                       type: integer
- *                       example: 11
+ *                       example: 6
  *                     stageTotal:
  *                       type: integer
- *                       example: 3
+ *                       example: 5
  *                     roleTotal:
  *                       type: integer
  *                       example: 14
@@ -162,7 +162,7 @@
  *     tags:
  *       - 部门管理
  *     summary: 新建部门
- *     description: '权限标识 `perm:角色管理:add`。`deptLevel` 由后端按「上级.deptLevel + 1」计算，前端不传。名称重复返回 40015。'
+ *     description: '权限标识 `perm:职位管理:add`。`deptLevel` 由后端按「上级.deptLevel + 1」计算，前端不传。名称重复返回 40015。'
  *     requestBody:
  *       required: true
  *       content:
@@ -200,7 +200,7 @@
  *     tags:
  *       - 部门管理
  *     summary: 编辑部门
- *     description: '权限标识 `perm:角色管理:edit`。'
+ *     description: '权限标识 `perm:职位管理:edit`。'
  *     requestBody:
  *       required: true
  *       content:
@@ -232,12 +232,12 @@
  *       - 部门管理
  *     summary: 删除部门（逻辑删除）
  *     description: |
- *       权限标识 `perm:角色管理:del`。
+ *       权限标识 `perm:职位管理:del`。
  *
  *       **删除校验顺序**：
  *       1. 校级部门 → 40016 部门被引用
  *       2. 有子部门 → 40017 部门下还有子部门
- *       3. 被角色 / 账号引用 → 40016
+ *       3. 被职位 / 账号引用 → 40016
  *     parameters:
  *       - name: id
  *         in: path

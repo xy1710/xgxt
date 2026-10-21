@@ -27,9 +27,11 @@ import {
   toUnifiedLeaveStatus,
 } from '../shared/conf';
 import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
+import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 import { buildApplyNo } from '../shared/conf';
+import { hydrateWithArchive } from '../shared/studentRef';
 
 const T = 't_class_flow';
 const S = 't_class_student';
@@ -44,31 +46,46 @@ const WS = 'sms_class_jh.t_class_student';
 /** ★ 本域只关心这三类流程（其余 4 类是初高独有，不属于本次合并范围） */
 const IN_SCOPE = [1, 2, 5];
 
-async function decorate(row: Record<string, any>): Promise<LeaveRow> {
+/**
+ * 行装饰（`classNames` = 复学班 id → 班级名，由调用方批量预取）
+ *
+ * ★★ 复学班名（2026-10-16 修）：初高老表 **只有 `resume_class_id`、没有名字列**
+ *   → 原来 `newClassName` 硬写成 `null`，列表「复学班级」列永远是「—」，
+ *     用户以为「我选了复学班但没存上」。其实 id 存得好好的，缺的是把 id 翻成名字。
+ *   → 这里按 id 反查（不过滤 is_deleted，历史单里已软删的班也要显示名字）。
+ */
+async function decorate(
+  row: Record<string, any>,
+  classNames: Record<string, string> = {},
+): Promise<LeaveRow> {
   const biz = (await toUnifiedLeaveBiz(STAGE, row.flow_type)) ?? 0;
   const st = (await toUnifiedLeaveStatus(STAGE, row.flow_status)) ?? 0;
+  const resumeClassId = row.resume_class_id ? String(row.resume_class_id) : null;
 
   return {
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     id: String(row.id),
     bizType: biz,
     bizTypeName: LEAVE_BIZ_TYPE_NAME[biz] || '',
     studentId: String(row.student_id || ''),
     studentNo: String(row.student_no || ''),
     studentName: String(row.student_name || ''),
-    gender: null,
+    // ★ 2026-10-20：本表没有 gender / parent_phone 两列，
+    //   值由 hydrateWithArchive 从学生档案补进来（补不到就保持 null）
+    // ⚠️ 保持与大学/实训一致：原样透传档案值，不在这里做数值转换
+    gender: row.gender ?? null,
     idCard: row.id_card_no || null,
     phone: row.phone || null,
-    parentPhone: null,
+    parentPhone: row.parent_phone || null,
     classId: row.class_id ? String(row.class_id) : null,
     className: row.class_name || null,
     deptName: null,
     headTeacherName: null,
     leaveDate: fmtDate(row.suspend_start_date) || null,
     expectResumeDate: fmtDate(row.expect_resume_date) || null,
-    newClassId: row.resume_class_id ? String(row.resume_class_id) : null,
-    newClassName: null,
+    newClassId: resumeClassId,
+    newClassName: resumeClassId ? classNames[resumeClassId] || null : null,
     leaveReason: String(row.suspend_reason || row.apply_reason || ''),
     attendedHours: row.attended_hours != null ? Number(row.attended_hours) : null,
     relatedRefundNo: null,
@@ -82,9 +99,58 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   };
 }
 
-/** 学生下拉 */
-export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+/**
+ * ★ 未办结的 `flow_status`（**初高原码**）：1 待提交 / 2 待经理 / 5 待校长
+ *
+ * 这三个码对应**统一码** 1 待提交 / 2 待学管 / 3 待校长（初高的「待校长」码是 5，
+ * 不是 3 —— 见 shared/conf 的映射）。
+ * 【为什么要含「待提交」】用户口径是「已有进行中的申请的学生不再出现在下拉里」，
+ *   草稿也是一张没办完的单子；并且**下拉剔除必须与 hasPending 同口径**，
+ *   否则会出现「下拉选得到、提交被拒」的错位。
+ */
+const PENDING_FLOW_STATUS = [1, 2, 5];
+
+/** 有未办结异动单的学生 id（下拉剔除用；与 hasPending 同一口径） */
+async function pendingStudentIds(): Promise<string[]> {
+  const rows = (await tbl(db, SRC, T, STAGE)
+    .where('is_deleted', 0)
+    .whereIn('flow_type', IN_SCOPE)
+    .whereIn('flow_status', PENDING_FLOW_STATUS)
+    .whereNotNull('student_id')
+    .select('student_id')) as Array<Record<string, any>>;
+  // ⚠️ 去重 + 剔空：ids 里混进 NULL 会让 `id NOT IN (..., NULL)` 恒不成立 → 名单整片空掉
+  return [...new Set(rows.map((r) => String(r.student_id || '')).filter(Boolean))];
+}
+
+/**
+ * 学生下拉
+ *
+ * ★ `opts.onlySuspended` = 只挑「当前处于休学」的学生（`student_status = 6`）。
+ *   复学申请必须从休学名单里挑人，否则会出现「给在读生办复学」这种脏数据。
+ * ★ `opts.excludeStatuses` = 剔除这些状态的学生（service 传「终态」：
+ *   退学 7 / 流失 11 / 已就业 10 —— 已经终结、不能再办任何学籍异动）。
+ *   ⚠️ `NOT IN (...) OR IS NULL`：老数据里 `student_status` 可能为 NULL，
+ *      单写 `NOT IN` 会把这类行一起滤掉（NULL NOT IN => NULL => 不成立）。
+ * ★ `opts.excludeWithPending` = **剔掉已有未办结申请的学生**（2026-10-16 用户要求）：
+ *   以前只有 `create()` 的 `hasPending` 兜底，下拉里仍能看到这些人，选完提交才被拒。
+ *   ⚠️ 口径与 `hasPending` 共用 `PENDING_FLOW_STATUS`，改一处就够。
+ *   ⚠️ 「哪种类型要限/剔什么状态」是**业务规则**，判定在 service 一处；仓储只负责过滤。
+ */
+export async function studentOptions(
+  keyword: string,
+  limit: number,
+  opts: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean } = {},
+): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class_jh', S, STAGE).where('is_deleted', 0);
+  if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
+  if (opts.excludeStatuses?.length) {
+    const ex = opts.excludeStatuses;
+    q.andWhere((b) => b.whereNotIn('student_status', ex).orWhereNull('student_status'));
+  }
+  if (opts.excludeWithPending) {
+    const ids = await pendingStudentIds();
+    if (ids.length) q.whereNotIn('id', ids);
+  }
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
@@ -126,7 +192,25 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
     });
   }
-  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.classId) {
+    /**
+     * ★ 2026-10-20：班级筛选要「单据快照 + 档案现状」两边命中。
+     *
+     * 列表显示的学生班级已经改成**档案最新值**（见下方 hydrateWithArchive），
+     * 如果筛选还只看单据上的 class_id，就会出现：
+     *   学生从 A 班换到 B 班 → 单据 class_id 仍是 A，
+     *   列表上明明显示「B 班」，按 B 班筛却一条都出不来。
+     * 这种「看得见、筛不到」比不显示更让人困惑，所以这里一起兜住。
+     */
+    const inClass = (await tbl(db, SRC, S, STAGE)
+      .where({ is_deleted: 0, class_id: q.classId })
+      .select('id')) as Array<Record<string, any>>;
+    const ids = [...new Set(inClass.map((r) => String(r.id || '')).filter(Boolean))];
+    base.andWhere((b) => {
+      b.where('class_id', q.classId);
+      if (ids.length) b.orWhereIn('student_id', ids);
+    });
+  }
   if (q.startDate) base.andWhere('suspend_start_date', '>=', q.startDate);
   if (q.endDate) base.andWhere('suspend_start_date', '<=', q.endDate);
   if (q.bizType) base.andWhere('flow_type', await toRawLeaveBiz(STAGE, q.bizType));
@@ -142,14 +226,50 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .orderBy('create_time', 'desc')
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
-  return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
+  /**
+   * ★ 2026-10-20 用户口径「学生档案有的字段按档案走」：
+   *   单据里的 student_name / class_name / id_card_no 是**开单时的快照**，
+   *   学生换班或改名后就会和档案脱节（实测初高缴费已有 4 条班级漂移）。
+   *   这里在装饰成 DTO 之前，用档案最新值覆盖掉快照列 ——
+   *   快照本身仍留在库里做财务追溯，只是不再拿来显示。
+   */
+  await hydrateWithArchive(STAGE, rows, { conn: db });
+  // ★ 复学班名按页批量预取（一次 whereIn，不是每行查一次）
+  const names = await classNamesByIds(
+    STAGE,
+    rows.map((r) => r.resume_class_id),
+  );
+  return { rows: await Promise.all(rows.map((r) => decorate(r, names))), total: Number(total) };
+}
+
+/**
+ * ★ 批量取「学生当前状态」：`{ 学生id: student_status }`
+ *
+ * 列表要显示「学生现状」（区别于单据状态），但这是**实时值**、
+ * 不是异动单上的快照列，所以在 service 分页之后按页批量补，
+ * 一次 whereIn 拿完（不是每行查一次 —— 跨学段合并时可能有几百行）。
+ *
+ * ⚠️ 不过滤 `is_deleted`：软删的学生也要能看到状态，否则列表出现空白。
+ */
+export async function studentStatuses(ids: string[]): Promise<Record<string, number>> {
+  if (!ids.length) return {};
+  const rows = (await tbl(db, SRC, S, STAGE)
+    .whereIn('id', ids)
+    .select('id', 'student_status')) as Array<Record<string, any>>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[String(r.id)] = Number(r.student_status ?? 0);
+  return out;
 }
 
 export async function detail(id: string): Promise<LeaveRow | null> {
   const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).whereIn('flow_type', IN_SCOPE).first()) as
     | Record<string, any>
     | undefined;
-  return row ? decorate(row) : null;
+  if (!row) return null;
+  // ★ 2026-10-20：详情同样以档案最新值为准（与列表口径一致，避免「列表新名、详情旧名」）
+  await hydrateWithArchive(STAGE, [row], { conn: db });
+  // ★ 复学班名同样要反查（详情页也要显示）
+  return decorate(row, await classNamesByIds(STAGE, [row.resume_class_id]));
 }
 
 /** 汇总 */
@@ -267,14 +387,24 @@ export async function setResumeClass(
 
 /**
  * ★ 审批通过后：改 `t_class_student.student_status`
- *   休学 → 6 · 退学 → 7 · 复学 → 8（并回到复学班）
+ *   休学 → 6（休学）· 退学 → 7（退学）· 复学 → 5（正式在读），并回到复学班
+ *
+ * 【★ 2026-10-15 修：复学的目标状态原来错写成 8（实训中）】
+ *   统一三学段时这里**照抄了实训那一套**（实训的复学 = 回到实训 → 8 实训中），
+ *   但初高的复学是「回到正式在读」→ 5，与初高老流程 `class-jh/routes/flow.route.ts`
+ *   的 `FlowType.RESUME → StudentStatus.STUDYING` 口径一致。
+ *
+ *   为什么这个错必须修：`student_status` 是全系统的主状态字段，
+ *   出勤的「应到名单」、宿舍在住校验、各类统计都按它过滤 ——
+ *   初高学生一复学就被标成「实训中」，那些地方会跟着错，而且页面不报错、极难发现。
+ *   实测（2026-10-15）：走真实流程复学后学生状态 = 8，确认就是这个映射写的。
  */
 export async function afterApproved(conn: any, id: string, operatorId: string): Promise<void> {
   const row = (await tblTrx(conn, SRC, T, STAGE).where({ id }).first()) as Record<string, any> | undefined;
   if (!row) return;
   const biz = (await toUnifiedLeaveBiz(STAGE, Number(row.flow_type))) ?? 0;
   const newStatus =
-    biz === 3 ? StudentStatus.TRAINING : biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
+    biz === 3 ? StudentStatus.STUDYING : biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
 
   const patch: Record<string, any> = {
     student_status: newStatus,
@@ -290,7 +420,7 @@ export async function hasPending(studentId: string): Promise<boolean> {
   const row = await tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
     .whereIn('flow_type', IN_SCOPE)
-    .whereIn('flow_status', [1, 2, 5]) // 待提交 / 待经理 / 待校长(新)
+    .whereIn('flow_status', PENDING_FLOW_STATUS) // 待提交 / 待经理 / 待校长(新)
     .first();
   return !!row;
 }

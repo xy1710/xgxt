@@ -63,6 +63,7 @@ import type {
 } from '../shared/dto';
 import {
   REFUND_ACTIVE_STATUSES,
+  REFUND_ITEM_MAX_AMOUNT,
   REFUND_STATUS,
   REFUND_STATUS_NAME,
   TEACHING_STAGE_NAME,
@@ -342,6 +343,16 @@ export async function create(body: RefundSaveBody, user: any): Promise<{ id: str
       BizCode.PARAM_ERROR,
       `退费总额（${amountText(body.refundAmount)} 元）与各项目之和（${amountText(sum)} 元）不一致，请核对`,
     );
+  }
+
+  // ★ 单项费用上限 10 万元（分）：前端费用项输入框已限 max，这里兜底（接口可被绕过）
+  for (const it of items) {
+    if (Number(it.amount) > REFUND_ITEM_MAX_AMOUNT) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        `单项费用最高 10 万元（当前 ${amountText(Number(it.amount))} 元），请拆分为多项或核对金额`,
+      );
+    }
   }
 
   const repo = REPOS[stage];

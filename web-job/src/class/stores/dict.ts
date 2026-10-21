@@ -83,7 +83,7 @@ export const useDictStore = defineStore('dict', () => {
     if (value === null || value === undefined) return 'info';
     const group = groupOf(key) ?? {};
     const text = group[String(value)] ?? '';
-    if (/驳回|退学|逾期|未缴|欠费|流失|封班/.test(text)) return 'danger';
+    if (/驳回|退学|未缴|欠费|流失|封班/.test(text)) return 'danger';
     if (/已同意|已通过|正式在读|已缴|已就业|开放|正常|已收到/.test(text)) return 'success';
     if (/待|试学|预在|进行中|审批中|在校/.test(text)) return 'warning';
     return 'primary';

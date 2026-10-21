@@ -19,7 +19,7 @@
  *    财务（8005）/ 咨询（8001）登录后要按「权限分配」的结果决定显示哪些页面，
  *    而权限数据只在本模块（sms_perm）里。于是对外暴露这一个只读接口：
  *      入参：account（登录名）
- *      出参：角色 / 权限点 / 数据范围 / moduleItems（各模块下的功能点清单）
+ *      出参：职位 / 权限点 / 数据范围 / moduleItems（各模块下的功能点清单）
  *    各业务模块拿 moduleItems 自己映射成 menuKeys 即可。
  *    【不需登录】—— 与 /user/auth-profile 同口径，供登录链路前置调用。
  */
@@ -123,7 +123,7 @@ remoteRouter.get(
       ok(
         profile,
         profile.found
-          ? `已取到「${profile.userName}」的权限档案（${profile.roles.length} 个角色 / ${profile.permissions.length} 个权限点）`
+          ? `已取到「${profile.userName}」的权限档案（${profile.roles.length} 个职位 / ${profile.permissions.length} 个权限点）`
           : `权限库中不存在账号「${account}」`,
       ),
     );

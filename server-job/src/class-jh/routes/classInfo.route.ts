@@ -9,13 +9,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { BizCode, STAGE_NAME, CLASS_STATUS_NAME } from 'shared-types/class-jh';
+import { BizCode, CLASS_STATUS_NAME } from 'shared-types/class-jh';
 import { ClassStatus } from 'shared-types/class-jh';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { writeOpLog } from '../utils/opLog';
 import { nameOf } from '../utils/enumName';
+// ★ 2026-10-16 阶段名改为「优先读阶段字典表」，常量表兜底（用户自建方案的阶段编码不在常量里）
+import { resolveStageName } from '../utils/stageDict';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
@@ -53,7 +55,7 @@ function toClassInfo(r: any) {
     classId: r.id,
     className: r.class_name,
     stage: r.stage,
-    stageName: nameOf(STAGE_NAME, r.stage),
+    stageName: resolveStageName(r.stage),
     headTeacherId: r.head_teacher_id,
     headTeacherName: r.head_teacher_name,
     teacherId: r.teacher_id,

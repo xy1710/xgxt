@@ -26,12 +26,12 @@ import type {
   ClassSaveBody,
   ClassStageMeta,
   ClassSummary,
-  TeachingStage,
+  ClassStage,
 } from '../shared/dto';
 
 export interface ClassRepo {
   /** 本仓储对应的学段 */
-  readonly stage: TeachingStage;
+  readonly stage: ClassStage;
   /** 学段内阶段码可选项 */
   phaseOptions(): Promise<Array<{ value: number; label: string }>>;
   /** 该学段的特性（有没有编号 / 结业日期 / 封班按钮） */

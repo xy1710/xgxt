@@ -3,7 +3,7 @@
  *
  * ⚠️ 为什么要有这个 store？
  *    字典来自 `GET /api/perm/option/get`，而它被 3 处调用：
- *      LogQuery（日志筛选）、RoleManage（角色表单）、UserManage（账号表单）。
+ *      LogQuery（日志筛选）、RoleManage（职位表单）、UserManage（账号表单）。
  *    原来每进一个页面都要打一次这个接口 —— 而字典内容是「全局固定」的，
  *    一个会话内完全没有必要重复拉。
  *

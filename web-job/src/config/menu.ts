@@ -102,9 +102,11 @@ function domainNode(key: string): MenuNode {
  *
  * 【为什么不直接用同名】实测两处命名只有 8 个域里 7 个相同：
  *   domainConfig.ts: student class attendance exam score dorm fee refund approval
- *   access.ts:        student class attendance exam score dorm —   refund leave
- *   → `approval` ↔ `leave` 命名不同源
- *   → `fee` 在 STAGE_ACCESS 里**没有**对应项（它保留了 stages，走 anyStageAccessible 老路径）
+ *   access.ts:        student class attendance exam score dorm fee refund leave
+ *   → `approval` ↔ `leave` 命名不同源；其余同名
+ *
+ * ★ 2026-10-20 合并 meng 后：fee 域也改成 unified（催费 / 缴费 两页签），
+ *   access.ts 里已补 fee 项，因此 fee 不再是「没有对应项」的特例。
  *
  * ★ 缺项一律映射成 null：菜单判定会退回 `hasPage(path)` 老逻辑，
  *   行为与修复前完全一致（宁可少显示，不可错误显示）。
@@ -116,6 +118,10 @@ const DOMAIN_TO_STAGE_DOMAIN: Record<string, string> = {
   exam: 'exam',
   score: 'score',
   dorm: 'dorm',
+  // ★ 2026-10-19：fee 域改 unified 后不再有 stages，菜单显隐改走业务域权限码
+  //   （与其它八域同款；不映射会退回 hasPage('/teaching/fee')，后端页面清单里
+  //   没有 /teaching/* → 菜单被静默过滤，即「催费/缴费菜单消失」的根因）
+  fee: 'fee',
   refund: 'refund',
   approval: 'leave',
 };
@@ -128,44 +134,38 @@ export const MENU: MenuNode[] = [
     owner: '初高中部 / 大学部 / 实训就业',
     stage: '已完成',
     children: [
-      /* ---------- 各学段独有（不参与合并） ---------- */
-      {
-        title: '工作台',
-        path: '/class-jh/dashboard',
-        pageCode: 'classjh:dashboard:view',
-        owner: '初高中部',
-        stage: '已完成',
-        phase: '初高',
-        desc: '在读人数、今日出勤率、临期缴费与待办事项。',
-      },
+      /* ---------- 各学段独有（不参与合并） ----------
+       * ★ 2026-10-16 原「工作台」菜单项已上移为系统首页
+       *   （侧栏置顶项，见 config/sideMenu.ts 的 WORKBENCH_GROUP；
+       *   页面本体迁到 views/Workbench.vue，/class-jh/dashboard 老路由重定向到首页）。
+       *   首页工作台的初高 KPI 块仍用 classjh:dashboard:view 权限码判显隐。 */
 
       /* ---------- 9 个合并业务域 ---------- */
       domainNode('student'),
       domainNode('class'),
 
-      {
-        title: '班级交接',
-        path: '/class-transfer',
-        pageCode: 'job:classTransfer:view',
-        owner: '实训',
-        stage: '已完成',
-        phase: '实训',
-        desc: '换班交接：整个班换负责人（班主任/教员/助教），学生不动，提交即生效并留存快照。',
-      },
+      /*
+       * 2026-10-19 批注：删除左侧「班级交接」独立菜单（原 /class-transfer）。
+       * 交接功能本身保留 —— 入口在「班级管理」操作列的【交接】按钮，
+       * 交接记录在班级详情抽屉里；后端 /api/job/class-transfer 接口未动。
+       */
+
       {
         title: '待接收学员',
         path: '/class/consult',
         pageCode: 'class:consult:view',
-        owner: '大学部',
+        // ★ 2026-10-19：初高也走「推送 → 班主任接收」，这一页两个学段共用
+        owner: '初高中部 / 大学部',
         stage: '已完成',
-        phase: '大学',
-        desc: '咨询端推来的待接收学员：接收 / 拒绝。',
+        phase: '初高部 / 大学部',
+        desc: '咨询端推来的待接收学员：接收 / 拒绝（初高、大学共用）。',
       },
 
       domainNode('attendance'),
       domainNode('exam'),
       domainNode('score'),
       domainNode('dorm'),
+
       domainNode('fee'),
       domainNode('refund'),
       domainNode('approval'),
@@ -206,8 +206,23 @@ export const MENU: MenuNode[] = [
         pageCode: 'classjh:setting:view',
         owner: '初高中部',
         stage: '已完成',
+        phase: '初高部',
+        desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、阶段方案（方案名称+所属部门+多阶段）。',
+      },
+      {
+        /**
+         * ★ 2026-10-20 楼栋设置独立入口
+         *
+         * 从「系统设置」的楼栋页签抽出来单独成页，权限码 `classjh:building:view`。
+         * 目的：只给教务老师楼栋字典，不连带放开系统设置 KV / 阶段字典 / 操作日志。
+         */
+        title: '楼栋设置',
+        path: '/class-jh/building',
+        pageCode: 'classjh:building:view',
+        owner: '初高中部',
+        stage: '已完成',
         phase: '初高',
-        desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、学习阶段字典。',
+        desc: '宿舍楼栋字典（男寝 / 女寝），与宿舍管理、分派宿舍的楼栋下拉实时一致。',
       },
     ],
   },

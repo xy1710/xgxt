@@ -48,11 +48,20 @@ export const LEAD_CHANNEL_NAME: Record<number, string> = {
 export enum ConsultState {
   WAIT_ASSIGN = 1,        // 待分配（招生老师录入，等经理分配）
   WAIT_INTERVIEW = 2,     // 待面试（已分配跟进人）
-  TRIAL_FEE_PENDING = 3,  // 试学费·待确认（已发起收费，等财务确认到账）
-  TRIAL_WAIT_CLASS = 4,   // 试学中·待分班（试学费已到账）
+  /**
+   * 咨询中（缴费阶段）
+   *
+   * ★ 2026-10-15 用户口径：面试通过并确认报名后即进入本状态 ——
+   *   「没缴费」或「已缴费但财务还没确认到账」都算「咨询中」。
+   *   财务确认到账后 → TRIAL_WAIT_CLASS（待分班）。
+   * ⚠️ 本档覆盖「已发起收费等确认」与「还没发起收费」两种情形，
+   *   列表筛选用它，不再对外暴露「试学费·待确认」这种内部叫法。
+   */
+  TRIAL_FEE_PENDING = 3,  // 咨询中（缴费未到账）
+  TRIAL_WAIT_CLASS = 4,   // 待分班（费用已到账，等分班）
   TRIAL = 5,              // 试学中（已分班）
   FULL_FEE_PENDING = 6,   // 缴费中·待确认（转正式，补缴款项待确认）
-  FORMAL = 7,             // 正式学员（全款到账）
+  FORMAL = 7,             // 正式在读（全款到账）
   REFUND_MGR = 8,         // 退费·待经理审批
   REFUND_FINANCE = 9,     // 退费·待财务打款
   REFUNDED = 10,          // 已退费
@@ -73,11 +82,11 @@ export enum ConsultState {
 export const CONSULT_STATE_NAME: Record<number, string> = {
   [ConsultState.WAIT_ASSIGN]: '待分配',
   [ConsultState.WAIT_INTERVIEW]: '待面试',
-  [ConsultState.TRIAL_FEE_PENDING]: '试学费·待确认',
-  [ConsultState.TRIAL_WAIT_CLASS]: '试学中·待分班',
+  [ConsultState.TRIAL_FEE_PENDING]: '咨询中',
+  [ConsultState.TRIAL_WAIT_CLASS]: '待分班',
   [ConsultState.TRIAL]: '试学中',
   [ConsultState.FULL_FEE_PENDING]: '缴费中·待确认',
-  [ConsultState.FORMAL]: '正式学员',
+  [ConsultState.FORMAL]: '正式在读',
   [ConsultState.REFUND_MGR]: '退费·待经理审批',
   [ConsultState.REFUND_FINANCE]: '退费·待财务打款',
   [ConsultState.REFUNDED]: '已退费',
@@ -184,8 +193,8 @@ export const CONSULT_ROLE_DESC: Record<string, string> = {
  *    已驳回(3)  → 财务侧 PayStatus.PAID(2)     被打回，等重新提交
  *
  * 💡 叫法对照（同一组状态值，两边视角不同）：
- *    值 2：咨询叫「待确认」 = 财务叫「待核对」（都是「凭证已交、等财务核」）
- *    值 3：咨询叫「已到账」 = 财务叫「已缴」（都是「财务核对通过、钱入账」）
+ *    值 2：咨询叫「待财务确认」 = 财务叫「待核对」（都是「凭证已交、等财务核」）
+ *    值 3：咨询叫「已到账」     = 财务叫「已缴」（都是「财务核对通过、钱入账」）
  *
  * ⚠️ 咨询侧不自己改状态！一律以财务 /fee/list 返回的 payStatus 为准，
  *    只有「待上传凭证」是本模块自有的（财务侧还没有这张单）。
@@ -200,7 +209,8 @@ export enum ConsultFeeStatus {
 
 export const CONSULT_FEE_STATUS_NAME: Record<number, string> = {
   [ConsultFeeStatus.NO_VOUCHER]: '待上传凭证',
-  [ConsultFeeStatus.PENDING]: '待确认',
+  // ★ 2026-10-16 用户口径：对外叫法统一成「待财务确认」（原「待确认」太含糊）
+  [ConsultFeeStatus.PENDING]: '待财务确认',
   [ConsultFeeStatus.ARRIVED]: '已到账',
   [ConsultFeeStatus.REJECTED]: '已驳回',
 };
@@ -266,14 +276,13 @@ export const TRIAL_RATE_ITEMS = [
 /**
  * 默认可领用物品清单（实际以 t_consult_consume_item 表为准）
  * 退费时勾选后计入扣减
+ * ★ 2026-10-16 用户指令：取消「工具包」「宿舍门禁卡」
  */
 export const DEFAULT_CONSUME_ITEMS = [
   { name: '校服', price: 12000 },
   { name: '被褥三件套', price: 15000 },
-  { name: '工具包', price: 8000 },
   { name: '教材资料', price: 6000 },
   { name: '军训服', price: 9000 },
-  { name: '宿舍门禁卡', price: 2000 },
 ] as const;
 
 /* ============================================================
@@ -302,8 +311,18 @@ export const EXTRA_FIELDS = [
   '备注',
 ] as const;
 
-/** 缴费方式（发起收费 / 确认到账时用） */
-export const PAY_METHODS = ['微信', '支付宝', '现金', '银行转账', '对公汇款'] as const;
+/**
+ * 缴费方式（发起收费 / 确认到账时用）
+ *
+ * ★ 2026-10-15 用户口径：统一为这 5 项，页面上用下拉选择，不再手输。
+ */
+export const PAY_METHODS = [
+  '微信支付',
+  '支付宝支付',
+  '银行卡转账',
+  '现金',
+  '其他',
+] as const;
 
 /** 流失原因选项 */
 export const LOSS_REASONS = [

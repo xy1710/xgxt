@@ -39,7 +39,7 @@ import { verifyToken } from '../utils/jwt';
 // ★ 2026-10-05：业务角色的唯一权威源在权限管理模块 —— 复用主包的解析函数，
 //   不要在本模块各写一套（门户 token 的 roles 只有门户级编码，见下方 ②'）。
 import { resolveBusinessRoles, type AuthUser } from '../../middleware/auth';
-// ★ 2026-10-07：接口级打通 —— 把「角色-权限分配」的显式改动叠加到本模块的 POLICIES 上。
+// ★ 2026-10-07：接口级打通 —— 把「职位权限分配」的显式改动叠加到本模块的 POLICIES 上。
 //   ⚠️ 叠加层按 **role_code（新码）** 索引，而本模块的 user.roles 是归一化后的老码
 //      → 判定时用 user.businessRoles（原始新码），见 can() 内注释。
 import {
@@ -211,7 +211,7 @@ export function staticAllowRole(role: string, code: string): boolean {
  * 是否放行某个权限点
  *
  * ★ 2026-10-07 起为 async：静态 POLICIES 表仍是**基线**，
- *   「角色-权限分配」里对该角色的**显式改动**叠加其上
+ *   「职位权限分配」里对该角色的**显式改动**叠加其上
  *   （撤销 → 接口 403；新增 → 放行）。
  *   未被管理员改动过的码，行为与从前**完全一致**（差异存储，见 roleActionOverlay.ts）。
  *
@@ -436,7 +436,7 @@ export function checkPermission(permissionCode: string) {
       return;
     }
 
-    // ★ 2026-10-07：can 已改 async（叠加「角色-权限分配」的显式改动）
+    // ★ 2026-10-07：can 已改 async（叠加「职位权限分配」的显式改动）
     if (await can(permissionCode, user)) {
       next();
       return;

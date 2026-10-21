@@ -12,7 +12,7 @@
  *    多一次网络回调只会让门户成为单点故障（门户挂了权限模块全挂）。
  *
  * ⚠️⚠️ 权限模块的特殊性：
- *    本模块【本身就是权限系统的数据源】—— 它维护 185 个权限点、14 个角色。
+ *    本模块【本身就是权限系统的数据源】—— 它维护 185 个权限点、14 个职位。
  *    所以 req.user.permissions 有两种来源：
  *      ① 门户 token 里带的（门户按「模块级」授权时给的粗粒度权限）
  *      ② 本模块自己查库算出来的（真正的细粒度权限点权限）
@@ -167,7 +167,7 @@ export async function authMiddleware(
   /**
    * ⚠️⚠️ 2026-10-03 修复：权限模块负责人无法保存权限（实测 403）
    *
-   * 症状：用门户账号 linx（林晓 · 权限模块负责人）点「角色-权限分配 → 应用」，
+   * 症状：用门户账号 linx（林晓 · 权限模块负责人）点「职位权限分配 → 应用」，
    *       返回 { code: 40302, message: '您没有该操作的权限' }。
    *
    * 原因：门户签发的 token 里 permissions 是【模块级】的
@@ -225,14 +225,14 @@ export async function authMiddleware(
 }
 
 /* ============================================================
- * 角色 / 权限校验
+ * 职位 / 权限校验
  * ============================================================ */
 
 /**
  * 权限校验中间件（细粒度）
  *
  * 用法：
- *   router.post('/delete/:id', checkPermission('perm:角色管理:del'), handler);
+ *   router.post('/delete/:id', checkPermission('perm:职位管理:del'), handler);
  *
  * ⚠️ 权限标识格式：{模块}:{功能点}:{动作编码}
  *    例：'perm:权限配置:editPerm' —— 动作段【必须用 action_code（英文）】。
@@ -287,7 +287,7 @@ export function checkPermission(permissionCode: string) {
   };
 }
 
-/** 角色校验中间件 */
+/** 职位校验中间件 */
 export function checkRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const user = req.user;
@@ -311,7 +311,7 @@ export function checkRole(...roles: string[]) {
  * ⭐ 系统管理员才能过
  *
  * 用于权限模块里「只有系统管理员能做」的高危操作：
- * 如删除角色、改规则配置、清日志。
+ * 如删除职位、改规则配置、清日志。
  */
 export function requireSysAdmin(req: Request, res: Response, next: NextFunction): void {
   const user = req.user;

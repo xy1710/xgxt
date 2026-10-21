@@ -37,7 +37,12 @@ const DEFAULTS: Record<string, string> = {
   'pwd.min': '8',
   'pwd.upper': 'true',
   'pwd.digit': 'true',
-  'pwd.symbol': 'true',
+  /**
+   * ★ 2026-10-16 按用户要求改为 false：密码策略统一为「≥8 位 + 含大写字母和数字」，
+   *   不再要求特殊符号（与账号表单「密码」右侧的提示文案一致）。
+   *   ⚠️ 这只是【默认值】的兜底口径；实际生效值读 t_perm_rule（本次已同步改为 false）。
+   */
+  'pwd.symbol': 'false',
   'pwd.expireDays': '90',
   'pwd.forceFirst': 'true',
   'pwd.retry': '5',

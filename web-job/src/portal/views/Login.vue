@@ -53,7 +53,7 @@ const demoAccounts = [
    *   （admin 是「只读管理员」，按设计不能写，见 app.ts 全局只读闸）
    *
    * 【怎么来的】见 数据库导出/sms_portal.sql 的「业务角色门户账号」段，
-   *   与「权限管理 → 用户管理」里的 t_perm_user 按【登录名】一一对应，
+   *   与「权限管理 → 账号管理」里的 t_perm_user 按【登录名】一一对应，
    *   角色由权限模块解析（middleware/auth.ts 的 resolveBusinessRoles）。
    * ============================================================ */
   { account: 'qiansy', name: '钱守义', scope: '校长（全模块）', tag: 'job' },
@@ -97,7 +97,8 @@ async function doLogin() {
       return;
     }
 
-    // 带 redirect 就回原页（但要过一遍守卫），否则落地到自己的第一个模块
+    // 带 redirect 就回原页（但要过一遍守卫），否则落到系统首页工作台
+    // ★ 2026-10-16：工作台 = 首页，服务端 landingPathOf 对所有角色统一返回 '/'
     const redirect = route.query.redirect as string | undefined;
     router.replace(redirect || res.landingPath || auth.landingHash);
   } catch (err: any) {
@@ -122,33 +123,7 @@ onMounted(() => {
           <img class="bp-logo" src="/logo.png" alt="良志教育" />
         </div>
         <h1>良志学管系统</h1>
-        <p class="bp-sub">统一门户</p>
-
-        <ul class="bp-list">
-          <li>
-            <i>1</i>
-            <div>
-              <b>一次登录，全系统通行</b>
-              <span>门户签发统一凭证，各模块共用</span>
-            </div>
-          </li>
-          <li>
-            <i>2</i>
-            <div>
-              <b>目录按授权自动展开</b>
-              <span>仅在左侧显示你能进的模块与页面</span>
-            </div>
-          </li>
-          <li>
-            <i>3</i>
-            <div>
-              <b>各模块互不越界</b>
-              <span>模块负责人只看到自己的模块</span>
-            </div>
-          </li>
-        </ul>
-
-        <div class="bp-foot">良志教育 · 学管系统统一入口</div>
+        <p class="bp-sub">让教学管理更简单</p>
       </div>
 
       <!-- 右：登录表单 -->
@@ -228,93 +203,42 @@ onMounted(() => {
 .brand-pane {
   width: 356px;
   flex: none;
-  padding: 34px 30px 26px;
+  padding: 40px 36px;
   background: linear-gradient(160deg, #CD3A33 0%, #B22A23 58%, #8C201B 100%);
   color: #fff;
   display: flex;
   flex-direction: column;
+  justify-content: center;
 }
 
-/* LOGO 白卡（2026-10-15：用真 LOGO 图替代「良」字占位） */
+/* LOGO 白卡（2026-10-16：LOGO 放大、白色内边距收窄） */
 .bp-logo-card {
   background: #fff;
-  border-radius: 16px;
-  padding: 14px 20px;
+  border-radius: 14px;
+  padding: 10px 16px;
   display: inline-flex;
   align-self: flex-start;
   box-shadow: 0 14px 40px rgba(40, 8, 5, 0.35);
-  margin-bottom: 18px;
+  margin-bottom: 22px;
 }
 
 .bp-logo {
-  height: 40px;
+  height: 72px;
   width: auto;
   display: block;
 }
 
 .brand-pane h1 {
-  font-size: 21px;
+  font-size: 28px;
   font-weight: 700;
-  letter-spacing: 0.6px;
+  letter-spacing: 1px;
 }
 
 .bp-sub {
-  font-size: 12.5px;
-  color: rgba(255, 255, 255, 0.72);
-  margin-top: 6px;
-  letter-spacing: 1.4px;
-}
-
-.bp-list {
-  list-style: none;
-  margin-top: 30px;
-  display: flex;
-  flex-direction: column;
-  gap: 17px;
-}
-
-.bp-list li {
-  display: flex;
-  gap: 11px;
-  align-items: flex-start;
-}
-
-.bp-list i {
-  font-style: normal;
-  width: 20px;
-  height: 20px;
-  flex: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  font-size: 10.5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 1px;
-}
-
-.bp-list b {
-  display: block;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.5;
-}
-
-.bp-list span {
-  display: block;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.66);
-  margin-top: 3px;
-  line-height: 1.55;
-}
-
-.bp-foot {
-  margin-top: auto;
-  padding-top: 26px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.55);
-  letter-spacing: 0.3px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 9px;
+  letter-spacing: 3px;
 }
 
 /* ---------- 右侧表单 ---------- */
@@ -334,7 +258,7 @@ onMounted(() => {
 
 .fp-sub {
   font-size: 12px;
-  color: #9C8D88;
+  color: #8A7B76;
   margin: 6px 0 26px;
 }
 

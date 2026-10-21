@@ -61,7 +61,8 @@ function mapRow(r: Record<string, any>): StudentRow {
     studentName: String(r.student_name ?? ''),
     gender,
     genderName: GENDER_NAME[gender] ?? '',
-    age: numOrNull(r.age) ?? calcAge(r.birth_date),
+    // ★ 年龄优先按出生日期实时计算（每年自动更新），库里 age 仅作无出生日期时的兜底
+    age: calcAge(r.birth_date) ?? numOrNull(r.age),
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     classId: str(r.class_id),
@@ -77,6 +78,7 @@ function mapRow(r: Record<string, any>): StudentRow {
     studentStatus: status,
     studentStatusName: STUDENT_STATUS_NAME[status] ?? '',
     phone: str(r.phone),
+    parentName: str(r.parent_name),
     parentPhone: str(r.parent_phone),
     education: str(r.education),
     enrollDate: str(fmtDate(r.enroll_date)) || null,
@@ -195,6 +197,7 @@ export const repo: StudentRepo = {
     set('education', body.education);
     set('enroll_date', body.enrollDate);
     set('phone', body.phone);
+    set('parent_name', body.parentName);
     set('parent_phone', body.parentPhone);
     set('dorm_id', body.dormId);
     set('dorm_no', body.dormNo);

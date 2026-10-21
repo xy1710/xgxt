@@ -39,7 +39,7 @@ import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
 const STAGE = 'jh' as const;
-const STAGE_NAME = '初高';
+const STAGE_NAME = '初高部';
 
 /** 初高阶段 101~107 / 201~204（与 shared-types/class-jh 的 STAGE_NAME 一致） */
 const PHASE_NAME: Record<number, string> = {
@@ -59,8 +59,16 @@ const PHASE_NAME: Record<number, string> = {
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
 const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
 
-/** 初高学生状态枚举（只显示在读状态的） */
-const IN_SCHOOL_STATUS: number[] = [1, 2, 3, 6];
+/**
+ * 「在读」学生状态（**统一码**）：试学中 3 / 预在读 4 / 正式在读 5
+ *
+ * ⚠️ 2026-10-16 修正：原来是 `[1, 2, 3, 6]`，那是老初高库的旧编码 ——
+ *   统一码里 1=待咨询、2=咨询中、6=休学，套在现在的数据上结果是
+ *   「班里 12 个正式在读的学生一个都不算，休学的反而算在读」，班级人数永远显示 0。
+ *   口径与 `teaching/shared/conf.ts` 的 `DEFAULT_SCOPE.jh.shouldStatuses = [3,4,5]`
+ *   （初高出勤「应到」）保持一致。
+ */
+const IN_SCHOOL_STATUS: number[] = [3, 4, 5];
 
 function str(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
@@ -85,6 +93,10 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -166,8 +178,15 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
     .whereIn('class_id', classIds)
     .where('is_deleted', false)
     .whereIn('student_status', IN_SCHOOL_STATUS)
+    // ★ 2026-10-16 修：必须 groupBy，否则 only_full_group_by 模式下
+    //   「select class_id, count(*) 无 group by」直接报 1140 错误。
+    .groupBy('class_id')
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    // ⚠️ 必须 group by：MySQL 8 的 ONLY_FULL_GROUP_BY 下少它会报 1140；
+    //    一个学段只有 1 个班时 MySQL 会把单值 IN 优化成等值判断而侥幸通过，
+    //    ≥2 个班就 500（班级管理整页打不开）
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }
@@ -224,13 +243,22 @@ export const repo: ClassRepo = {
 
   async save(body, userId) {
     const now = new Date();
+    // ★ 2026-10-15 班级表单取消必填：班级名称留空时自动占位（表列 NOT NULL + 部门内不重复）
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const className =
+      String(body.className || '').trim() ||
+      `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const payload: Record<string, any> = { update_time: now, update_by: userId };
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('class_name', body.className);
+    set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
+    // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
+    set('scheme_id', body.schemeId);
+    set('scheme_stage_id', body.schemeStageId);
+    set('scheme_stage_name', body.schemeStageName);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
@@ -260,22 +288,18 @@ export const repo: ClassRepo = {
       return { id: body.id };
     }
 
-    // ★ 初高这几个字段是 NOT NULL（实测：head_teacher_id/name、
-    //   teacher_id/name 全部必填）—— 不提前拦的话 insert 直接报 ER_BAD_NULL_ERROR
-    if (!String(body.headTeacherId || '').trim()) throw new Error('班主任必填');
-    if (!String(body.headTeacherName || '').trim()) throw new Error('班主任姓名必填');
-    if (!String(body.teacherId || '').trim()) throw new Error('教工号必填');
-    if (!String(body.teacherName || '').trim()) throw new Error('教员姓名必填');
-    // 同部门内名称不重复
+    // ★ 2026-10-15 放宽：班主任/教员允许不选（列已迁改为可空），不再前置拦截。
+    //   同部门内名称不重复（用占位名也能过 —— 带秒级时间戳）
     const deptCode = Number(body.deptCode ?? 1);
     const dupName = (await tbl(db, 'sms_class_jh', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) throw new Error(`该部门下已有班级叫「${className}」`);
 
     const id = randomUUID();
     await tblIns(db, 'sms_class_jh', T, STAGE, {
       id,
+      class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时给兜底值
       [phaseCodeCol()]: body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]),
@@ -392,8 +416,8 @@ export const repo: ClassRepo = {
 
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
-    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED, CLASS_STATUS.GRADUATING],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATING],
+    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATED]: [],
   };

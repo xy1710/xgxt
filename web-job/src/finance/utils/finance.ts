@@ -61,13 +61,12 @@ export function toYuan(fen: number | null | undefined): number {
 
 type TagType = 'success' | 'warning' | 'info' | 'danger' | 'primary';
 
-/** 缴费状态：1待缴 2待核对 3已缴 4逾期 5冻结（2026-10-04 起 2/3 改名） */
+/** 缴费状态：1待缴 2待核对 3已缴 5冻结（4 逾期已于 2026-10-15 移除） */
 export function payStatusTagType(status: number): TagType {
   switch (status) {
     case 3: return 'success';  // 已缴（财务核对通过、已入账）
     case 2: return 'warning';  // 待核对（凭证已交，等财务核）—— 财务的待办，用醒目色
     case 1: return 'info';     // 待缴
-    case 4: return 'danger';   // 逾期
     case 5: return 'warning';  // 冻结
     default: return 'info';
   }

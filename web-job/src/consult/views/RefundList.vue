@@ -86,17 +86,16 @@ const applyForm = ref({
 const calcResult = ref<ConsultRefundCalcResult | null>(null);
 const calcLoading = ref(false);
 
-/** 可勾选的消耗项（住宿/餐费/保险 + 物品） */
+/** 可勾选的消耗项（住宿/餐费/保险 + 物品）
+ *  ★ 2026-10-16 用户指令：取消「工具包」「宿舍门禁卡」，不再参与退费扣减 */
 const DEDUCT_OPTIONS = [
   { key: 'accommodation', label: '住宿费 ¥15/天' },
   { key: 'meal', label: '餐费 ¥28/天' },
   { key: 'insurance', label: '保险费 ¥5/天' },
   { key: 'uniform', label: '校服 ¥120' },
   { key: 'bedding', label: '被褥三件套 ¥150' },
-  { key: 'toolkit', label: '工具包 ¥80' },
   { key: 'textbook', label: '教材资料 ¥60' },
   { key: 'military', label: '军训服 ¥90' },
-  { key: 'accesscard', label: '宿舍门禁卡 ¥20' },
 ];
 
 /* ---------- 学生选择（★ 2026-10-08：必填项由「学生ID」改为「学生姓名」） ---------- */
@@ -158,7 +157,7 @@ async function onStudentChange() {
 
 /** 勾选的「物品」名称（住宿/餐费/保险是每日消耗项，走 dailyItems 传） */
 function checkedItemNames(): string[] {
-  const ITEM_KEYS = ['uniform', 'bedding', 'toolkit', 'textbook', 'military', 'accesscard'];
+  const ITEM_KEYS = ['uniform', 'bedding', 'textbook', 'military'];
   return applyForm.value.deductItems
     .filter((k) => ITEM_KEYS.includes(k))
     .map((k) => {

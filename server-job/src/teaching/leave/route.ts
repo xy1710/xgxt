@@ -15,9 +15,11 @@ import { BizCode } from 'shared-types';
 import { ok, page } from '../../utils/response';
 import { wrap } from '../../utils/wrap';
 import { BizError } from '../../middleware/errorHandler';
+import { LEAVE_DATE_WINDOW_DAYS } from '../shared/format';
 import {
   LEAVE_BIZ_TYPE_NAME,
   LEAVE_CHAIN_STEPS,
+  LEAVE_DEPARTMENTS,
   LEAVE_STAGE_BIZ,
   LEAVE_STATUS_NAME,
   TEACHING_STAGES,
@@ -94,7 +96,11 @@ teachingLeaveRouter.get(
 );
 
 /* ============================================================
- * 3. 学生下拉  GET /api/teaching/leave/student-options?stage=
+ * 3. 学生下拉  GET /api/teaching/leave/student-options?stage=&bizType=
+ *    ★ bizType=3（复学）时后端只返回**当前处于休学**的学生 ——
+ *      复学是「把休学的人接回来」，下拉里就不该出现在读/退学的人。
+ *    ★ 终态学生（退学 7 / 流失 11 / 已就业 10）**任何 bizType 都不返回** ——
+ *      已经终结的学生不能再办学籍异动（先退学再休学 = 自相矛盾的单据）。
  * ============================================================ */
 
 teachingLeaveRouter.get(
@@ -102,7 +108,10 @@ teachingLeaveRouter.get(
   wrap(async (req, res) => {
     const stage = mustStage(req.query.stage);
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
-    res.json(ok(await svc.studentOptions(stage, str(req.query.keyword) || '', limit, req.user)));
+    const bizType = optInt(req.query.bizType, 1, 3);
+    res.json(
+      ok(await svc.studentOptions(stage, str(req.query.keyword) || '', limit, req.user, bizType)),
+    );
   }),
 );
 
@@ -129,9 +138,12 @@ teachingLeaveRouter.get(
 );
 
 /* ============================================================
- * 6. 元信息（类型 / 状态 / 各学段支持哪些类型 / 走几步）
+ * 6. 元信息（类型 / 状态 / 各学段支持哪些类型 / 走几步 / 部门）
  *    GET /api/teaching/leave/meta
  *    —— 前端据此隐藏"该学段不支持的类型"，而不是给个点不动的按钮
+ *    —— ★ departments：发起申请时的「部门」下拉（初高中/大学/实训/就业）。
+ *       「就业」的 stage 是 null = 暂不办理学籍异动（前端据此置灰 + 提示），
+ *       前端不要再抄一份列表。
  * ============================================================ */
 
 teachingLeaveRouter.get(
@@ -149,6 +161,9 @@ teachingLeaveRouter.get(
           label: v,
         })),
         stageBizTypes: LEAVE_STAGE_BIZ,
+        departments: LEAVE_DEPARTMENTS,
+        /** ★ 异动日期可选窗口（今天 ± N 天）：前端 picker 的 disabled-date 用它 */
+        leaveDateWindowDays: LEAVE_DATE_WINDOW_DAYS,
       }),
     );
   }),
@@ -156,6 +171,7 @@ teachingLeaveRouter.get(
 
 /* ============================================================
  * 7. 新建  POST /api/teaching/leave/create
+ *    ★ bizType=3（复学）时 `newClassId`（复学班）必填 —— 见 service.create 的校验
  * ============================================================ */
 
 teachingLeaveRouter.post(

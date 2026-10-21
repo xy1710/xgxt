@@ -68,12 +68,12 @@ export enum BizCode {
   REFUND_NOT_FOUND = 40405, // 退费单不存在 ★
   FLOW_NOT_FOUND = 40406,   // 流程不存在 ★
   SETTING_NOT_FOUND = 40407, // 设置项不存在 ★
+  FEE_NOT_FOUND = 40408,     // 缴费单不存在 ★（上传缴费凭证时校验）
 
   // ---- 500xx 系统错误 ----
   INTERNAL_ERROR = 50001,
   DB_ERROR = 50002,
 }
-
 /** 全局实体基础字段（所有表都有） */
 export interface BaseEntity {
   id: string;

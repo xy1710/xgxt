@@ -23,7 +23,7 @@ import { Request, Response, NextFunction } from 'express';
 import { BizCode, ApiResponse, RoleCode, DataScope, ModuleKey } from 'shared-types/finance';
 import { verifyToken, looksLikeJwt } from '../utils/jwt';
 import { resolveBusinessRoles } from '../../middleware/auth';
-// ★ 2026-10-07：接口级打通 —— 把「角色-权限分配」的显式改动叠加到 FIN_ROLE_OPERATIONS 上
+// ★ 2026-10-07：接口级打通 —— 把「职位权限分配」的显式改动叠加到 FIN_ROLE_OPERATIONS 上
 import {
   preloadRoleActionOverrides,
   resolveActionWithOverlay,
@@ -239,7 +239,7 @@ export function checkPermission(permissionCode: string) {
     }
 
     // ★ 角色兜底：token 权限是模块级粗粒度，按业务角色补齐功能点权限
-    //   ★ 2026-10-07：再叠加「角色-权限分配」里的**显式改动**
+    //   ★ 2026-10-07：再叠加「职位权限分配」里的**显式改动**
     //     （撤销 → 403；新增 → 放行）。未被改动过的码行为与从前**完全一致**。
     try {
       const roles = await ensureBusinessRoles(user);

@@ -63,6 +63,7 @@ export const PayStatusName: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '已缴',
   [PayStatus.VERIFIED]: '已核对',
+  // 2026-10-20：库注释里 4 就是逾期，原来漏了 → 催缴行状态显示成「未知」
   [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };

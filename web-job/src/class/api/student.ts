@@ -353,6 +353,8 @@ export function urgeList(params: {
   feeType?: number;
   payStatus?: number;
   onlyOverdue?: boolean;
+  startDate?: string;
+  endDate?: string;
   keyword?: string;
 }) {
   return get<PageData<import('./types').UrgeRow>>('/api/class/urge/list', params as Record<string, unknown>);
@@ -364,6 +366,38 @@ export function urgeLogList(params: { page?: number; size?: number; studentId?: 
 
 export function urgeDo(payload: { urgeId: string; channel: string; remark?: string }) {
   return post<{ urgeId: string; urgeCount: number }>('/api/class/urge/do', payload);
+}
+
+/**
+ * 登记缴费（上传缴费凭证）· 大学部
+ *
+ * ★ 2026-10-21 用户要求：催费页里大学要和初高功能对齐 ——
+ *   初高的行能登记缴费（缴费方式 / 实缴金额 / 缴费日期 / 备注 / 截图），
+ *   大学催缴副本原来没有这个能力（操作列只能显示「—」）。
+ *
+ * 落库位置：`sms_common.t_class_urge_sync`（只写本模块副本，**不回写财务** ——
+ * 这张表本身就是财务推来的只读副本，反写会和财务核对流程打架）。
+ * 状态：未结清（待缴 1 / 逾期 4）→ 已缴 2；已缴 / 已核对保持原状。
+ */
+export function submitUrgePayment(payload: {
+  /** 催缴记录 id（页面行里的 feeId 带 `urge:` 前缀，调用前剥掉） */
+  urgeId: string;
+  /** 缴费方式 1微信支付 2支付宝 3现金 */
+  payMethod: number;
+  /** 实缴金额（分），允许与应缴不同 */
+  paidAmount: number;
+  /** 缴费日期 YYYY-MM-DD（不能晚于今天） */
+  payDate: string;
+  remark?: string;
+  /** 缴费截图 dataURL；现金可不传 */
+  dataUrl?: string;
+}) {
+  return post<{
+    urgeId: string;
+    voucherUrl: string | null;
+    payStatus: number;
+    payMethodName: string;
+  }>('/api/class/urge/voucher', payload);
 }
 
 export function feeList(params: {

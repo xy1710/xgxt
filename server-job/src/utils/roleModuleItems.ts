@@ -16,7 +16,7 @@
  *
  * 【数据来源】
  *   `sms_perm.t_perm_role` JOIN `t_perm_role_perm`，按 role_code 聚合出
- *   `{ module_key: [item_name, ...] }`。这正是管理员在「角色-权限分配」
+ *   `{ module_key: [item_name, ...] }`。这正是管理员在「职位权限分配」
  *   界面上勾选的原始记录 —— 也是自建角色唯一的授权来源。
  *
  * ⚠️ 降级原则：查库失败 → 返回空 Map（当作「没有任何功能点」），

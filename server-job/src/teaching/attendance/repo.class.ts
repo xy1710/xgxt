@@ -38,7 +38,7 @@ function mapRow(r: Record<string, any>): AttendanceRow {
   return {
     id: String(r.id),
     stage: STAGE,
-    stageName: '大学',
+    stageName: '大学部',
     classId: String(r.class_id ?? ''),
     className: String(r.class_name ?? ''),
     attendanceDate: String(r.attendance_date ?? '').slice(0, 10),
@@ -202,7 +202,7 @@ export async function board(classId: string, date: string): Promise<AttendanceBo
 
   return {
     stage: STAGE,
-    stageName: '大学',
+    stageName: '大学部',
     classId,
     className: String(cls.class_name ?? ''),
     attendanceDate: date,

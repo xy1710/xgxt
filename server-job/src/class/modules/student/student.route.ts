@@ -15,6 +15,8 @@ import { assertClassAcceptStudent, isRepeatStudent } from '../../lib/classRule';
 import { wrap } from '../../middleware/error';
 import { tbl, tblTrx, tblIns, tblInsTrx, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
 import { TransferType } from 'shared-types';
+// ★ 2026-10-20 试学闭环：班主任发起补费 / 退学回写咨询状态，走服务间内部通道
+import { consultClient } from '../../lib/consultClient';
 
 export const studentRouter = Router();
 
@@ -770,7 +772,7 @@ studentRouter.get(
     /**
      * 欠费口径（需求二 / 三）：缴费数据来自「财务管理」同步副本，
      * 所以这里查 sms_common.t_class_fee_sync，而不是本模块的表。
-     * 欠费 = 待缴 + 逾期 + 冻结 且 金额 > 已缴金额。
+     * 欠费 = 待缴 + 冻结 且 金额 > 已缴金额。
      *
      * 注意：学生表在 sms_class、缴费副本在 sms_common，**跨库子查询不可用**
      * （knex 的子查询会跟着外层连接走，落到 sms_common 上就找不到 t_class_student）。
@@ -1272,5 +1274,204 @@ studentRouter.post(
 
     result.finishTime = now();
     return ok(res, result, `升学同步完成：处理 ${result.inserted + result.updated} 条，失败 ${result.failed} 条`);
+  }),
+);
+
+/* ============================================================
+ * ★ 2026-10-20 试学闭环（用户口径）
+ *
+ *   交试学费 → 分配班级 → 试学中
+ *     ├─ 试学中发现问题 ──→ 退学（走 /api/class/suspend/add 审批链，通过后回写咨询为「流失」）
+ *     └─ 试学通过      ──→ 班主任发起补费 → 补缴到账 → 正式在读
+ *
+ * 【为什么补费要跨模块】
+ *   钱和收款单都在咨询模块（t_consult_fee_order），班主任在班级模块。
+ *   铁律不许直连别人的库 → 走 consultClient（内部令牌通道）。
+ *   真正收款仍由咨询老师上传凭证、财务核对到账；到账后
+ *   consult 侧 fee-order.service 自动把状态推进到「正式在读」，
+ *   并回头调本文件的 /internal-status 把学籍从「试学中」改成「正式在读」。
+ * ============================================================ */
+
+/**
+ * 找「从咨询同步进来」的学生
+ *
+ * 认人键：`source_id` = 咨询单号（= 咨询侧 student_no），
+ * 由 doReceive 建档时写入 `source_system='consult', source_id=push.consult_no`。
+ * ⚠️ 不能用 student_no：班级侧学号是建档时新生成的 S2026xxxx，两边本来就不同。
+ */
+async function findConsultStudent(consultNo: string): Promise<Record<string, unknown> | undefined> {
+  const key = String(consultNo || '').trim();
+  if (!key) return undefined;
+  return (await notDeleted(tbl(db, SRC, 't_class_student', STAGE))
+    .where({ source_system: 'consult', source_id: key })
+    .first()) as Record<string, unknown> | undefined;
+}
+
+/**
+ * @openapi
+ * /api/class/student/trial-plan:
+ *   get:
+ *     tags: [学生信息]
+ *     summary: 5.1 试学转正 · 补费预览（班主任）
+ *     description: 返回应缴合计 / 已到账 / 还差多少 / 差哪几项，供「转正式」弹窗展示。
+ */
+studentRouter.get(
+  '/trial-plan',
+  requirePerm('student', PermAction.EDIT),
+  validate({ query: z.object({ studentId: z.string().min(1, '缺少学生ID') }) }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const { studentId } = q<{ studentId: string }>(req);
+
+    const stu = (await notDeleted(tbl(db, SRC, 't_class_student', STAGE)).where('id', studentId).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!stu) throw Errors.studentNotFound();
+    assertClassAccess(user, stu.class_id as string | null, '该学员');
+
+    if (Number(stu.student_status) !== StudentStatus.TRIAL) {
+      throw Errors.param(
+        `「${String(stu.student_name)}」当前状态为「${StudentStatusName[Number(stu.student_status)] ?? '未知'}」，只有「试学中」的学生才能转正式`,
+      );
+    }
+
+    const consultNo = String(stu.source_id || '');
+    if (!consultNo) {
+      throw Errors.param('该学员不是从咨询同步进来的，没有对应的咨询档案，无法走补费转正');
+    }
+
+    const plan = await consultClient.trialPlan(consultNo);
+    if (!plan.ok) throw Errors.param(plan.message);
+
+    return ok(
+      res,
+      {
+        studentId,
+        studentNo: stu.student_no,
+        studentName: stu.student_name,
+        className: stu.class_name ?? null,
+        deptCode: stu.dept_code ?? null,
+        ...(plan.data || {}),
+        /** 在途金额（已发起、等财务确认）—— 前端要显示成「另有 X 元在途」，别让老师以为漏了 */
+        inFlightAmount: plan.data?.inFlightAmount ?? 0,
+      },
+      '查询成功',
+    );
+  }),
+);
+
+/**
+ * @openapi
+ * /api/class/student/trial-supplement:
+ *   post:
+ *     tags: [学生信息]
+ *     summary: 5.2 班主任发起补费（试学 → 待缴全款）
+ *     description: |
+ *       只把学生推进到「全款待缴」并留痕，**不建收费单**——
+ *       本系统「缴费必须有凭证」，真正收款由咨询老师上传缴费截图、财务核对到账。
+ *       到账后自动转「正式在读」，同时学籍从「试学中」改为「正式在读」。
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [studentId]
+ *             properties:
+ *               studentId: { type: string }
+ */
+studentRouter.post(
+  '/trial-supplement',
+  requirePerm('student', PermAction.EDIT),
+  validate({ body: z.object({ studentId: z.string().min(1, '缺少学生ID') }) }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const b = req.body as { studentId: string };
+
+    const stu = (await notDeleted(tbl(db, SRC, 't_class_student', STAGE)).where('id', b.studentId).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!stu) throw Errors.studentNotFound();
+    assertClassAccess(user, stu.class_id as string | null, '该学员');
+
+    if (Number(stu.student_status) !== StudentStatus.TRIAL) {
+      throw Errors.param(
+        `「${String(stu.student_name)}」当前状态为「${StudentStatusName[Number(stu.student_status)] ?? '未知'}」，只有「试学中」的学生才能发起补费转正`,
+      );
+    }
+    if (!stu.class_id) {
+      throw Errors.param('该学员还没有班级，请先分配班级再转正式');
+    }
+
+    const consultNo = String(stu.source_id || '');
+    if (!consultNo) {
+      throw Errors.param('该学员不是从咨询同步进来的，没有对应的咨询档案，无法走补费转正');
+    }
+
+    const r = await consultClient.trialSupplement({
+      consultNo,
+      operatorName: user.userName,
+      operatorTitle: '班主任',
+    });
+    if (!r.ok) throw Errors.param(r.message);
+
+    return ok(res, { studentId: b.studentId, consultNo, ...(r.data || {}) }, r.message);
+  }),
+);
+
+/**
+ * @openapi
+ * /api/class/student/internal-status:
+ *   post:
+ *     tags: [学生信息]
+ *     summary: 5.3 学籍状态同步（服务间内部接口）
+ *     description: |
+ *       咨询侧「补费到账 → 正式在读」后调用，把学籍从「试学中(3)」改为「正式在读(5)」。
+ *       ⚠️ 只接受 x-internal-token（见 middleware/auth.ts 的 authAllowSync 白名单）。
+ */
+studentRouter.post(
+  '/internal-status',
+  validate({
+    body: z.object({
+      consultNo: z.string().min(1, '缺少咨询单号'),
+      studentStatus: z.coerce.number().int(),
+    }),
+  }),
+  wrap(async (req, res) => {
+    const b = req.body as { consultNo: string; studentStatus: number };
+
+    const stu = await findConsultStudent(b.consultNo);
+    if (!stu) {
+      return ok(
+        res,
+        { updated: false, consultNo: b.consultNo },
+        `班级侧未找到咨询单「${b.consultNo}」对应的学员（可能还没分班），无需同步`,
+      );
+    }
+
+    const before = Number(stu.student_status);
+    if (before === Number(b.studentStatus)) {
+      return ok(
+        res,
+        { updated: false, studentNo: stu.student_no, before, after: before },
+        '学籍状态已是目标值，无需变更',
+      );
+    }
+
+    await tbl(db, SRC, 't_class_student', STAGE)
+      .where({ id: stu.id as string })
+      .update({ student_status: Number(b.studentStatus), ...baseUpdate() });
+
+    return ok(
+      res,
+      {
+        updated: true,
+        studentNo: stu.student_no,
+        studentName: stu.student_name,
+        before,
+        after: Number(b.studentStatus),
+      },
+      `学籍状态已同步：${StudentStatusName[before] ?? before} → ${StudentStatusName[Number(b.studentStatus)] ?? b.studentStatus}`,
+    );
   }),
 );

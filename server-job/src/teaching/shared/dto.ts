@@ -13,19 +13,44 @@
  *      **后端进出一律转成统一码**，前端不认识任何学段的原始码。
  */
 
-/** 三个学段 */
+/** 学段 */
 export type TeachingStage = 'jh' | 'class' | 'job';
 
 export const TEACHING_STAGES: TeachingStage[] = ['jh', 'class', 'job'];
 
 export const TEACHING_STAGE_NAME: Record<TeachingStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '实训',
 };
 
 export function isTeachingStage(x: unknown): x is TeachingStage {
   return x === 'jh' || x === 'class' || x === 'job';
+}
+
+/**
+ * ★ 2026-10-19 批注：班级域新增「就业部」学段
+ *
+ * 【为什么不直接扩 TeachingStage】
+ *   出勤/考试/成绩/宿舍/退费/审批等域都是按 TeachingStage 穷举仓储的，
+ *   一扩就会要求这些域也实现「就业部」，纯属误伤。
+ *   就业部目前只接「班级管理 + 学生档案」两个入口，所以只扩这两个域的联合类型。
+ *
+ * 【数据口径】复用 sms_job 的表，靠 dept_code=3 隔离（表里的 stage 列是阶段码，不能用来隔离）。
+ */
+export type ClassStage = TeachingStage | 'emp';
+
+export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
+
+export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
+  jh: '初高部',
+  class: '大学部',
+  job: '实训',
+  emp: '就业部',
+};
+
+export function isClassStage(x: unknown): x is ClassStage {
+  return x === 'jh' || x === 'class' || x === 'job' || x === 'emp';
 }
 
 /**
@@ -380,6 +405,62 @@ export interface ScoreSummaryItem {
   passRate: number;
 }
 
+/**
+ * 单行改分（成绩列表「编辑」）
+ *
+ * ★ 只改「传了的字段」：没传 = 保持原值。
+ *   —— 备注列是内联编辑的，只传 remark 时**不能**把分数重算一遍再写回去
+ *      （浮点权重来回算会把 85 变成 84.999…）。
+ */
+export interface ScoreUpdateBody {
+  stage: TeachingStage;
+  /** 成绩行 id */
+  id: string;
+  writtenScore?: number | null;
+  machineScore?: number | null;
+  interviewScore?: number | null;
+  otherScore?: number | null;
+  /**
+   * 考试结果 1 通过 / 2 未通过 / null 未判断
+   *
+   * ★ 2026-10-19：三个学段都允许老师手改（「编辑」弹窗里的结果下拉）。
+   *   传了就以老师选的为准；没传则维持原判定逻辑：
+   *     初高按满分比例重判 / 大学默认通过 / 实训保持未判断。
+   */
+  examResult?: number | null;
+  remark?: string | null;
+}
+
+/**
+ * 末班（成绩列表「末班」）
+ *
+ * 【规则】结果必须已是「未通过」才能末班；
+ *   目标班级学段：初高 → 只能初高；大学 → 只能大学；实训 → 三学段任意。
+ */
+export interface ScoreRepeatBody {
+  stage: TeachingStage;
+  /** 成绩行 id */
+  scoreId: string;
+  /** 目标班级所属学段 */
+  targetStage: TeachingStage;
+  targetClassId: string;
+  /** YYYY-MM-DD；不传默认今天 */
+  repeatDate?: string;
+  /** 末班原因（下拉选项，或「其他」手填） */
+  repeatReason: string;
+  /** 学员不足说明：拼进末班原因，并同步写成绩备注 */
+  shortcoming?: string;
+}
+
+export interface ScoreRepeatResult {
+  repeatCount: number;
+  fromClassName: string | null;
+  toClassName: string;
+  toStageName: string;
+  /** 目标班有无班主任可通知（本版不发站内信，仅回传便于前端提示） */
+  notified: boolean;
+}
+
 /* ============================================================
  * 退费域（第 4 个合并的业务域）
  * ============================================================
@@ -448,6 +529,10 @@ export const REFUND_CHAIN_NODES: Array<{ step: number; name: string; roles: stri
   { step: 1, name: '学管审批', roles: '学管主任 / 学管' },
   { step: 2, name: '校长审批', roles: '校长' },
 ];
+
+/** 单项退费费用上限：10 万元（单位分，100000 元 × 100）。
+ *  前端费用项输入框的 max 与 service.create 的兜底校验共用这一口径，改这里两处同步。 */
+export const REFUND_ITEM_MAX_AMOUNT = 10000000;
 
 /** 费用项（统一结构：初高/实训只会有 1 项，大学可多项） */
 export interface RefundItem {
@@ -606,14 +691,48 @@ export const LEAVE_ACTIVE_STATUSES: number[] = [
 /**
  * ★ 各学段**支持**的审批类型
  *
- * ⚠️ 大学没有「复学」—— 这是**业务事实**（大学 `ApplyType` 里就没有这一项），
- *    不是合并遗漏。页面会据此隐藏该选项，而不是给个点不动的按钮。
+ * 【2026-10-16 调整】大学**开放「复学」**（用户要求：大学生休学后也可以复学）。
+ *   大学老表 `ApplyType` 原本只有 1休学 2退学 3退费 4升学，没有复学码 ——
+ *   本次新增**原码 5 = 复学**（见 shared/conf.ts 的 DEFAULT_LEAVE_BIZ_MAP.class），
+ *   并给 `t_class_suspend_apply` 补了 `new_class_id` / `new_class_name` 两列
+ *   （migrations-class/20261016_012）。
  */
 export const LEAVE_STAGE_BIZ: Record<TeachingStage, number[]> = {
   jh: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
-  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT],
+  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
   job: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
 };
+
+/**
+ * ★ 部门（业务口径）—— 发起申请时那个下拉，**取代**原来的「学段」
+ *
+ * 【为什么要有这一层】
+ *   用户口径里公司有 3 个部门：初高中 / 大学 / 就业；
+ *   技术上也是 3 个学段（jh / class / job），其中「就业」就是 `sms_job` 那个库
+ *   （启动日志里显示的「就业管理」）。
+ *
+ * 【★ 2026-10-21 用户要求：部门「实训」改为「就业」】
+ *   原来这里是 4 项（初高中 / 大学 / 实训 / 就业），第 4 项「就业」是个
+ *   `stage = null` 的占位（当时认为就业部没有异动库表，选它只提示"暂不办理"）。
+ *   实际上实训与就业共用 `sms_job`、同一套仓储 —— 占位没有意义，还给用户一个
+ *   选不了学生的空部门。现在收成 3 项：初高中 / 大学 / 就业，
+ *   就业 = 原实训（stage 仍是 `job`），休学 / 退学 / 复学 三项功能一并可用。
+ *
+ * ⚠️ 前端**不要在页面里另抄一份**：本数组由 `/meta` 下发，改这里就够了
+ *   （前端兜底值 `LEAVE_DEPARTMENTS_DEFAULT` 只在 meta 请求失败时用）。
+ */
+export const LEAVE_DEPARTMENTS: Array<{
+  /** 部门码（jh/class/job 与学段同码） */
+  code: string;
+  /** 部门中文名（页面显示，与用户口径一致：初高中 / 大学 / 就业） */
+  name: string;
+  /** 对应学段；null = 该部门暂不办理学籍异动（当前没有这种部门，字段保留以备将来） */
+  stage: TeachingStage | null;
+}> = [
+  { code: 'jh', name: '初高中', stage: 'jh' },
+  { code: 'class', name: '大学', stage: 'class' },
+  { code: 'job', name: '就业', stage: 'job' },
+];
 
 /** 审批链步数（供前端展示"本次走几步"） */
 export const LEAVE_CHAIN_STEPS: Record<number, number> = {
@@ -657,6 +776,21 @@ export interface LeaveRow {
   attendedHours: number | null;
   /** 关联的退费单号（退学联动） */
   relatedRefundNo: string | null;
+
+  /**
+   * ★ 学生**当前**状态（实时读学生表，不是建单时的快照）
+   *
+   * 【为什么列表要带它】
+   *   单据状态 ≠ 学生现状。比如「休学单已通过」，但如果这个人之后又办过复学，
+   *   他现在是「正式在读」，不会出现在「复学」的候选名单里。
+   *   列表上不显示这一列时，用户会看到「一堆已通过的休学单 → 复学时却没人可选」，
+   *   直接判定成 bug（2026-10-15 用户就是这么报上来的）。
+   *   ⚠️ 由 service 在分页**之后**批量补（见 attachStudentStatus），
+   *      仓储的 decorate 不负责它（那是快照字段，语义不同）。
+   */
+  studentStatus?: number | null;
+  /** 学生当前状态中文名（'休学' / '正式在读' …） */
+  studentStatusName?: string;
 
   approvalStatus: number;
   approvalStatusName: string;
@@ -747,19 +881,21 @@ export interface LeaveSummary {
  */
 
 /** 学生档案的四个学段来源 */
-export type StudentStage = 'jh' | 'class' | 'job' | 'edu';
+export type StudentStage = 'jh' | 'class' | 'job' | 'emp' | 'edu';
 
-export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'edu'];
+export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'emp', 'edu'];
 
 export const STUDENT_STAGE_NAME: Record<StudentStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '就业',
+  /** ★ 2026-10-19 批注：就业部（与就业共用 sms_job，按 dept_code=3 隔离） */
+  emp: '就业部',
   edu: '教务',
 };
 
 export function isStudentStage(x: unknown): x is StudentStage {
-  return x === 'jh' || x === 'class' || x === 'job' || x === 'edu';
+  return x === 'jh' || x === 'class' || x === 'job' || x === 'emp' || x === 'edu';
 }
 
 /**
@@ -770,7 +906,7 @@ export function isStudentStage(x: unknown): x is StudentStage {
  *   规则：以**阶段更靠后**的那条为准 —— job > class > jh > edu。
  *   （edu 放最后：它是教务的同步副本，最陈旧。）
  */
-export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['job', 'class', 'jh', 'edu'];
+export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['emp', 'job', 'class', 'jh', 'edu'];
 
 /** 学生档案 · 列表行（统一结构，四个学段共用） */
 export interface StudentRow {
@@ -798,6 +934,8 @@ export interface StudentRow {
   studentStatus: number;
   studentStatusName: string;
   phone: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName: string | null;
   parentPhone: string | null;
   education: string | null;
   enrollDate: string | null;
@@ -863,6 +1001,30 @@ export interface StudentDormSection {
   building: string | null;
 }
 
+/**
+ * 升云记录（2026-10-20 批注：初高部 → 大学部「开放」班级）
+ *
+ * 学生详情「基础信息」页签里展示：原班级 / 原班主任 / 升入班级 / 操作人 / 时间。
+ * ⚠️ 按**学号**关联：升云后大学那条是新学生 id，只有学号两边一致（批注要求学号不变）。
+ */
+export interface StudentUpgradeRow {
+  id: string;
+  studentNo: string;
+  studentName: string;
+  /** 原班级（初高部） */
+  fromClassName: string | null;
+  /** 原班主任 */
+  fromHeadTeacherName: string | null;
+  /** 升入班级（大学部） */
+  toClassName: string | null;
+  toHeadTeacherName: string | null;
+  operatorId: string | null;
+  /** 操作人 */
+  operatorName: string | null;
+  upgradeTime: string | null;
+  remark: string | null;
+}
+
 export interface StudentDetail {
   base: StudentRow;
   profile: StudentProfileSection;
@@ -878,6 +1040,8 @@ export interface StudentDetail {
   flows: Array<Record<string, unknown>>;
   /** 末班 / 留级记录 */
   repeats: Array<Record<string, unknown>>;
+  /** 升云记录（初高部 → 大学部，2026-10-20）—— 由 service 层按学号补齐，仓储不返回 */
+  upgrades?: StudentUpgradeRow[];
   /** 其余学段特有字段（原样透传，前端不渲染、留作排查） */
   extra: Record<string, unknown> | null;
 }
@@ -902,6 +1066,8 @@ export interface StudentSaveBody {
   graduateSchool?: string | null;
   enrollDate?: string | null;
   phone?: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName?: string | null;
   parentPhone?: string | null;
   homeAddress?: string | null;
   idCard?: string | null;
@@ -912,6 +1078,9 @@ export interface StudentSaveBody {
   dormId?: string | null;
   dormNo?: string | null;
   bedNo?: string | null;
+  /** 校园网账号（初高表有列；留空时系统自动生成） */
+  netAccount?: string | null;
+  netInitPassword?: string | null;
   remark?: string | null;
   /** 学段特有字段（综合素质 / 校园网 / 简历…）原样透传 */
   extra?: Record<string, unknown> | null;
@@ -928,12 +1097,50 @@ export interface StudentSaveResult {
   unfrozenCount?: number;
 }
 
+/**
+ * 学生档案详情「扩展区块」数据（2026-10-15 详情页分签改版）
+ *
+ * 【为什么单独一个接口】成绩 / 调宿记录分别来自成绩域、宿舍域，
+ * 每次打开详情才按需拉取，不塞进 /detail（老接口保持轻、老页面不受影响）。
+ */
+export interface StudentExtras {
+  /** 该生全部考试成绩（examType/examDate/examTypeName 由适配器按考试表回填） */
+  scores: Array<ScoreRow & { examType?: number | null; examTypeName?: string | null }>;
+  /** 该生调宿 / 退宿申请单（含审批状态） */
+  dormChanges: DormChangeRow[];
+  /** 所在宿舍的宿舍长 / 负责人（宿舍管理同步） */
+  dormOwnerName: string | null;
+  /** 所在宿舍的班级（宿舍管理同步，只有初高有） */
+  dormClassName: string | null;
+}
+
+/**
+ * ★ 2026-10-16 阶段方案（一个方案含多个阶段）
+ *
+ *   原「阶段字典」改版成「阶段方案」后，班级 / 学生表单里的「阶段」下拉
+ *   不再从写死的常量里取，而是：**先选方案 → 再选该方案下的阶段**。
+ *   数据源：sms_class_jh 的 t_class_stage_plan + t_class_stage
+ *   （初高部 / 大学部两个部门的方案都存在那里）。
+ */
+export interface StagePlanOption {
+  /** 方案 ID */
+  id: string;
+  /** 方案名称，如 初高部阶段方案 */
+  name: string;
+  /** 所属部门 1 初高部 / 2 大学部 */
+  deptCode: number;
+  /** 该方案下的阶段（value = 阶段编码，label = 阶段名称） */
+  phases: Array<{ value: number; label: string }>;
+}
+
 /** 元信息：某学段支持哪些筛选项 / 能不能写 / 有哪些特有区块 */
 export interface StudentStageMeta {
   stage: StudentStage;
   stageName: string;
   /** 该学段支持的学段内阶段码可选项 */
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（前端「阶段方案」下拉的数据源） */
+  planOptions?: StagePlanOption[];
   /** 该学段特有区块的键（前端据此决定显示哪些页签） */
   sections: string[];
   /** 是否支持「只看未分配宿舍」筛选 */
@@ -987,12 +1194,16 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
 };
 
 /**
- * ★ 统一班级状态流转表（取初高那套，最完整）
+ * ★ 统一班级状态流转表
  *   已结业是终态，不可回退 —— 撤销结业属于「结业撤销」专用动作，不走这里。
+ *
+ * 2026-10-19 批注：「待结业」这个状态删除（页面下拉不再出现），
+ *   封班之后直接进「已结业」。为兼容历史数据，3→已结业 的流转仍保留，
+ *   但**不再作为任何状态的下一跳目标**（新数据不可能变成 3）。
  */
 export const CLASS_STATUS_TRANSITIONS: Record<number, number[]> = {
-  [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED, CLASS_STATUS.GRADUATING],
-  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATING],
+  [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED],
+  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
   [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATING, CLASS_STATUS.GRADUATED],
   [CLASS_STATUS.GRADUATED]: [CLASS_STATUS.GRADUATED],
 };
@@ -1003,15 +1214,15 @@ export function canTransitClassStatus(from: number, to: number): boolean {
   return allowed.includes(to);
 }
 
-/** 部门（数据字典固定：1 初高部 2 大学部）—— 三套都有 dept_code */
-export const CLASS_DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+/** 部门（数据字典固定：1 初高部 2 大学部 3 就业部）—— 三套都有 dept_code */
+export const CLASS_DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
 
 /** 出勤率口径 —— ★ 必须显式告诉前端，否则「今日 92%」和「累计 88%」会被误读成同一种 */
 export type AttendanceRateKind = 'today' | 'total' | null;
 
 /** 班级列表行（统一结构，三学段共用） */
 export interface ClassRow {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   classId: string;
   className: string;
@@ -1022,6 +1233,15 @@ export interface ClassRow {
   /** 学段内阶段码（初高 101~204 / 大学 201~206 / 实训 1~3），各学段取值域不同 */
   phaseCode: number | null;
   phaseName: string;
+
+  /**
+   * ★ 2026-10-16 新增：阶段方案（表单里「阶段方案 + 阶段」两个下拉的落库值）
+   *   老班级没有方案时为 null，回显退回 phaseName（阶段码名称）。
+   */
+  schemeId: string | null;
+  schemeStageId: string | null;
+  /** 方案里的阶段名称（冗余存一份，列表/详情直接回显） */
+  schemeStageName: string | null;
 
   headTeacherId: string | null;
   headTeacherName: string | null;
@@ -1065,7 +1285,7 @@ export interface ClassRow {
 }
 
 export interface ClassListQuery {
-  stage?: TeachingStage;
+  stage?: ClassStage;
   deptCode?: number;
   classStatus?: number;
   phaseCode?: number;
@@ -1077,7 +1297,7 @@ export interface ClassListQuery {
 }
 
 export interface ClassSaveBody {
-  stage: TeachingStage;
+  stage: ClassStage;
   /** 有值 = 修改，无值 = 新增 */
   id?: string;
   className: string;
@@ -1085,6 +1305,10 @@ export interface ClassSaveBody {
   classCode?: string | null;
   deptCode?: number | null;
   phaseCode?: number | null;
+  /** ★ 2026-10-16：阶段方案（可选；不选方案的老流程照样能用） */
+  schemeId?: string | null;
+  schemeStageId?: string | null;
+  schemeStageName?: string | null;
   headTeacherId?: string | null;
   headTeacherName?: string | null;
   teacherId?: string | null;
@@ -1105,15 +1329,71 @@ export interface ClassSaveBody {
 
 /** 统计卡片（口径与列表完全一致） */
 export interface ClassSummary {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   total: number;
   openCount: number;
   closedCount: number;
+  /** 2026-10-19 起「待结业」已下线，恒为 0（保留字段兼容前端旧代码） */
   graduatingCount: number;
   graduatedCount: number;
   /** 在班学生总数 */
   studentCount: number;
+}
+
+/* ============================================================
+ * 班级交接（2026-10-19 批注）
+ *   一次交接 = 一个班 5 个岗位同时换人：
+ *   班主任 / 教员 / 助教 / 项目经理 / 就业老师
+ *   初高没有后两个岗位（页面也不显示）。
+ * ============================================================ */
+
+/** 交接里的一个岗位（原/新） */
+export interface ClassHandoverRole {
+  oldId: string | null;
+  oldName: string | null;
+  newId: string | null;
+  newName: string | null;
+}
+
+/** 一条交接记录（详情抽屉里按时间倒序展示） */
+export interface ClassHandoverRow {
+  id: string;
+  stage: ClassStage;
+  stageName: string;
+  classId: string;
+  className: string;
+  deptCode: number | null;
+  headTeacher: ClassHandoverRole;
+  teacher: ClassHandoverRole;
+  assistant: ClassHandoverRole;
+  /** 初高恒为空 */
+  projectManager: ClassHandoverRole;
+  /** 初高恒为空 */
+  employmentTeacher: ClassHandoverRole;
+  handoverDate: string | null;
+  reason: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  createTime: string | null;
+}
+
+/** 提交交接的入参：只带「要换的新人」，没带的岗位视为不变 */
+export interface ClassHandoverPayload {
+  stage: ClassStage;
+  classId: string;
+  handoverDate?: string | null;
+  reason?: string | null;
+  headTeacherId?: string | null;
+  headTeacherName?: string | null;
+  teacherId?: string | null;
+  teacherName?: string | null;
+  assistantId?: string | null;
+  assistantName?: string | null;
+  projectManagerId?: string | null;
+  projectManagerName?: string | null;
+  employmentTeacherId?: string | null;
+  employmentTeacherName?: string | null;
 }
 
 /** 花名册一行（统一结构；各学段「班级↔学生」的关联方式不同，见各仓储注释） */
@@ -1134,7 +1414,7 @@ export interface ClassRosterRow {
 
 /** 元信息：某学段支持哪些特性（前端据此隐藏不适用输入框） */
 export interface ClassStageMeta {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   /** 该学段是否有班级编号（只有实训有） */
   hasClassCode: boolean;
@@ -1146,6 +1426,8 @@ export interface ClassStageMeta {
   classroomLabel: string;
   /** 学段内阶段码可选项 */
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（前端「阶段方案」下拉的数据源） */
+  planOptions?: StagePlanOption[];
 }
 
 /** 统计卡片 */
@@ -1234,6 +1516,76 @@ export const DORM_GENDER_NAME: Record<number, string> = {
   2: '女生宿舍',
 };
 
+/**
+ * ★「类别」的**展示口径**：1 男寝 / 2 女寝（2026-10-18）
+ *
+ * 【为什么不能直接用上面的 DORM_GENDER_NAME】
+ *   DORM_GENDER_NAME 是**底层枚举全集**，且被老路由（dorm.route.ts /
+ *   classInfo.route.ts）复用着，改它会连带改掉老页面的文案。
+ *   而宿舍管理列表现在统一显示「男寝 / 女寝」（见前端 DORM_CATEGORY_NAME）。
+ *
+ * 【为什么搜索必须用它】
+ *   关键字匹配取的是「列表上显示出来的值」（见 service.searchTextOf）。
+ *   若这里用「男生宿舍」，用户看着列表上的「男寝」去搜「男寝」就会搜不到 ——
+ *   「屏幕上看得见、搜索框里搜不出来」正是这次要根治的问题。
+ *   → 0「不限」不在新口径内 → 返回 undefined，由调用方回退到 dormTypeName。
+ */
+export const DORM_CATEGORY_NAME: Record<number, string> = {
+  1: '男寝',
+  2: '女寝',
+};
+
+/* ============================================================
+ * ★ 楼栋「楼层 / 每层房间数 / 每间床位数」的硬边界（2026-10-19）
+ *
+ * 【口径（2026-10-19 改：三项统一封顶 50）】
+ *   楼层数 / 每层房间数 / 每间床位数 **一律 ≤ 50**，由产品口径定，不是格式决定。
+ *   楼层 ≤ 50 之后，房号不再是固定 3 位 —— 见下面 `dormRoomNo()`：
+ *     ≤ 9 层  → 3 位（1 楼第 8 间 = 108）
+ *     ≥ 10 层 → 4 位（10 楼第 8 间 = 1008、50 楼第 12 间 = 5012）
+ *   → 房号长度跟着楼层位数走，现有的 3 位房号一个都不用改。
+ *
+ * 【★ 为什么放在 dto 而不是某个 service 里】
+ *   building.service（楼栋设置）和 dorm/service（房间生成）**两边都要用同一套边界**，
+ *   而它们之间已经有 repo.uni → building.service 的依赖链，互相 import 会成环。
+ *   → 放在 dto（谁都不依赖它），两边各自 import，天然无环且口径只有一份。
+ * ============================================================ */
+
+/** 楼层数上限 */
+export const DORM_FLOOR_MAX = 50;
+/** 每层房间数上限 */
+export const DORM_ROOMS_PER_FLOOR_MAX = 50;
+/** 每间床位数上限（与「新增房间」的床位数口径一致） */
+export const DORM_BED_PER_ROOM_MAX = 50;
+/** 每间床位数默认值 */
+export const DORM_BED_PER_ROOM_DEFAULT = 4;
+/**
+ * ★ 单次生成房间数上限
+ *   生成是「逐间 insert + 逐床 insert」，填错一次就是几千次写库。
+ *   300 间（≈1200 次写）已是宽松值，正常楼栋配置远达不到。
+ */
+export const DORM_GEN_ROOM_MAX = 300;
+
+/**
+ * ★★ 房号编排：楼层 + 两位序号（2026-10-19 支持 10 层以上）
+ *
+ * 【规则】`楼层` 拼 `两位序号`：
+ *   1 楼第 8 间 → `1` + `08` = 108（3 位）
+ *   10 楼第 8 间 → `10` + `08` = 1008（4 位）
+ *   50 楼第 12 间 → `50` + `12` = 5012（4 位）
+ *   → 楼层是一位数就是 3 位房号、两位数就是 4 位房号，**自适应、无需配置**。
+ *
+ * 【为什么序号固定两位】楼层数放宽到 50 之后，房号长度不再固定。
+ *   序号仍补零到两位，是为了「同层内房号等长」（101/102…112 而不是 101/102…1012），
+ *   列表排序和人工核对都不会乱。
+ */
+export function dormRoomNo(floor: number, seq: number): string {
+  return `${Math.floor(floor)}${String(Math.floor(seq)).padStart(2, '0')}`;
+}
+
+/** 房号合法格式：3 位（≤9 层）或 4 位（≥10 层）纯数字 */
+export const DORM_ROOM_NO_ANY_RE = /^\d{3,4}$/;
+
 /** 调宿 / 退宿 业务类型（复用 shared-types 的 DormChangeBizType 口径） */
 export const DORM_CHANGE_NAME: Record<number, string> = {
   1: '调换宿舍',
@@ -1249,8 +1601,27 @@ export interface DormListQuery {
   dormType?: number;
   /** 统一房间状态 */
   roomStatus?: number;
-  /** 关键字：房间号 / 楼栋 / 负责人 */
+  /**
+   * ★ 关键字：匹配**列表上能看到的所有内容**（2026-10-18 改）
+   *
+   * 旧口径只在 SQL 里 like 了 room_no / building / dorm_no / facility 四个字段，
+   * 于是「搜备注里的‘向阳’」「搜‘男寝’」「搜‘停用’」都搜不到 ——
+   * 用户看到列表上有这个字，却搜不出来，是最典型的一类投诉。
+   *
+   * 现在改成在**服务层内存匹配**：等三学段合并成 DormRow 之后再过滤，
+   * 这样 dormType→「男寝」、roomStatus→「停用」这类「int 码要翻译成文字才能搜」
+   * 的字段也能一起命中，且**三学段口径完全一致**（不用每个 repo 各写一遍 like）。
+   *
+   * 匹配范围 = 列表全部列：类别 / 楼栋 / 宿舍号 / 已住·床位 / 入住率 / 状态 / 备注
+   */
   keyword?: string;
+  /**
+   * ★ 入住率（整数百分比，精确匹配，如 50 表示 50%）
+   *
+   * 入住率是**算出来的**（已住/床位），表里没有这一列 → 只能内存过滤，不能进 SQL。
+   * 可选项由 /occupancy-rates 实时从当前数据里取，不写死 0/25/50/75/100。
+   */
+  occupancyRate?: number;
   /** 只看有空床位的 */
   onlyVacant?: boolean;
   page: number;

@@ -6,7 +6,7 @@
  * 这个文件只关心「权限模块到底要调别人什么」：
  *
  *   1. pingAllModules()     —— 7 个模块联通自检（联调时最常用：谁没起一眼看出）
- *   2. fetchAuthProfile()   —— 去登录模块取账号档案（角色/权限/数据范围）
+ *   2. fetchAuthProfile()   —— 去登录模块取账号档案（职位/权限/数据范围）
  *
  * ⚠️ 这两个函数的区别：
  *    pingAllModules 是「容错」的 —— 某个模块挂了不抛错，而是记进结果里，
@@ -127,7 +127,7 @@ export async function pingAllModules(timeout = 2000): Promise<ModuleProbeReport>
 /**
  * 去登录模块取账号档案（跨模块真实业务调用示例）
  *
- * 登录模块（王寒逸，8001）提供账号的角色 / 权限 / 数据范围，
+ * 登录模块（王寒逸，8001）提供账号的职位 / 权限 / 数据范围，
  * 权限模块做鉴权时需要它。
  *
  * ⚠️ 这里**不吞异常** —— 登录模块没起来时，会抛 RemoteError，
@@ -158,7 +158,7 @@ export async function fetchAuthProfile(account: string, token?: string): Promise
  *
  * 与上面那个的区别：不知道账号时，直接把 token 透传给登录模块让它自己解。
  *
- * ⚠️ 账号档案（角色 / 权限 / 数据范围）只有登录模块维护一份，
+ * ⚠️ 账号档案（职位 / 权限 / 数据范围）只有登录模块维护一份，
  *    权限模块不重复存 —— 否则两边对不上时极难排查。
  *
  * ⚠️ 同样按 2026-10-03 修复：路径从 `/api/auth/profile`

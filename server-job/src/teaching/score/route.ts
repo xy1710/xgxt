@@ -12,7 +12,7 @@ import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 import { getScoreFormula } from '../shared/conf';
-import type { TeachingStage } from '../shared/dto';
+import type { ScoreRepeatBody, ScoreUpdateBody, TeachingStage } from '../shared/dto';
 import { isTeachingStage } from '../shared/dto';
 
 export const teachingScoreRouter = Router();
@@ -119,5 +119,64 @@ teachingScoreRouter.get(
   '/formula',
   wrap(async (_req, res) => {
     res.json(ok(await getScoreFormula(), '查询成功'));
+  }),
+);
+
+const nullishNum = (v: unknown): number | null =>
+  v === undefined || v === null || v === '' ? null : Number(v);
+
+/**
+ * 6. 单行改分（列表「编辑」）
+ *
+ * ★ 只把**请求里出现过的字段**放进 body —— 没传的字段仓储不会动。
+ *   备注列是内联编辑的，只改备注时不能顺带把分数重算一遍。
+ */
+teachingScoreRouter.post(
+  '/update',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    const id = str(b.id);
+    if (!id) throw new BizError(BizCode.PARAM_ERROR, '缺少成绩记录ID');
+
+    const body: ScoreUpdateBody = { stage, id };
+    if (b.writtenScore !== undefined) body.writtenScore = nullishNum(b.writtenScore);
+    if (b.machineScore !== undefined) body.machineScore = nullishNum(b.machineScore);
+    if (b.interviewScore !== undefined) body.interviewScore = nullishNum(b.interviewScore);
+    if (b.otherScore !== undefined) body.otherScore = nullishNum(b.otherScore);
+    if (b.examResult !== undefined) body.examResult = nullishNum(b.examResult);
+    if (b.remark !== undefined) body.remark = b.remark === null ? null : String(b.remark);
+
+    res.json(ok(await svc.updateScore(body, req.user), '已保存'));
+  }),
+);
+
+/**
+ * 7. 末班（列表「末班」）
+ *
+ * 前置条件：该生这场考试的结果是「未通过」。
+ * 目标班级学段规则在 service 里（初高→初高、大学→大学、实训→任意）。
+ */
+teachingScoreRouter.post(
+  '/repeat',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    if (!isTeachingStage(b.targetStage)) {
+      throw new BizError(BizCode.PARAM_ERROR, 'targetStage 必填（jh / class / job）');
+    }
+    const body: ScoreRepeatBody = {
+      stage,
+      scoreId: String(b.scoreId ?? ''),
+      targetStage: b.targetStage,
+      targetClassId: String(b.targetClassId ?? ''),
+      repeatDate: str(b.repeatDate),
+      repeatReason: String(b.repeatReason ?? ''),
+      shortcoming: str(b.shortcoming),
+    };
+    const r = await svc.repeatScore(body, req.user);
+    res.json(
+      ok(r, `已末班：${r.fromClassName || '无班级'} → ${r.toClassName}（累计第 ${r.repeatCount} 次）`),
+    );
   }),
 );

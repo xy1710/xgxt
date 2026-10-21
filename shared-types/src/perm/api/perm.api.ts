@@ -85,7 +85,7 @@ export type PermDeptDeleteResponse = ApiResponse<null>;
 export type PermDeptSaveBody = PermDeptSavePayload;
 
 /* ============================================================
- * 契约 3：角色管理
+ * 契约 3：职位管理
  * 路径：  GET    /api/perm/role/list
  *        GET    /api/perm/role/detail?id=xxx
  *        POST   /api/perm/role/add
@@ -97,7 +97,7 @@ export type PermDeptSaveBody = PermDeptSavePayload;
  *        POST   /api/perm/role/import
  *        GET    /api/perm/role/template
  *
- * ⚠️ 跨模块：登录模块调 GET /api/perm/role/codes 取全部角色编码
+ * ⚠️ 跨模块：登录模块调 GET /api/perm/role/codes 取全部职位编码
  * ============================================================ */
 
 export type PermRoleListResponse = PageResponse<PermRoleListItem>;
@@ -108,14 +108,14 @@ export type PermRoleUpdateResponse = ApiResponse<null>;
 export type PermRoleDeleteResponse = ApiResponse<null>;
 export type PermRoleSaveBody = PermRoleSavePayload;
 
-/** 启用/停用角色 */
+/** 启用/停用职位 */
 export interface PermRoleStatusPayload {
   id: string;
   roleStatus: '启用' | '停用';
 }
 export type PermRoleStatusResponse = ApiResponse<null>;
 
-/** 角色编码清单（跨模块：登录模块签发 token 用） */
+/** 职位编码清单（跨模块：登录模块签发 token 用） */
 export interface RoleCodeItem {
   roleCode: string;
   roleName: string;
@@ -169,16 +169,16 @@ export type PermMenuStatsResponse = ApiResponse<PermTreeStats>;
 export type PermMenuItem = PermItem;
 
 /* ============================================================
- * 契约 6：角色-权限分配
+ * 契约 6：职位权限分配
  * 路径：  GET  /api/perm/assign/role-list
- *        GET  /api/perm/assign/tree?roleId=xxx    权限树 + 该角色勾选态
+ *        GET  /api/perm/assign/tree?roleId=xxx    权限树 + 该职位勾选态
  *        PUT  /api/perm/assign/save
  *        POST /api/perm/assign/copy
  *        POST /api/perm/assign/reset
  * ============================================================ */
 
 export type AssignRoleListResponse = ApiResponse<AssignRoleItem[]>;
-/** 权限树 + 该角色勾选态；同时回传统计 */
+/** 权限树 + 该职位勾选态；同时回传统计 */
 export interface AssignTreeData {
   modules: PermModule[];
   perms: RolePermMap;

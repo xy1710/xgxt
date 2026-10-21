@@ -89,7 +89,7 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'student',
     title: '学生档案',
     icon: 'User',
-    desc: '学生主档与花名册：四个学段（初高 / 大学 / 就业 / 教务）合并成一个页面，「全部」按学号去重。',
+    desc: '学生主档与花名册：各来源（初高部 / 大学部 / 就业 / 教务）合并成一个页面，「全部」按学号去重。',
     // ★ 第 2 期：已合并成一套（四个学段 + 学号去重 + 学段筛选）
     unified: defineAsyncComponent(() => import('@/teaching/views/TeachingStudent.vue')),
   },
@@ -121,7 +121,7 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'attendance',
     title: '出勤管理',
     icon: 'Calendar',
-    desc: '各学段出勤登记与统计。',
+    desc: '各部门出勤登记与统计。',
     /**
      * ★★ 第 2 期已合并（第一个落地的业务域）
      *
@@ -140,7 +140,7 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'exam',
     title: '考试管理',
     icon: 'Document',
-    desc: '各学段考试排期与成绩表管理。',
+    desc: '各部门考试排期与成绩表管理。',
     /** ★ 第 2 期已合并（第二个业务域）—— stages 保留作权限判定与回退 */
     unified: defineAsyncComponent(() => import('@/teaching/views/TeachingExam.vue')),
   },
@@ -150,7 +150,7 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'score',
     title: '成绩管理',
     icon: 'DataLine',
-    desc: '各学段成绩录入与统计。',
+    desc: '各部门成绩录入与统计。',
     /** ★ 第 2 期已合并（第三个业务域）—— 列由后端成绩公式配置驱动 */
     unified: defineAsyncComponent(() => import('@/teaching/views/TeachingScore.vue')),
   },
@@ -160,46 +160,26 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'dorm',
     title: '宿舍管理',
     icon: 'House',
-    desc: '各学段宿舍分派、调换与退宿。合并前这里有 4 套重复页面。',
+    desc: '各部门宿舍分派、调换与退宿。合并前这里有 4 套重复页面。',
     unified: defineAsyncComponent(() => import('@/teaching/views/TeachingDorm.vue')),
   },
 
-  /* ---------------- 7. 催费 / 缴费 ---------------- */
+  /* ---------------- 7. 催费 ---------------- */
   {
     key: 'fee',
-    title: '催费 / 缴费',
+    title: '催费',
     icon: 'Money',
-    desc: '各学段费用催办与缴费台账。',
-    stages: [
-      {
-        stage: '初高',
-        path: '/class-jh/fee',
-        pageCode: 'classjh:fee:view',
-        comp: defineAsyncComponent(() => import('@/class-jh/views/FeeList.vue')),
-        note: '缴费台账 + 催费推送 / 催费记录 + 导出。',
-      },
-      {
-        stage: '大学',
-        path: '/class/urge',
-        pageCode: 'class:urge:view',
-        comp: defineAsyncComponent(() => import('@/class/views/Urge.vue')),
-        note: '催费发起与催缴记录（数据同步自教务，只读投影）。',
-      },
-      {
-        stage: '实训',
-        path: '/fee-call',
-        pageCode: 'job:feeCall:view',
-        comp: defineAsyncComponent(() => import('@/views/FeeCallList.vue')),
-        note: '催费单模型（住宿费 / 保险费 / 餐费）：教务发起 → 班主任催缴回填；只催办不收款。',
-      },
-      {
-        stage: '教务',
-        path: '/edu/fee',
-        pageCode: 'edu:fee:view',
-        comp: defineAsyncComponent(() => import('@/views/edu/PaymentList.vue')),
-        note: '缴费总记录 + 即将到期预警 + 凭证 OCR 识别 + 批量冻结 / 解冻。',
-      },
-    ],
+    desc: '各部门费用催办与缴费台账。',
+    // ★ 2026-10-19 域重组（用户要求）：原四部门页签（初高部 / 大学部 / 实训 / 教务）收成两页——
+    //   「催费」= 原「初高部」缴费台账页（FeeList）改名，功能一行没动；
+    //   第二页 = 教务缴费总记录（PaymentList 原样）。页签显隐沿用原权限码（见 access.ts fee 域）。
+    // ★ 2026-10-20 用户要求：第二页（教务缴费总记录）整页删除。
+    //   于是本域只剩一页 → 菜单名从「催费 / 缴费」改回「催费」，TeachingFeeHub 里的 el-tabs 一并去掉。
+    //   ⚠️ 菜单名被 App.vue 的催费红点按**精确标题**匹配，改名必须同步那里（已改）。
+    //   老页面 / 老路由（/class-jh/fee、/class/urge、/fee-call、/edu/fee）未删，可回退。
+    //   ★ 2026-10-20 合并 main：main 侧对这段只做了「学段 → 部门」改名（标签 初高部 / 大学部），
+    //     页签结构以本次重组为准，故不再保留 stages 四页签。
+    unified: defineAsyncComponent(() => import('@/teaching/views/TeachingFeeHub.vue')),
   },
 
   /* ---------------- 8. 退费 ---------------- */
@@ -207,7 +187,7 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'refund',
     title: '退费',
     icon: 'RefreshLeft',
-    desc: '★ 审批链三学段统一（实训那套）：学管 → 校长 → 通知财务出款。',
+    desc: '★ 审批链三部门统一（实训那套）：学管 → 校长 → 通知财务出款。',
     /** ★ 第 2 期已合并（第四个业务域）—— stages 保留作权限判定与回退 */
     unified: defineAsyncComponent(() => import('@/teaching/views/TeachingRefund.vue')),
   },
@@ -217,7 +197,7 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'approval',
     title: '休学 / 退学审批',
     icon: 'Stamp',
-    desc: '★ 审批链三学段统一（实训那套）：休学/复学 1 步，退学 2 步（学管→校长）。',
+    desc: '★ 审批链三部门统一（实训那套）：休学/复学 1 步，退学 2 步（学管→校长）。',
     /** ★ 第 2 期已合并（第五个业务域）—— stages 保留作权限判定与回退 */
     unified: defineAsyncComponent(() => import('@/teaching/views/TeachingLeave.vue')),
   },

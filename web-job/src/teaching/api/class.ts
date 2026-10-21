@@ -17,7 +17,7 @@
 
 import { http } from '@/api/request';
 
-export type ClassStage = 'jh' | 'class' | 'job';
+export type ClassStage = 'jh' | 'class' | 'job' | 'emp';
 
 export type AttendanceRateKind = 'today' | 'total' | null;
 
@@ -32,6 +32,10 @@ export interface ClassRow {
   deptName: string;
   phaseCode: number | null;
   phaseName: string;
+  /** ★ 2026-10-16：阶段方案（老班级为 null，回显退回 phaseName） */
+  schemeId: string | null;
+  schemeStageId: string | null;
+  schemeStageName: string | null;
   headTeacherId: string | null;
   headTeacherName: string | null;
   teacherId: string | null;
@@ -96,6 +100,10 @@ export interface ClassSaveBody {
   classCode?: string | null;
   deptCode?: number | null;
   phaseCode?: number | null;
+  /** ★ 2026-10-16：阶段方案（先选方案、再选阶段；不选则走老的阶段码） */
+  schemeId?: string | null;
+  schemeStageId?: string | null;
+  schemeStageName?: string | null;
   headTeacherId?: string | null;
   headTeacherName?: string | null;
   teacherId?: string | null;
@@ -114,6 +122,20 @@ export interface ClassSaveBody {
   remark?: string | null;
 }
 
+/**
+ * ★ 2026-10-16 阶段方案（一个方案含多个阶段）
+ *   原「阶段字典」改版后，班级/学生表单的「阶段」改成「先选方案，再选阶段」。
+ */
+export interface StagePlanOption {
+  id: string;
+  /** 方案名称，如 初高部阶段方案 */
+  name: string;
+  /** 所属部门 1 初高部 / 2 大学部 */
+  deptCode: number;
+  /** 该方案下的阶段（value = 阶段编码，label = 阶段名称） */
+  phases: Array<{ value: number; label: string }>;
+}
+
 export interface ClassStageMeta {
   stage: ClassStage;
   stageName: string;
@@ -122,6 +144,8 @@ export interface ClassStageMeta {
   hasSealAction: boolean;
   classroomLabel: string;
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案清单 */
+  planOptions?: StagePlanOption[];
 }
 
 export interface ClassSummary {
@@ -142,6 +166,65 @@ export interface ClassOption {
   className: string;
   classStatus: number;
   classStatusName: string;
+}
+
+/* ============================================================
+ * 班级交接（2026-10-19 批注）
+ *   一次交接 = 一个班 5 个岗位同时换人，提交即生效并留记录
+ *   初高没有「项目经理 / 就业老师」两个岗位
+ * ============================================================ */
+export interface ClassHandoverRole {
+  oldId: string | null;
+  oldName: string | null;
+  newId: string | null;
+  newName: string | null;
+}
+
+export interface ClassHandoverRow {
+  id: string;
+  stage: ClassStage;
+  stageName: string;
+  classId: string;
+  className: string;
+  deptCode: number | null;
+  headTeacher: ClassHandoverRole;
+  teacher: ClassHandoverRole;
+  assistant: ClassHandoverRole;
+  projectManager: ClassHandoverRole;
+  employmentTeacher: ClassHandoverRole;
+  handoverDate: string | null;
+  reason: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  createTime: string | null;
+}
+
+/** 只带「要换的新人」；没带的岗位视为不变 */
+export interface ClassHandoverPayload {
+  stage: ClassStage;
+  classId: string;
+  handoverDate?: string | null;
+  reason?: string | null;
+  headTeacherId?: string | null;
+  headTeacherName?: string | null;
+  teacherId?: string | null;
+  teacherName?: string | null;
+  assistantId?: string | null;
+  assistantName?: string | null;
+  projectManagerId?: string | null;
+  projectManagerName?: string | null;
+  employmentTeacherId?: string | null;
+  employmentTeacherName?: string | null;
+}
+
+/** 某班的交接记录（详情抽屉用） */
+export function listClassHandovers(stage: ClassStage, classId: string) {
+  return http.get<ClassHandoverRow[]>('/api/teaching/class/handover/list', { stage, classId });
+}
+
+/** 提交交接 */
+export function doClassHandover(payload: ClassHandoverPayload) {
+  return http.post<ClassHandoverRow>('/api/teaching/class/handover', payload);
 }
 
 export function listClasses(params: ClassListParams) {
@@ -183,9 +266,63 @@ export function getClassOptions() {
   return http.get<ClassOption[]>('/api/teaching/class/options');
 }
 
+/**
+ * ★ 2026-10-16：阶段方案选项（表单「阶段方案 / 阶段」两个下拉的数据源）
+ *
+ * 方案统一存放在初高库、按部门区分（1 初高部 / 2 大学部）——
+ * 三个学段共用这一份，前端按表单里选中的「部门」过滤；
+ * 「阶段」下拉的选项 = 选中方案的 stages（阶段名称 + 学制）。
+ */
+export interface SchemeStageOption {
+  id: string;
+  stageName: string;
+  studyMonths: number | null;
+  sortNo: number;
+}
+
+export interface SchemeOption {
+  id: string;
+  schemeName: string;
+  deptCode: number;
+  deptName: string;
+  stages: SchemeStageOption[];
+}
+
+export function getSchemeOptions() {
+  return http.get<SchemeOption[]>('/api/teaching/class/scheme-options');
+}
+
 /** 生成班级编号（只有实训有；其它学段返回 null，前端应隐藏入口） */
 export function genClassCode(stage: ClassStage) {
   return http.get<{ classCode: string | null }>('/api/teaching/class/gen-code', { stage });
+}
+
+/* ---------------- 升实训（2026-10-20 批注：大学部 → 就业部） ---------------- */
+
+export interface TrainingUpgradePayload {
+  /** 源班级（只能是大学部班级） */
+  classId: string;
+  /** 新实训班的班级名称；不传 = 沿用原班名 */
+  className?: string;
+  /** 就业部阶段方案里的阶段编码（301/302/303…） */
+  phaseCode?: number;
+  projectManagerId?: string;
+  projectManagerName?: string;
+  employmentTeacherId?: string;
+  employmentTeacherName?: string;
+  remark?: string | null;
+}
+
+export interface TrainingUpgradeResult {
+  targetClassId: string;
+  targetClassName: string;
+  classCode: string;
+  moved: number;
+}
+
+/** 升实训：整班（含学生）从大学部转到就业部 */
+export function upgradeClassToTraining(payload: TrainingUpgradePayload) {
+  return http.post<TrainingUpgradeResult>('/api/teaching/class/training-upgrade', payload);
 }
 
 /** 班级状态（★ 三套完全一致，无需映射） */
@@ -196,6 +333,33 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
   4: '已结业',
 };
 
+/**
+ * 可供选择的班级状态
+ *   2026-10-19 批注：「待结业」删除（筛选下拉、编辑班级的状态下拉、统计卡片都不再出现）。
+ *   CLASS_STATUS_NAME 里仍保留 3 的中文名 —— 历史数据万一是 3，标签还能正常显示。
+ */
+export const CLASS_STATUS_SELECTABLE = [
+  { value: 1, label: '开放' },
+  { value: 2, label: '封班' },
+  { value: 4, label: '已结业' },
+];
+
+/**
+ * 编辑班级时「班级状态」可选项：当前状态 + 允许流转到的状态（与后端同一张表）
+ *   1 开放 → 1/2；2 封班 → 2/1/4；4 已结业 → 终态（只读）
+ *   （3 待结业 只为兼容历史数据保留 3→4，不作为任何状态的下一跳）
+ */
+export function classStatusOptions(cur: number | null | undefined): Array<{ value: number; label: string }> {
+  const map: Record<number, number[]> = {
+    1: [1, 2],
+    2: [2, 1, 4],
+    3: [3, 4],
+    4: [4],
+  };
+  const list = map[Number(cur) || 1] || [Number(cur) || 1];
+  return list.map((v) => ({ value: v, label: CLASS_STATUS_NAME[v] }));
+}
+
 /** 状态 → Element Plus tag 类型 */
 export const CLASS_STATUS_TAG: Record<number, string> = {
   1: 'success',
@@ -205,14 +369,17 @@ export const CLASS_STATUS_TAG: Record<number, string> = {
 };
 
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '实训',
+  emp: '就业部',
 };
 
-export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job'];
+export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
 
 export const DEPT_OPTIONS = [
   { value: 1, label: '初高部' },
   { value: 2, label: '大学部' },
+  // ★ 2026-10-19 批注：新增就业部（独立学段，班级/学生共用 sms_job）
+  { value: 3, label: '就业部' },
 ];

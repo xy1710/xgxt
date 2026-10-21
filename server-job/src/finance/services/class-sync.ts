@@ -60,7 +60,7 @@ export function feeToSyncItem(row: Record<string, any>): Record<string, unknown>
     className: row.class_name || null,
     feeType: Number(row.fee_type),
     amount,
-    // 待缴(1) 视为未收到钱；其余状态（待核对/已缴/逾期/冻结）按已收金额展示
+    // 待缴(1) 视为未收到钱；其余状态（待核对/已缴/冻结）按已收金额展示
     paidAmount: payStatus === 1 ? 0 : amount,
     payStatus,
     payDate: dateOnly(row.pay_date),

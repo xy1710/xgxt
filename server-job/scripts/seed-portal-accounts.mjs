@@ -199,7 +199,7 @@ const ACCOUNTS = [
     name: '孙建龙',
     kind: 'module_owner',
     title: '项目经理',
-    dept: '实训教学部',
+    dept: '实训管理',
     phone: '13800000143',
     modules: ['job'],
     note: '项目经理 RM_PROJECT：升实训后的接手人（升实训弹窗必选）',

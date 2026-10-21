@@ -33,6 +33,24 @@ import type {
   TeachingStage,
 } from '../shared/dto';
 
+/**
+ * ★ 2026-10-21：办理入住时的学生候选
+ *
+ * 数据范围与房间列表同源（班主任 = 自己的班），默认只给**还没入住**的学生，
+ * 避免把已住学生的床位重复占用。
+ */
+export interface DormCandidateRow {
+  stage: TeachingStage;
+  studentId: string;
+  studentNo: string;
+  studentName: string;
+  gender: number;
+  classId: string | null;
+  className: string | null;
+  /** 已入住时的宿舍号（本次候选默认都是 null） */
+  dormNo: string | null;
+}
+
 export interface DormRepo {
   readonly stage: TeachingStage;
   meta(): DormStageMeta;
@@ -48,10 +66,26 @@ export interface DormRepo {
   save(body: DormSaveBody, userId: string): Promise<{ id: string }>;
   remove(id: string, userId: string): Promise<void>;
 
+  /**
+   * ★ 按「楼层数 × 每层房间数」批量生成房间（2026-10-19）
+   *   房号 = 楼层 + 两位序号（1 楼第 8 间 = 108）→ 与 /save 的 3 位数字校验同口径。
+   *   幂等：已存在 → skipped；软删行 → 复活（uk_dorm_no 被软删行占着，不能重建）。
+   */
+  generateRooms(input: {
+    buildingName: string;
+    dormType: number;
+    floorCount: number;
+    roomsPerFloor: number;
+    bedPerRoom: number;
+    userId: string;
+  }): Promise<{ created: number; revived: number; skipped: number }>;
+
   /** 床位列表（含在住学生）—— 三学段取数方式完全不同，见文件头说明 */
   beds(dormId: string, user: any): Promise<DormBedRow[]>;
   /** 在住学生名单（跨房间） */
   residents(q: DormListQuery, user: any): Promise<DormResidentRow[]>;
+  /** 办理入住时的学生候选（按数据范围过滤，默认排除已入住） */
+  candidates(q: { keyword?: string; limit?: number }, user: any): Promise<DormCandidateRow[]>;
   /** 分派床位（学生入住） */
   assign(body: DormAssignBody, userId: string): Promise<void>;
   /** 退宿（直接生效，管理员纠错用，不走审批） */
@@ -63,6 +97,9 @@ export interface DormRepo {
   /** 调宿/退宿申请 */
   changeList(q: DormListQuery, user: any): Promise<DormChangeRow[]>;
   changeCreate(body: DormChangeCreateBody, userId: string): Promise<{ id: string }>;
+  /** ★ 2026-10-21：审批通过 / 驳回（通过时同步床位与学生主档） */
+  changeApprove(changeId: string, userId: string): Promise<void>;
+  changeReject(changeId: string, reason: string, userId: string): Promise<void>;
   /** 审批通过后的落库动作（换床 / 释放床位），各学段表不同 */
   applyChangeOnApproved(changeId: string, userId: string): Promise<void>;
 

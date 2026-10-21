@@ -1,47 +1,25 @@
 @echo off
 REM ===========================================================================
-REM  Liangzhi SMS . Unified Portal   START (thin wrapper, ASCII-only)
+REM  Liangzhi SMS . Unified Portal   START  (thin wrapper, kept for compat)
 REM
-REM  Original version had the a hardcoded database host and
-REM  a fixed 28s sleep. Now it just delegates to tools\start.mjs, which does
-REM  the real work: env check, deps, migrate, services, port readiness, browser.
-REM
-REM  Kept for backwards compatibility -- both this and ä¸€é”®å¯åŠ¨.bat work.
+REM  This file used to be an independent copy of the launcher, which meant two
+REM  places to keep in sync. It now simply forwards to Ò»¼üÆô¶¯.bat, so both
+REM  entries always behave identically -- including the Node.js detection that
+REM  must not depend on PATH (see the header of Ò»¼üÆô¶¯.bat).
 REM ===========================================================================
 
-setlocal
-chcp 65001 >nul 2>&1
+setlocal EnableExtensions
 cd /d "%~dp0"
 
-where node >nul 2>&1
-if errorlevel 1 goto :no_node
+if not exist "%~dp0Ò»¼üÆô¶¯.bat" goto :no_main
 
-if not exist "tools\start.mjs" goto :no_entry
+call "%~dp0Ò»¼üÆô¶¯.bat" %*
+exit /b %errorlevel%
 
-node "tools\start.mjs" %*
-goto :done
-
-:no_node
+:no_main
 echo.
-echo   [ERROR] Node.js not found. Install Node 18+ first.
-echo   æ²¡æœ‰æ‰¾åˆ° Node.jsï¼Œè¯·å…ˆå®‰è£… Node.js 18 æˆ–æ›´é«˜ç‰ˆæœ¬ï¼šhttps://nodejs.org
+echo   [ERROR] Ò»¼üÆô¶¯.bat not found. / ÕÒ²»µ½ Ò»¼üÆô¶¯.bat
+echo   ËüÓë±¾ÎÄ¼şÓ¦·ÅÔÚÍ¬Ò»¸öÎÄ¼ş¼ĞÀï£¬ÇëÖØĞÂ½âÑ¹°²×°°ü¡£
 echo.
 pause
 exit /b 1
-
-:no_entry
-echo.
-echo   [ERROR] tools\start.mjs not found. Re-extract the archive.
-echo   æ‰¾ä¸åˆ° tools\start.mjsï¼Œè¯·é‡æ–°è§£å‹å‹ç¼©åŒ…ã€‚
-echo.
-pause
-exit /b 1
-
-:done
-if errorlevel 1 (
-  echo.
-  echo   ---- startup returned an error, see messages above ----
-  echo.
-  pause
-)
-exit /b 0

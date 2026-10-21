@@ -3,7 +3,7 @@
  *
  * ============================================================
  * 【解决什么问题】
- *   「角色-权限分配」页面（/perm/assign）维护的是 `sms_perm.t_perm_role_perm`
+ *   「职位权限分配」页面（/perm/assign）维护的是 `sms_perm.t_perm_role_perm`
  *   —— 一棵**权限树**，命名体系是
  *     `module_key`（market/teach/train/job/acad/fin/approve/perm）
  *     + 中文功能点（如「学生基础数据」）
@@ -324,15 +324,15 @@ export const PERM_POINT_TO_ACTION_CODES: Record<string, Record<string, string[]>
  *
  *   树上的模块名就叫 `perm`，且它的操作码格式天然就是
  *   `perm:{功能点名}:{动作码}` —— 与权限树完全同构。
- *     · perm||角色管理||add        → perm:角色管理:add
+ *     · perm||职位管理||add        → perm:职位管理:add
  *     · perm||权限配置||editPerm   → perm:权限配置:editPerm
  *   这里登记「每个功能点有哪些动作」，用于双向判定。
  * ============================================================ */
 
 const PERM_MODULE_ACTIONS: Record<string, string[]> = {
-  'perm||角色管理': ['view', 'add', 'edit', 'toggleStatus', 'del'],
+  'perm||职位管理': ['view', 'add', 'edit', 'toggleStatus', 'del'],
   'perm||权限配置': ['view', 'editPerm'],
-  'perm||用户管理': ['view', 'add', 'edit', 'resetPwd', 'toggleStatus'],
+  'perm||账号管理': ['view', 'add', 'edit', 'resetPwd', 'toggleStatus'],
   'perm||规则配置': ['view', 'edit'],
   'perm||操作日志': ['view', 'export'],
 };
@@ -597,7 +597,7 @@ export function diffOfOverride(ov: RoleActionOverride | null): { added: string[]
  *
  *   背景：四个 legacy 模块（class / class-jh / consult / finance）的接口
  *   判权各写各的（角色白名单 / 正则策略表 / 操作码表），都**不读权限树**。
- *   结果：管理员在「角色-权限分配」里取消了某动作 → 按钮没了，
+ *   结果：管理员在「职位权限分配」里取消了某动作 → 按钮没了，
  *        但直接敲接口仍然成功（前后端不一致）。
  *
  *   本节提供 3 个函数，让这些模块用**最小改动**接入：
@@ -617,7 +617,7 @@ export function getOverrideSync(roleCode: string): RoleActionOverride | null {
  * 预热内存缓存。
  *
  * 15s TTL 内是纯内存读（零查库成本），所以可以在**每个鉴权中间件**里 await；
- * 「角色-权限分配」保存时会 `clearRoleActionCache()`，下一请求即重新加载 → 即时生效。
+ * 「职位权限分配」保存时会 `clearRoleActionCache()`，下一请求即重新加载 → 即时生效。
  */
 export async function preloadRoleActionOverrides(): Promise<void> {
   try {
@@ -674,7 +674,7 @@ export function resolveActionWithOverlay(
  *
  *   背景：job/edu 板块的按钮默认显隐由「角色」决定（各页面自己写死的
  *   角色白名单，如 `canInitiate = TEACH_HEAD`），这套默认是对的。
- *   但管理员在「角色-权限分配」里取消某个动作后，对应按钮要跟着消失。
+ *   但管理员在「职位权限分配」里取消某个动作后，对应按钮要跟着消失。
  *
  *   语义与后端总闸（boardPermGate）一致：只叠加「相对基线的撤销」，
  *   没被管理员动过的码，前端默认行为与从前**完全一致**（零回归）。

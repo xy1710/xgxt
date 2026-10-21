@@ -16,7 +16,7 @@
  *         in: query
  *         schema:
  *           type: string
- *         description: 姓名 / 账号 / 工号 / 手机号模糊搜索
+ *         description: 姓名 / 账号 / 手机号模糊搜索
  *       - name: deptId
  *         in: query
  *         schema:
@@ -107,10 +107,10 @@
  *       - 账号管理
  *     summary: 新建账号
  *     description: |
- *       权限标识 `perm:用户管理:add`。返回生成的初始密码。密码留空则由后端按当前密码策略生成。
+ *       权限标识 `perm:账号管理:add`。返回生成的初始密码。密码留空则由后端按当前密码策略生成。
  *
- *       **字段校验（后端 zod 强制）**：姓名仅汉字 ≥ 2 位；工号 `GW` + 4 位数字；账号字母/数字 4-20 位且全局唯一；
- *       手机号 11 位以 1 开头且全局唯一；年龄 16-70；**角色至少 1 个且不可为已停用角色**（40014）。
+ *       **字段校验（后端 zod 强制）**：姓名仅汉字 ≥ 2 位；账号字母/数字 4-20 位且全局唯一；
+ *       手机号 11 位以 1 开头且全局唯一；年龄 20-65；**职位至少 1 个且不可为已停用职位**（40014）。
  *     requestBody:
  *       required: true
  *       content:
@@ -149,7 +149,7 @@
  *     tags:
  *       - 账号管理
  *     summary: 编辑账号
- *     description: '权限标识 `perm:用户管理:edit`。`password` 留空 = 不改密码。'
+ *     description: '权限标识 `perm:账号管理:edit`。`password` 留空 = 不改密码。'
  *     requestBody:
  *       required: true
  *       content:
@@ -180,7 +180,7 @@
  *     tags:
  *       - 账号管理
  *     summary: 启用 / 停用 / 锁定账号
- *     description: '权限标识 `perm:用户管理:edit`。'
+ *     description: '权限标识 `perm:账号管理:edit`。'
  *     requestBody:
  *       required: true
  *       content:
@@ -214,7 +214,7 @@
  *     tags:
  *       - 账号管理
  *     summary: 重置密码
- *     description: '权限标识 `perm:用户管理:resetPwd`。不传 `newPassword` 则由后端生成，返回新密码；密码强度不符策略返回 40023。'
+ *     description: '权限标识 `perm:账号管理:resetPwd`。不传 `newPassword` 则由后端生成，返回新密码；密码强度不符策略返回 40023。'
  *     requestBody:
  *       required: true
  *       content:
@@ -260,7 +260,7 @@
  *     tags:
  *       - 账号管理
  *     summary: 解锁账号
- *     description: '权限标识 `perm:用户管理:edit`。清零错误次数并置为「正常」。'
+ *     description: '权限标识 `perm:账号管理:edit`。清零错误次数并置为「正常」。'
  *     requestBody:
  *       required: true
  *       content:
@@ -289,7 +289,7 @@
  *     tags:
  *       - 账号管理
  *     summary: 删除账号（逻辑删除）
- *     description: '权限标识 `perm:用户管理:edit`。会释放工号 / 账号 / 手机号唯一键；有业务数据时返回 40021。'
+ *     description: '权限标识 `perm:账号管理:edit`。会释放账号 / 手机号唯一键；有业务数据时返回 40021。'
  *     parameters:
  *       - $ref: '#/components/parameters/IdPath'
  *     responses:
@@ -347,10 +347,10 @@
  *       - 账号管理
  *     summary: 鉴权档案（跨模块 · 不鉴权）
  *     description: |
- *       登录模块用这个接口取用户的角色 / 权限点 / 数据范围，再签发 token。
+ *       登录模块用这个接口取用户的职位 / 权限点 / 数据范围，再签发 token。
  *
- *       - `permissions` 是**所有角色权限的并集去重**，元素形如 `模块:功能点:动作中文名`；
- *       - `dataScope` 取所有角色中**最宽的一档**（1 本人 / 2 本班级 / 3 本部门 / 4 全部数据）；
+ *       - `permissions` 是**所有职位权限的并集去重**，元素形如 `模块:功能点:动作中文名`；
+ *       - `dataScope` 取所有职位中**最宽的一档**（1 本人 / 2 本班级 / 3 本部门 / 4 全部数据）；
  *       - **不返回密码字段**。
  *     security: []
  *     parameters:

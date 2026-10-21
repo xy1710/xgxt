@@ -24,11 +24,11 @@ const errorCodeTable = `
 | --- | --- |
 | 200 | 成功 |
 | 40001 | 参数校验失败（zod 统一拦截，message 是中文） |
-| 40010 | 角色编码已存在 |
-| 40011 | 角色名称已存在 |
-| 40012 | 角色有关联账号，不可删除 |
-| 40013 | 系统预置角色受保护 |
-| 40014 | 角色已停用，不可分配给账号 |
+| 40010 | 职位编码已存在 |
+| 40011 | 职位名称已存在 |
+| 40012 | 职位有关联账号，不可删除 |
+| 40013 | 系统预置职位受保护 |
+| 40014 | 职位已停用，不可分配给账号 |
 | 40015 | 部门名称已存在 |
 | 40016 | 部门被引用，不可删除 |
 | 40017 | 部门下还有子部门 |
@@ -36,13 +36,13 @@ const errorCodeTable = `
 | 40019 | 登录账号已存在 |
 | 40020 | 工号已存在 |
 | 40021 | 账号有业务数据，不可删除 |
-| 40022 | 账号必须至少有一个角色 |
+| 40022 | 账号必须至少有一个职位 |
 | 40023 | 密码强度不符合当前策略 |
 | 40024 | 规则取值不合法 |
 | 40025 | 权限全量覆盖内容为空 |
 | 40101 | 未登录（前端跳登录页） |
 | 40301 / 40302 | 已登录但无权限（前端只弹提示，不跳登录页） |
-| 40410 | 角色不存在 |
+| 40410 | 职位不存在 |
 | 40411 | 账号不存在 |
 | 40412 | 部门不存在 |
 | 40413 | 日志不存在 |
@@ -84,10 +84,10 @@ const definition: swaggerJsdoc.Options['definition'] = {
     { name: '健康检查', description: '不鉴权，用于快速确认服务活着' },
     { name: '权限总览', description: '首屏 KPI 与最近操作动态' },
     { name: '部门管理', description: '部门两级树（校级 / 部门 / 学段）' },
-    { name: '角色管理', description: '角色 CRUD、启停、导入导出' },
+    { name: '职位管理', description: '职位 CRUD、启停、导入导出' },
     { name: '账号管理', description: '账号 CRUD、状态、重置密码、解锁' },
     { name: '权限树', description: '8 模块 / 53 个顶级功能点 / 185 动作' },
-    { name: '角色-权限分配', description: '全量覆盖式保存' },
+    { name: '职位权限分配', description: '全量覆盖式保存' },
     /* ★ 2026-10-06 新增：板块 → 页面 台账 */
     { name: '页面管理', description: '板块 → 页面 台账：打勾即该板块有此页面（全量覆盖式保存）' },
     { name: '操作日志', description: '只读：不提供新增 / 修改 / 删除接口' },
@@ -224,11 +224,11 @@ const definition: swaggerJsdoc.Options['definition'] = {
           id: { type: 'string', example: 'R01' },
           roleCode: { type: 'string', example: 'SYS_ADMIN' },
           roleName: { type: 'string', example: '系统管理员' },
-          roleType: { type: 'string', example: '管理角色' },
+          roleType: { type: 'string', example: '管理职位' },
           roleStatus: { type: 'string', enum: ['启用', '停用'], example: '启用' },
           deptId: { type: 'string', nullable: true, example: 'D01' },
           deptName: { type: 'string', nullable: true, example: '教学部' },
-          isSys: { type: 'boolean', example: true, description: '系统预置角色：不可删、编码不可改' },
+          isSys: { type: 'boolean', example: true, description: '系统预置职位：不可删、编码不可改' },
           permCount: { type: 'integer', example: 185 },
           userCount: { type: 'integer', example: 2 },
           sortNo: { type: 'integer', example: 1 },
@@ -237,11 +237,25 @@ const definition: swaggerJsdoc.Options['definition'] = {
       },
       RoleSavePayload: {
         type: 'object',
-        required: ['roleName', 'roleCode', 'roleType'],
+        required: ['roleName'],
         properties: {
           roleName: { type: 'string', example: '助教组长' },
-          roleCode: { type: 'string', example: 'TEACH_ASSIST_LEAD' },
-          roleType: { type: 'string', example: '管理角色' },
+          roleCode: {
+            type: 'string',
+            nullable: true,
+            description:
+              '★ 2026-10-19 起界面不再维护（用户要求全系统去掉「职位编码」）：' +
+              '不传由后端自动生成（如 ROLE_0001）。该字段是跨模块鉴权连接键，响应里仍会返回。',
+            example: 'ROLE_0001',
+          },
+          roleType: {
+            type: 'string',
+            nullable: true,
+            description:
+              '★ 2026-10-20 起界面不再维护（用户要求去掉「职位类型」）：不传按默认「业务职位」落库；' +
+              '字段与接口保留，编辑时不传则保持原值。',
+            example: '管理职位',
+          },
           roleStatus: { type: 'string', enum: ['启用', '停用'], default: '启用' },
           deptId: { type: 'string', nullable: true, example: 'D01' },
           sortNo: { type: 'integer', example: 99 },
@@ -250,7 +264,7 @@ const definition: swaggerJsdoc.Options['definition'] = {
             type: 'object',
             description: '可选：同时提交权限映射。key = `模块key||功能点名`，value = 动作编码数组',
             additionalProperties: { type: 'array', items: { type: 'string' } },
-            example: { 'market||预到校名单': ['view', 'add'], 'perm||角色管理': ['view'] },
+            example: { 'market||预到校名单': ['view', 'add'], 'perm||职位管理': ['view'] },
           },
         },
       },
@@ -264,7 +278,7 @@ const definition: swaggerJsdoc.Options['definition'] = {
           phone: { type: 'string', example: '13800000013', description: '11 位、以 1 开头，全局唯一' },
           gender: { type: 'integer', enum: [1, 2], example: 1, description: '1 男 / 2 女' },
           genderName: { type: 'string', example: '男' },
-          age: { type: 'integer', example: 30, description: '16-70' },
+          age: { type: 'integer', example: 30, description: '20-65' },
           deptId: { type: 'string', example: 'D_ADM' },
           deptName: { type: 'string', example: '行政' },
           roleIds: { type: 'array', items: { type: 'string' }, example: ['R13'], description: '至少 1 个' },
@@ -309,7 +323,7 @@ const definition: swaggerJsdoc.Options['definition'] = {
           permissions: {
             type: 'array',
             items: { type: 'string' },
-            description: '所有角色权限的并集去重，元素形如 模块:功能点:动作中文名',
+            description: '所有职位权限的并集去重，元素形如 模块:功能点:动作中文名',
             example: ['market:预到校名单:查看', 'market:预到校名单:新建'],
           },
           dataScope: { type: 'integer', enum: [1, 2, 3, 4], example: 4, description: '1 本人 / 2 本班级 / 3 本部门 / 4 全部数据（取最宽一档）' },
@@ -336,10 +350,43 @@ const definition: swaggerJsdoc.Options['definition'] = {
           parentItemName: { type: 'string', nullable: true, example: '教质/学术审批', description: '二级功能点的父功能点名' },
           actions: { type: 'array', items: { $ref: '#/components/schemas/PermActionItem' } },
           remark: { type: 'string', nullable: true },
+          isCustom: {
+            type: 'boolean',
+            example: false,
+            description: 'true = 管理员自建（可改可删）；false / 缺省 = 系统预置，只读',
+          },
           checked: {
             type: 'array',
             items: { type: 'string' },
-            description: '该角色在此功能点下已勾选的动作名（角色权限详情接口返回）',
+            description: '该职位在此功能点下已勾选的动作名（职位权限详情接口返回）',
+          },
+        },
+      },
+      PermItemSavePayload: {
+        type: 'object',
+        description: '新增 / 修改自建权限点的入参（模块 → 功能点 → 动作，与预置格式一致）',
+        required: ['itemName', 'actions'],
+        properties: {
+          moduleKey: { type: 'string', example: 'market', description: '已有板块标识；新建板块传 __new__' },
+          moduleName: { type: 'string', example: '招生管理', description: '新建板块时的名称' },
+          moduleIcon: { type: 'string', example: '🎓' },
+          moduleSort: { type: 'integer', example: 9 },
+          itemName: { type: 'string', example: '招生报名登记' },
+          parentItemName: { type: 'string', nullable: true },
+          remark: { type: 'string', nullable: true },
+          actions: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              required: ['actionName'],
+              properties: {
+                actionCode: { type: 'string', example: 'view', description: '留空时后端按 baseAction 自动补' },
+                actionName: { type: 'string', example: '查看' },
+                baseAction: { type: 'integer', enum: [1, 2, 3, 4, 5, 6], example: 1 },
+                remark: { type: 'string', nullable: true },
+              },
+            },
           },
         },
       },
@@ -352,17 +399,17 @@ const definition: swaggerJsdoc.Options['definition'] = {
           moduleIcon: { type: 'string', example: '🔐', description: '模块图标 emoji' },
           sortNo: { type: 'integer', example: 8 },
           items: { type: 'array', items: { $ref: '#/components/schemas/PermItem' } },
-          grantedItemCount: { type: 'integer', description: '已授权功能点数（角色权限详情接口返回）' },
+          grantedItemCount: { type: 'integer', description: '已授权功能点数（职位权限详情接口返回）' },
           itemCount: { type: 'integer', description: '功能点总数' },
-          checkedCount: { type: 'integer', description: '该模块已勾选动作数（角色权限详情接口返回）' },
+          checkedCount: { type: 'integer', description: '该模块已勾选动作数（职位权限详情接口返回）' },
         },
       },
       PermOptionItem: {
         type: 'object',
         description: '字典项统一结构（不是裸字符串），前端 el-select 直接用 value / label',
         properties: {
-          value: { example: '管理角色', description: '提交给后端的原值' },
-          label: { type: 'string', example: '管理角色', description: '展示给用户的中文名' },
+          value: { example: '管理职位', description: '提交给后端的原值' },
+          label: { type: 'string', example: '管理职位', description: '展示给用户的中文名' },
         },
       },
       Log: {

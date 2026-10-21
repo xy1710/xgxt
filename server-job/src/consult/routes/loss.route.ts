@@ -26,6 +26,8 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { formatTime } from '../services/student.service';
+// ★ 2026-10-16 数据范围：咨询师只看自己名下的流失 / 未报名记录
+import { applyStudentScope } from '../services/data-scope';
 
 export const lossRouter = Router();
 
@@ -50,6 +52,9 @@ lossRouter.get(
 
     const query = db('t_consult_student')
       .where({ is_deleted: false, consult_state: ConsultState.LOST });
+
+    // ★ 2026-10-16 数据范围：咨询师只看自己名下的流失记录
+    applyStudentScope(query, req.user);
 
     if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
     if (q.ownerName) query.andWhere('owner_name', 'like', `%${q.ownerName}%`);
@@ -99,6 +104,9 @@ lossRouter.get(
     const query = db('t_consult_student')
       .where({ is_deleted: false, consult_state: ConsultState.NOT_ENROLLED });
 
+    // ★ 2026-10-16 数据范围：咨询师只看自己名下的未报名名单
+    applyStudentScope(query, req.user);
+
     if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
     if (q.ownerName) query.andWhere('owner_name', 'like', `%${q.ownerName}%`);
     if (q.keyword) {
@@ -137,19 +145,21 @@ lossRouter.get(
 
 lossRouter.get(
   '/stats',
-  wrap(async (_req, res) => {
-    // 流失人数
-    const lossRow: any = await db('t_consult_student')
-      .where({ is_deleted: false, consult_state: ConsultState.LOST })
-      .count({ c: '*' })
-      .first();
+  wrap(async (req, res) => {
+    // 流失人数（★ 2026-10-16 咨询师只统计自己名下的）
+    const lossQuery = db('t_consult_student').where({
+      is_deleted: false,
+      consult_state: ConsultState.LOST,
+    });
+    applyStudentScope(lossQuery, req.user);
+    const lossRow: any = await lossQuery.count({ c: '*' }).first();
 
     // 参与统计的总数（排除「未通过」）
-    const totalRow: any = await db('t_consult_student')
+    const totalQuery = db('t_consult_student')
       .where({ is_deleted: false })
-      .whereNot('consult_state', ConsultState.REJECTED)
-      .count({ c: '*' })
-      .first();
+      .whereNot('consult_state', ConsultState.REJECTED);
+    applyStudentScope(totalQuery, req.user);
+    const totalRow: any = await totalQuery.count({ c: '*' }).first();
 
     const lossCount = Number(lossRow?.c || 0);
     const totalCount = Number(totalRow?.c || 0);

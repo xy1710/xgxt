@@ -393,7 +393,60 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","
 .tb tbody tr:last-child td{border-bottom:none}
 .tb .acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .tb .num{font-variant-numeric:tabular-nums}
+
+/* ---- 表格里的「胶囊列」（所属职位 / 标签类单元格）----
+   【问题】表头文字距列边 14px，胶囊盒子也是 14px —— 盒子是齐的，
+     但胶囊自带 8px 左右内边距，**胶囊里的文字落在 22px**，
+     肉眼看到的就是「表头比下面的内容偏左 8px，歪着」
+     （2026-10-20 用户对操作日志的所属职位列提出）。
+   【口径】容器统一左顶 -8px：盒子 6px / 文字 14px = 表头文字，光学对齐。
+     只有第一颗需要顶，所以把 -8px 放在容器上，颗与颗之间用 gap 排（不用 margin）。 */
+.tb .tags{display:inline-flex;flex-wrap:wrap;gap:2px;margin-left:-8px}
 .tb-wrap{overflow-x:auto}
+
+/* ---- 部门结构：树形缩进（2026-10-19 按用户要求）----
+   下级部门不再在「部门名称」单元格里重复列一遍，改为按层级缩进；
+   缩进量由行内 `--dept-indent` 给出（第 2 层=校级直属 → 0，每深一层 +20px）。 */
+.tb td.dept-name{padding-left:calc(14px + var(--dept-indent,0px))}
+.tb td.dept-name .branch{color:#C9BDB8;margin-right:3px;font-size:11px}
+
+/* ---- 部门管理表：列宽 / 间隙（2026-10-20 按用户反馈调整）----
+   【问题】表格 6 列里只有「部门说明」是自适应列，其余写死 px
+     （部门名称 230 / 上级部门 150 / 职位数 80 / 账号数 80 / 操作 250）。
+     → 卡片宽出来多少全砸给说明列：实测卡片 1132px 时说明格 340px，
+       而说明文字只有 81~161px，右边挂着 180~260px 空白 —— 就是用户截图框的部分。
+     另外数字列原来是左对齐，一个 3 位数的数字在 80px 格里左右各留一半空档，
+     视觉上等于把这个间隙又放大一倍。
+   【口径】① 整表 table-layout:fixed —— 列宽严格按模板里声明的百分比分配，
+             不会被长说明文字反向撑开（宽度可预测）；
+           ② 两个数字列居中 —— **表头 <th> 和单元格 <td> 都挂 num 类，走同一条规则**。
+              （2026-10-20 第二版：第一版只写了 td 居中、表头还是 .tb th 的左对齐，
+                结果表头文字贴左、数字落在列中间，两行错开半个列宽 —— 用户当场指出
+                「字段和下面对应的数字歪到姥姥家」。以后改对齐一律「头+体」一起改。）
+           ③ 说明允许在任意位置折行，避免超长说明把 fixed 布局撑破；
+           ④ 本表 min-width:960px + 外层 .tb-wrap 横向滚动 —— 960 是这套百分比
+              「六列都还装得下」的下限（名称 230 / 上级 115 / 说明 202 /
+              职位 96 / 账号 96 / 操作 221），比它更窄就横滚，不让操作列挤成两行。 */
+.tb.tb-dept{table-layout:fixed;min-width:960px}
+.tb.tb-dept .num{text-align:center}
+.tb.tb-dept .desc{overflow-wrap:anywhere}
+
+/* ---- 职位管理表（RoleManage）列宽 ----
+   2026-10-20：原来 7 列都写死 px 且 table-layout:auto，
+   实测 1520 视口（表宽 1264）被撑成 290/224/99/105/95/148/303，
+   前两列富余 282px（占全表富余 423px 的 67%）→ 用户看到大片空洞。
+   改 fixed + 百分比（合计 100）：各列＝内容宽 + 同一份呼吸空间（实测富余 69~75px 均摊）。
+   min-width 1080：此时操作列 248px，装得下四个链接（实测只需 193px）不折行。
+   3~5 列（关联人数/权限数/状态）内容窄且居中：表头与单元格一起居中，
+   避免出现「表头左、数字中」的错位（部门表那轮踩过的坑）。 */
+.tb.tb-role{table-layout:fixed;min-width:1080px}
+.tb.tb-role th:nth-child(3),
+.tb.tb-role td:nth-child(3),
+.tb.tb-role th:nth-child(4),
+.tb.tb-role td:nth-child(4),
+.tb.tb-role th:nth-child(5),
+.tb.tb-role td:nth-child(5){text-align:center}
+.tb.tb-role td:nth-child(2){overflow-wrap:anywhere}
 
 /* ---- 输入（原型 .inp → 设计系统口径） ---- */
 .inp,.main select.inp,.main textarea.inp{padding:6px 11px;border:1px solid #E2D7D1;border-radius:7px;background:#fff;font-size:12.5px;color:#5F5350;outline:none;transition:.15s;min-width:0;height:32px}
@@ -465,6 +518,19 @@ select.inp{cursor:pointer;padding-right:26px;appearance:none;-webkit-appearance:
 .tree .ch.hide{display:none}
 .tree .mod> .n{font-weight:600;background:#FAF6F2}
 .tree .mod> .n:hover{background:#FBF7F4}
+/* 左侧那个方块删掉后模块名会左移（方块 14 + gap 7 + 行首的 gap 7 = 27），
+   和下面子项名不在同一条竖线上。补回等宽 padding，让两者重新对齐。
+   ⚠️ 27 而不是算式里的 21：子项行除 checkbox 外还多占一次行首 gap，
+      按实测 delta 校准（改完用取景页量 delta=0 验证）。 */
+.tree .mod> .n .nm{padding-left:27px}
+/* ★ 2026-10-20 模块行右侧「全选 / 取消全选」文字（替代原来的左侧方块）
+   · 未全选 → 品牌红，显眼好点；已全选 → 灰，表示「再点就是取消」
+   · font-weight:400 压回常规字重，否则跟着 .mod>.n 的 600 会跟模块名争视觉焦点 */
+.tree .n .mod-all{flex:none;font-weight:400;font-size:11.5px;line-height:1;color:#CD3A33;
+  padding:3px 7px;border-radius:5px;cursor:pointer;user-select:none;transition:.14s}
+.tree .n .mod-all:hover{background:#FBEAE8}
+.tree .n .mod-all.on{color:#A99C95}
+.tree .n .mod-all.on:hover{background:#F1EBE6;color:#8A7E77}
 .tree .acts-g{display:flex;flex-wrap:wrap;gap:6px;padding:5px 0 8px 22px}
 .tree .act{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid #E2D7D1;
   border-radius:7px;font-size:12px;cursor:pointer;background:#fff;color:#6B5C58;transition:.14s;user-select:none}
@@ -480,7 +546,7 @@ select.inp{cursor:pointer;padding-right:26px;appearance:none;-webkit-appearance:
  * 【背景】上面「权限模块原型类名补齐」那一段只映射了颜色/字号，
  *   `.split / .lft / .rgt / .rl-item / .cnt / .perm-tools / .cl / .desc`
  *   这几个**布局类**从来没有定义过（单体合并时原型 prototype.css 没带过来）。
- *   后果：角色-权限分配页的「左角色列表 / 右权限概览」不是左右分栏，
+ *   后果：职位权限分配页的「左角色列表 / 右权限概览」不是左右分栏，
  *   而是上下堆叠成一长条 —— 与原型和高保真图对不上。
  *
  * 【作用范围】已逐一核对：这几个类名在 web-job/src 里**只有权限模块在用**

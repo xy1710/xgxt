@@ -5,6 +5,7 @@ import {
   ensureModuleStores,
   moduleAllowed,
   moduleOfPageCode,
+  pageModuleAllowed,
   menuAllowed,
   portalLandingPath,
 } from '@/store/modules';
@@ -40,9 +41,13 @@ import { teachingRoutes } from '@/teaching/routes';
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    name: 'Home',
-    // 首页跳到「当前身份有权限的第一个页面」——具体去哪由守卫算
-    component: () => import('@/views/Placeholder.vue'),
+    name: 'Workbench',
+    // ★ 2026-10-16 用户指令：「将工作台放置首页，每个角色进来第一个页面就是工作台」
+    //   首页不再是“跳到第一个有权限页面”的空壳，而是真正的工作台页：
+    //   初高 KPI + 待办（有权限才显示）+ 按权限自适应的快捷入口。
+    //   不挂 pageCode/module —— 能登录就能进（守卫不拦截）。
+    component: () => import('@/views/Workbench.vue'),
+    meta: { title: '工作台' },
   },
 
   /* ============ 统一登录（门户 · 全系统唯一入口） ============ */
@@ -162,19 +167,19 @@ const routes: RouteRecordRaw[] = [
     path: '/perm/role',
     name: 'PermRole',
     component: () => import('@/perm/views/RoleManage.vue'),
-    meta: { title: '角色管理', module: 'perm', menuKey: 'role' },
+    meta: { title: '职位管理', module: 'perm', menuKey: 'role' },
   },
   {
     path: '/perm/user',
     name: 'PermUser',
     component: () => import('@/perm/views/UserManage.vue'),
-    meta: { title: '用户管理', module: 'perm', menuKey: 'user' },
+    meta: { title: '账号管理', module: 'perm', menuKey: 'user' },
   },
   {
     path: '/perm/assign',
     name: 'PermAssign',
     component: () => import('@/perm/views/PermAssign.vue'),
-    meta: { title: '角色-权限分配', module: 'perm', menuKey: 'assign' },
+    meta: { title: '职位权限分配', module: 'perm', menuKey: 'assign' },
   },
   /* ⚠️ 2026-10-06 用户指令：「权限管理板块里面删除规则配置页面」
    *    → 原 /perm/rule（规则配置，views/RuleConfig.vue）路由已删除。
@@ -211,15 +216,20 @@ const routes: RouteRecordRaw[] = [
     name: 'ClassStudentList',
     component: () => import('@/views/ClassStudentList.vue'),
     meta: { title: '班级花名册', pageCode: 'job:classStudent:view' },
-  },{
+  },
+
+  /*
+   * 2026-10-19 批注：删除独立「班级交接」页面（原 /class-transfer）。
+   * 交接入口在「班级管理」操作列的【交接】，这里只给老书签留一个跳转，
+   * 避免用户点到历史链接时白屏。
+   */
+  {
     path: '/class-transfer',
-    name: 'ClassTransfer',
-    component: () => import('@/views/ClassTransfer.vue'),
-    meta: { title: '班级管理', pageCode: 'job:classTransfer:view' },
+    redirect: '/teaching/class',
   },
   {
     path: '/transfer',
-    redirect: '/class-transfer',
+    redirect: '/teaching/class',
   },
 
   /* ============ 实训：未开发模块（占位页 + 权限受控） ============ */
@@ -312,12 +322,13 @@ const routes: RouteRecordRaw[] = [
    *    pageCode 用 classjh:*（清单见后端 config/pagePermissions.ts）
    *    接口前缀 /api/class-jh/*（本模块 api 层已改好）
    */
+  /* ★ 2026-10-16 工作台迁到系统首页（/）：
+   *   原 /class-jh/dashboard（初高工作台页）整体上移为首页工作台，
+   *   这里留重定向 —— 老书签 / 侧栏老入口不失效。原页面权限码
+   *   classjh:dashboard:view 保留在 pagePermissions/pageRegistry 里，
+   *   现在用来控制「首页工作台是否显示初高 KPI 块」。 */
+  { path: '/class-jh/dashboard', redirect: '/' },
   {
-    path: '/class-jh/dashboard',
-    name: 'ClassJhDashboard',
-    component: () => import('@/class-jh/views/Dashboard.vue'),
-    meta: { title: '工作台', pageCode: 'classjh:dashboard:view' },
-  },{
     path: '/class-jh/fee',
     name: 'ClassJhFee',
     component: () => import('@/class-jh/views/FeeList.vue'),
@@ -328,8 +339,21 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/class-jh/views/SettingList.vue'),
     meta: { title: '系统设置', pageCode: 'classjh:setting:view' },
   },
-  // 进模块根路径 → 落到工作台（守卫会按权限再兜底一次）
-  { path: '/class-jh', redirect: '/class-jh/dashboard' },
+  {
+    /**
+     * ★ 2026-10-20 楼栋设置独立页
+     *
+     * 从「系统设置」里把楼栋页签抽出来，单独一个权限码 ——
+     * 教务老师只拿 `classjh:building:view`，不会连带看到系统设置 KV /
+     * 阶段字典 / 操作日志（那三个仍归 `classjh:setting:view`）。
+     */
+    path: '/class-jh/building',
+    name: 'ClassJhBuilding',
+    component: () => import('@/class-jh/views/BuildingList.vue'),
+    meta: { title: '楼栋设置', pageCode: 'classjh:building:view' },
+  },
+  // 进模块根路径 → 落到系统首页工作台（★ 2026-10-16 工作台已迁到 /）
+  { path: '/class-jh', redirect: '/' },
 
   /* ============ ★ 教学管理 · 合并入口（第 1 期）============
    *   每个业务域一个入口，页面顶部是「初高 / 大学 / 实训 / 就业 / 教务」学段页签。
@@ -398,23 +422,10 @@ router.beforeEach(async (to) => {
     return { path: '/no-permission', query: { from: to.fullPath } };
   }
 
-  // 3. 首页 → 有权限的第一个页面
-  if (to.path === '/') {
-    // 优先：门户建议落地（第一个可见模块的第一页）
-    const portalFirst = portalLandingPath();
-    if (portalFirst && portalFirst !== '/no-permission') {
-      return { path: portalFirst };
-    }
-    // 兜底：就业/教务/班级/初高 里第一个有权限的静态页
-    //   ★ 2026-10-05：这里也要过一遍「模块门槛」，否则一个只挂 class-jh 的账号
-    //     会先被送到大学部的 /class/roster，再被下方 step 5 弹回初高（多一次跳转）。
-    const first = myPages.value.find((p) => {
-      if (p.path.includes('/:')) return false;
-      const m = moduleOfPageCode(p.code);
-      return !m || moduleAllowed(m);
-    });
-    return first ? { path: first.path } : { path: '/no-permission' };
-  }
+  // 3. 首页 → 工作台
+  //    ★ 2026-10-16 起 / 本身就是工作台页（每个角色登录后第一个页面），
+  //    原「跳到第一个有权限页面」的逻辑整体移除；无 pageCode 的路由
+  //    在下方 step 5 里天然放行。
 
   // 4. 新模块页（市场咨询/财务/权限）：按门户 visibleModules 判定
   const mod = to.meta?.module as string | undefined;
@@ -440,9 +451,9 @@ router.beforeEach(async (to) => {
   //   根因同源 —— 门户 modules 是模块级权威，但这里只校了两套班级模块，
   //   于是「门户只授权 perm、权限库里却是系统管理员角色」的账号（linx）
   //   直连 /class、/edu/student 照样能进。
-  //   现在统一走 moduleOfPageCode()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
-  const needModule = moduleOfPageCode(pageCode);
-  if (needModule && !moduleAllowed(needModule)) {
+  //   现在统一走 pageModuleAllowed()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
+  //   ★ 2026-10-19：共用页（待接收学员）允许任一相关模块放行。
+  if (!pageModuleAllowed(pageCode)) {
     // 落到「当前账号有权限的任意一个页面」，避免把他甩进死循环
     const firstAllowed = myPages.value.find((p) => {
       if (p.path.includes('/:')) return false;

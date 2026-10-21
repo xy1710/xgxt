@@ -219,7 +219,7 @@ export const PAGE_PERMISSIONS: PagePermissionDef[] = [
     name: '待接收学员',
     path: '/class/consult',
     group: '班级管理',
-    desc: '咨询端推来的待接收学员：接收/拒绝',
+    desc: '咨询端推来的待接收学员：接收/拒绝（★ 初高中 + 大学共用一个页面）',
   },
   {
     code: 'class:attendance:view',
@@ -361,6 +361,13 @@ export const PAGE_PERMISSIONS: PagePermissionDef[] = [
     group: '教学管理（初高）',
     desc: '出勤达标线与统计口径、催费提醒天数、学习阶段字典',
   },
+  {
+    code: 'classjh:building:view',
+    name: '楼栋设置（初高）',
+    path: '/class-jh/building',
+    group: '教学管理（初高）',
+    desc: '宿舍楼栋字典，与宿舍管理的楼栋下拉实时一致（可独立授权给教务）',
+  },
 ];
 
 /** 按权限码查定义 */
@@ -404,3 +411,18 @@ export function moduleOfPageCode(pageCode?: string): string {
   if (pageCode.startsWith('edu:')) return 'edu';
   return '';
 }
+
+/**
+ * ★ 2026-10-19：**跨模块共用的页面码**
+ *
+ * 待接收学员（`class:consult:view`）改成「初高中 + 大学」共用一个页面：
+ *   初高班主任的账号 modules 只有 `class-jh`，按 `class:` 前缀判模块会被直接
+ *   从 my-pages 里摘掉 → 页面「没有访问权限」。
+ *
+ * ⚠️ 只登记**确实两段共用**的页面。别把整组 class:* 放开 —— 那等于给初高账号
+ *    开了大学部班级管理的后门。
+ * ⚠️ 必须与前端 `web-job/src/store/modules.ts` 的 SHARED_PAGE_MODULES 保持一致。
+ */
+export const SHARED_PAGE_MODULES: Record<string, string[]> = {
+  'class:consult:view': ['class', 'class-jh'],
+};

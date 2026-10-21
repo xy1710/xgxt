@@ -31,6 +31,8 @@ import {
   syncRefundFromFinance,
 } from '../services/refund.service';
 import { findStudent } from '../services/student.service';
+// ★ 2026-10-16 数据范围：咨询师只能给自己名下（分配给自己的）学生发起退费
+import { assertStudentIdInScope } from '../services/data-scope';
 
 export const refundRouter = Router();
 
@@ -178,6 +180,12 @@ refundRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof applySchema>;
     const operator = req.user!;
+
+    /**
+     * ★ 2026-10-16 数据范围：咨询师只能发起「自己负责的学生」的退费
+     *   （经理不受限 —— 经理看全部、也能代发起）
+     */
+    await assertStudentIdInScope(body.consultStudentId, req.user);
 
     const result = await applyRefund(
       body.consultStudentId,

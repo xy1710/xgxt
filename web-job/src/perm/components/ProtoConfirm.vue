@@ -7,7 +7,7 @@
  *
  * 用法：
  *   <ProtoConfirm v-model="confirm.show" :title="confirm.title" icon="🗑" icon-bg="var(--dg-l)"
- *     msg="确定删除该角色？" :detail="confirm.detail" :warn="confirm.warn"
+ *     msg="确定删除该职位？" :detail="confirm.detail" :warn="confirm.warn"
  *     ok-text="确认删除" ok-class="dg" @ok="doDelete" />
  */
 import { ref, watch } from 'vue';

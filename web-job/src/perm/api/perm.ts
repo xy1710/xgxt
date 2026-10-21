@@ -34,6 +34,9 @@ import type {
   PermOptions,
   PermOverview,
   ExportScope,
+  PermMenuItemAdmin,
+  PermItemSavePayload,
+  PermItemSaveResult,
 } from 'shared-types/perm';
 
 const P = '/api/perm';
@@ -61,7 +64,7 @@ export const deptApi = {
 };
 
 /* ============================================================
- * 三、角色管理
+ * 三、职位管理
  * ============================================================ */
 
 export const roleApi = {
@@ -109,10 +112,22 @@ export const userApi = {
 export const menuApi = {
   tree: (refresh = false) => http.get<PermModule[]>(`${P}/menu/tree`, refresh ? { refresh: 1 } : undefined),
   stats: () => http.get<PermTreeStats>(`${P}/menu/stats`),
+  /**
+   * ★ 2026-10-19 新增：权限点维护（用户自建权限点）
+   *
+   * 【为什么需要】预置权限树是「系统能力清单」，新部门（招生部）＋新职位（招生老师）
+   *   常常需要预置清单里没有的功能点。这一组接口让界面自己加，格式与预置完全一致，
+   *   存完立刻出现在权限树里，可以直接勾选给任意职位。
+   */
+  items: () => http.get<PermMenuItemAdmin[]>(`${P}/menu/items`),
+  addItem: (data: PermItemSavePayload) => http.post<PermItemSaveResult>(`${P}/menu/item`, data),
+  updateItem: (data: PermItemSavePayload & { id: string }) =>
+    http.put<PermItemSaveResult>(`${P}/menu/item`, data),
+  removeItem: (id: string) => http.delete<{ itemName: string; affectedRoles: number }>(`${P}/menu/item/${id}`),
 };
 
 /* ============================================================
- * 六、角色-权限分配
+ * 六、职位权限分配
  * ============================================================ */
 
 export const assignApi = {

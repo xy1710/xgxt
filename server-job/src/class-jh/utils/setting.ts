@@ -4,7 +4,13 @@
  * 阈值一律不写死，从 t_class_setting 读取；缺失时用默认值兜底。
  *
  * 预置键：attendanceTargetRate(90)、attendanceScope(JSON)、feeRemindDays(7)、
- *        refundThresholdAmount(500000)、closedClassIntakeTypes([1,2])、allowStudentAdd(false)。
+ *        feeUrgeWindowDays(20)、refundThresholdAmount(500000)、
+ *        closedClassIntakeTypes([1,2])、allowStudentAdd(false)。
+ *
+ * ★ 两个「天数」别混（2026-10-20 用户要求新增窗口）：
+ *   · feeUrgeWindowDays = 催费列表**窗口**：到期日距今 ≤ N 天的缴费单才进催费列表（含已逾期）
+ *   · feeRemindDays     = 催费**标红**：未结清且剩余 ≤ N 天打「紧急」标记
+ *   窗口是门槛（进不进列表），标红是视觉提示，两者语义不同，不能合成一个数。
  */
 
 import { db } from './db';
@@ -17,6 +23,7 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   attendanceTargetRate: '90',
   attendanceScope: JSON.stringify({ shouldStatuses: [3, 4, 5], presentStatuses: [1, 2] }),
   feeRemindDays: '7',
+  feeUrgeWindowDays: '20',
   refundThresholdAmount: '500000',
   closedClassIntakeTypes: JSON.stringify([1, 2]),
   allowStudentAdd: 'false',

@@ -386,6 +386,10 @@ export interface FeeRecord extends BaseEntity {
   classId?: string;
   className?: string;
   deptCode?: number;
+  /** ★ 2026-10-20 用户要求：学生手机号（来自 t_class_student.phone，左连取） */
+  phone?: string | null;
+  /** ★ 2026-10-20 用户要求：家长手机号（催费主要打这个；t_class_student.parent_phone） */
+  parentPhone?: string | null;
   feeType: FeeType;
   /** 双返回 */
   feeTypeName: string;
@@ -403,6 +407,21 @@ export interface FeeRecord extends BaseEntity {
   /** 是否紧急（派生，按配置阈值） */
   isUrgent?: boolean;
   voucherUrl?: string;
+  /** 缴费方式 1微信支付 2支付宝 3现金（★ 2026-10-20 登记缴费；未登记为 null） */
+  payMethod?: number | null;
+  /** 双返回 */
+  payMethodName?: string | null;
+  /** 实缴金额（分）；与 feeAmount（应缴）分开存，允许部分缴 */
+  paidAmount?: number | null;
+  /** 缴费备注（转账单号/说明） */
+  payRemark?: string | null;
+  /**
+   * 是否已转交财务（★ 2026-10-20）
+   *
+   * 判据：source_system='finance' 且有 source_id —— 说明这张单已经有对应的财务缴费单。
+   * 批量转交时「只选未上传过」就是按这个标记过滤。
+   */
+  transferred?: boolean;
 }
 
 /** 催费记录 */
@@ -425,6 +444,7 @@ export interface FeeNotify extends BaseEntity {
   notifyUserName?: string;
   /** YYYY-MM-DD HH:mm:ss */
   notifyTime: string;
+  /** 发送内容（表列沿用了 remark 这个旧名） */
   remark?: string;
 }
 
@@ -606,6 +626,37 @@ export interface StageDict extends BaseEntity {
   /** 学制月数 */
   studyMonths?: number;
   sortNo?: number;
+}
+
+/**
+ * 阶段方案 · 阶段明细（★ 2026-10-16）
+ *
+ * 方案里的一个阶段：阶段名称 + 学制月数。
+ * 例：方案一 → 一阶段 2月 / 二阶段 2月 / 三阶段 2月。
+ */
+export interface StageSchemeStage {
+  id: string;
+  stageName: string;
+  /** 学制月数 */
+  studyMonths?: number | null;
+  /** 方案内顺序 */
+  sortNo?: number;
+}
+
+/**
+ * 阶段方案（★ 2026-10-16：原「阶段字典」升级）
+ *
+ * 一个方案 = 方案名称 + 所属部门 + N 个阶段明细；
+ * 班级新增/编辑时先选方案、再选阶段（阶段选项 = 该方案的阶段明细）。
+ */
+export interface StageScheme {
+  id: string;
+  schemeName: string;
+  /** 所属部门 1初高部 2大学部 */
+  deptCode: number;
+  deptName?: string;
+  /** 方案下的阶段（按 sortNo 升序） */
+  stages: StageSchemeStage[];
 }
 
 /** 操作日志 */

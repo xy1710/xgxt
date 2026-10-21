@@ -20,6 +20,8 @@ import type {
   ConsultFeeCreatePayload,
   ConsultFeeCreateResult,
   ConsultFeeStats,
+  // ★ 2026-10-19 作废收款单返回值
+  ConsultFeeCancelResult,
   ConsultRefundOrder,
   ConsultRefundQuery,
   ConsultRefundApplyPayload,
@@ -44,6 +46,11 @@ import type {
   FeeType,
   ConsultToFormalResult,
   ConsultSupplementPlan,
+  // ★ 2026-10-16 分期付款
+  ConsultInstallmentPlan,
+  ConsultInstallmentCreatePayload,
+  ConsultInstallmentPayPayload,
+  ConsultStudentLedger,
 } from 'shared-types/consult';
 
 /* ============================================================
@@ -68,7 +75,7 @@ export function fetchRoles(): Promise<Array<{ role: string; roleName: string; de
 /* ---- 账号管理（管理员）----
  *
  * ⚠️⚠️ 2026-10-03 用户指令：
- *   「账号管理和权限管理内的用户管理是同一个功能，权限管理内的用户管理是唯一的，
+ *   「账号管理和权限管理内的账号管理是同一个功能，权限管理内的账号管理是唯一的，
  *     账号管理删除，功能一致。」
  *   → 本模块的账号管理页（views/AccountList.vue）已删除，
  *     下面这 7 个账号维护接口（list / stats / add / update / reset-password /
@@ -129,15 +136,17 @@ export function assignClass(payload: AssignClassPayload): Promise<null> {
  * 入班 / 分班（咨询 → 班级管理 / 教学管理初高）
  *
  * 不带 classId：把学员推送到大学部「待接收学员」，由班主任接收并建档。
- * 带 classId（★ 2026-10-05 分班）：目标 = 大学部走「待接收学员」；
- *   目标 = 初高则**直接**进入对应班级。幂等：按 consultNo 去重。
+ * 带 classId（★ 2026-10-05 分班）：目标 = 大学部 / 初高，**都是分班即入班**。
+ *   ★ 2026-10-20 用户口径「入班和分班合并」：大学部不再进「待接收学员」，
+ *     推送后立刻由班级侧建档入班，学部（初中/高中/大学部）直接能看到学生。
+ *   幂等：按 consultNo 去重，重复确认返回 duplicate=true，不会重复建档。
  */
 export function enrollToClass(
   id: string,
   classId?: string,
   module?: 'class' | 'class-jh',
-): Promise<{ consultNo: string; inserted: number; skipped: number }> {
-  return http.post<{ consultNo: string; inserted: number; skipped: number }>(
+): Promise<{ consultNo: string; inserted: number; skipped: number; duplicate?: boolean }> {
+  return http.post<{ consultNo: string; inserted: number; skipped: number; duplicate?: boolean }>(
     '/api/consult/student/enroll-to-class',
     { id, classId, module },
   );
@@ -198,11 +207,19 @@ export function toFormal(
   consultStudentId: string,
   payMode: FormalPayMode = 'FULL' as FormalPayMode,
   feeTypes?: FeeType[],
+  /**
+   * ★ 2026-10-19 用户口径：只要缴费就要有凭证。
+   *    转正式会真的建缴费单，凭证必须随单提交。
+   */
+  voucherUrl?: string,
+  voucherNo?: string,
 ): Promise<ConsultToFormalResult> {
   return http.post<ConsultToFormalResult>('/api/consult/student/to-formal', {
     consultStudentId,
     payMode,
     feeTypes,
+    voucherUrl,
+    voucherNo,
   });
 }
 
@@ -298,6 +315,31 @@ export function createFees(payload: ConsultFeeCreatePayload): Promise<ConsultFee
   return http.post<ConsultFeeCreateResult>('/api/consult/fee/create', payload);
 }
 
+/**
+ * ★ 2026-10-20 补费（试学转正尾款 / 差额补收，金额自定义）
+ *
+ * 只对「已缴过试学费」的学生开放；金额由老师手填（单位：分）。
+ * 落库类型是「补费(8)」，到账后自动把试学学员转成正式在读。
+ */
+export interface ConsultSupplementPayload {
+  consultStudentId: string;
+  /** 补费金额（单位：分） */
+  amount: number;
+  voucherUrl: string;
+  voucherNo?: string;
+  payMethod?: string;
+  remark?: string;
+}
+
+export function createSupplementFee(
+  payload: ConsultSupplementPayload,
+): Promise<{ orderId: string; orderNo: string; amount: number }> {
+  return http.post<{ orderId: string; orderNo: string; amount: number }>(
+    '/api/consult/fee/supplement',
+    payload,
+  );
+}
+
 /** 上传图片（base64 → 返回相对 URL） */
 export function uploadFile(dataUrl: string, prefix?: string): Promise<{ url: string; size: number }> {
   return http.post<{ url: string; size: number }>('/api/consult/fee/upload-file', {
@@ -320,6 +362,19 @@ export function resubmitOrder(orderId: string): Promise<null> {
   return http.post<null>('/api/consult/fee/resubmit', { orderId });
 }
 
+/**
+ * ★ 2026-10-19 作废收款单（重复发起 / 发起错了）
+ *
+ * ⚠️ 传整批 orderIds：学生档案按批次合并显示，只作废一张会留下半截数据。
+ *    已到账的单不能作废（后端会跳过并在 message 里说明），要走退费。
+ */
+export function cancelFeeOrders(
+  orderIds: string[],
+  reason?: string,
+): Promise<ConsultFeeCancelResult> {
+  return http.post<ConsultFeeCancelResult>('/api/consult/fee/cancel', { orderIds, reason });
+}
+
 /** 查费用标准（规则2，用于新建学生时预览金额） */
 export function fetchStandard(feeType: number, deptCode?: number): Promise<FinanceStandardView> {
   return http.get<FinanceStandardView>('/api/consult/fee/standard', { feeType, deptCode });
@@ -334,6 +389,47 @@ export function fetchStandardBatch(
     feeTypes: feeTypes.join(','),
     deptCode,
   });
+}
+
+/* ============================================================
+ * ★ 2026-10-16 分期付款
+ * ============================================================ */
+
+/** 创建分期计划（默认立刻发起第 1 期收款） */
+export function createInstallment(
+  payload: ConsultInstallmentCreatePayload,
+): Promise<ConsultInstallmentPlan> {
+  return http.post<ConsultInstallmentPlan>('/api/consult/fee/plan/create', payload);
+}
+
+/** 缴某一期 */
+export function payInstallmentStage(
+  payload: ConsultInstallmentPayPayload,
+): Promise<ConsultInstallmentPlan> {
+  return http.post<ConsultInstallmentPlan>('/api/consult/fee/plan/pay', payload);
+}
+
+/** 分期计划列表 */
+export function fetchInstallmentList(query: {
+  consultStudentId?: string;
+  status?: number;
+  keyword?: string;
+  page?: number;
+  size?: number;
+}): Promise<PageData<ConsultInstallmentPlan>> {
+  return http.get<PageData<ConsultInstallmentPlan>>('/api/consult/fee/plan/list', query);
+}
+
+/** 分期计划详情 */
+export function fetchInstallmentDetail(planId: string): Promise<ConsultInstallmentPlan> {
+  return http.get<ConsultInstallmentPlan>('/api/consult/fee/plan/detail', { id: planId });
+}
+
+/** 学生缴费账本（应收 / 已收 / 优惠 / 待缴） */
+export function fetchStudentLedger(
+  consultStudentId: string,
+): Promise<ConsultStudentLedger> {
+  return http.get<ConsultStudentLedger>('/api/consult/fee/plan/ledger', { consultStudentId });
 }
 
 /* ============================================================
@@ -367,19 +463,44 @@ export function applyRefund(payload: ConsultRefundApplyPayload): Promise<{ id: s
   return http.post<{ id: string; refundNo: string }>('/api/consult/refund/apply', payload);
 }
 
-/** 经理审批通过 */
-export function approveRefund(id: string, remark?: string): Promise<null> {
-  return http.post<null>('/api/consult/refund/approve', { id, remark });
+/**
+ * 经理审批通过
+ *
+ * ⚠️⚠️ 2026-10-15 修复：入参字段名原本发的是 `id`，而后端
+ *   `POST /api/consult/refund/approve` 的 zod schema 要的是 **`refundId`**
+ *   （`z.object({ refundId: z.string().min(1) })`）。
+ *   字段名对不上 → 校验直接拒掉：
+ *     400「参数「refundId」类型不正确」
+ *   **经理点「审批通过」永远失败**（用户 2026-10-15 反馈的现象）。
+ *
+ * ⚠️ 同批修掉的还有 rejectRefund / payRefund —— 三个接口都是同一个字段名问题，
+ *    改的时候一定要三个一起改（少改一个就还有一个按钮点不动）。
+ */
+export function approveRefund(refundId: string): Promise<null> {
+  return http.post<null>('/api/consult/refund/approve', { refundId });
 }
 
-/** 经理驳回 */
-export function rejectRefund(id: string, rejectReason: string): Promise<null> {
-  return http.post<null>('/api/consult/refund/reject', { id, rejectReason });
+/**
+ * 经理驳回
+ *
+ * ⚠️ 同上：字段名必须是 `refundId`（不是 id），且 `rejectReason` 必填。
+ */
+export function rejectRefund(refundId: string, rejectReason: string): Promise<null> {
+  return http.post<null>('/api/consult/refund/reject', { refundId, rejectReason });
 }
 
-/** 财务打款（演示：财务角色或手工标记） */
-export function payRefund(id: string, payVoucherNo?: string): Promise<null> {
-  return http.post<null>('/api/consult/refund/pay', { id, payVoucherNo });
+/**
+ * 财务打款（演示：财务角色或手工标记）
+ *
+ * ⚠️ 同上：字段名必须是 `refundId`。
+ *   另外后端 `/pay` 收的是 `payMethod / payRef / payTo`，
+ *   原先前端发的是 `payVoucherNo` —— 名字不存在，即使字段名对了也会丢参数。
+ */
+export function payRefund(
+  refundId: string,
+  payload: { payMethod?: string; payRef?: string; payTo?: string } = {},
+): Promise<null> {
+  return http.post<null>('/api/consult/refund/pay', { refundId, ...payload });
 }
 
 /** 从财务同步退费状态 */

@@ -70,6 +70,13 @@ export default defineConfig({
       //       现象是"接口没报错但数据全是空的"，极难排查。
       //       （这正是本期端到端自检脚本抓出来的第一个真 bug。）
       '/api/teaching': { target: 'http://localhost:8004', changeOrigin: true }, // 统一教学接口（出勤等）
+
+      // ---- ★ 2026-10-20：缴费凭证等上传文件的静态托管 ----
+      //   后端 app.ts 把 /uploads 挂在 server-job/uploads（咨询/财务/初高的凭证都在这里）。
+      //   漏了这条，<img src="/uploads/..."> 会被 Vite 当**前端路由**返回 index.html，
+      //   现象是「凭证图片打不开、也没有 404 报错」，极难排查。
+      //   （2026-10-15 版本只提到 /uploads/voucher/，这里补全为整个 /uploads。）
+      '/uploads': { target: 'http://localhost:8004', changeOrigin: true },
     },
   },
 });

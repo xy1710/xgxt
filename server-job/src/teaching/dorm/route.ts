@@ -32,7 +32,7 @@ import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 import type { DormListQuery, TeachingStage } from '../shared/dto';
-import { DORM_STATUS_NAME } from '../shared/dto';
+import { DORM_ROOM_NO_ANY_RE, UnifiedDormStatus } from '../shared/dto';
 
 export const teachingDormRouter = Router();
 
@@ -94,11 +94,25 @@ function queryOf(req: Request): DormListQuery {
     dormType: numOrUndef(req.query.dormType),
     roomStatus: numOrUndef(req.query.roomStatus),
     keyword: str(req.query.keyword),
+    occupancyRate: numOrUndef(req.query.occupancyRate),
     onlyVacant: bool(req.query.onlyVacant),
     page: int(req.query.page, 1),
     size: Math.min(int(req.query.size, 20), 200),
   };
 }
+
+/**
+ * 14. 入住率可选项（实时从数据里去重，随其它筛选联动）
+ *
+ * 复用 queryOf 是为了让「楼栋=1号楼 → 只给 1号楼 真实存在的入住率」成立；
+ * occupancyRate 本身会在 service 里被摘掉（见 listOccupancyRates 注释）。
+ */
+teachingDormRouter.get(
+  '/occupancy-rates',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listOccupancyRates(queryOf(req), req.user), '查询成功'));
+  }),
+);
 
 /** 1. 房间列表 */
 teachingDormRouter.get(
@@ -139,6 +153,22 @@ teachingDormRouter.get(
   }),
 );
 
+/**
+ * 4.1 办理入住的学生候选（★ 2026-10-21）
+ * 班主任只会拿到自己班、且还没入住的学生；教务/校长拿全量。
+ */
+teachingDormRouter.get(
+  '/candidates',
+  wrap(async (req, res) => {
+    res.json(
+      ok(
+        await svc.listCandidates(optStage(req.query.stage), str(req.query.keyword) || undefined, req.user),
+        '查询成功',
+      ),
+    );
+  }),
+);
+
 /** 5. 楼栋下拉 */
 teachingDormRouter.get(
   '/buildings',
@@ -175,18 +205,70 @@ teachingDormRouter.post(
     if (!String(b.roomNo ?? '').trim()) {
       throw new BizError(BizCode.PARAM_ERROR, '房间号必填');
     }
-    if (b.roomStatus !== undefined && b.roomStatus !== null && b.roomStatus !== '') {
-      const st = Number(b.roomStatus);
-      if (!DORM_STATUS_NAME[st]) {
-        throw new BizError(BizCode.PARAM_ERROR, '房间状态取值非法');
-      }
+    /**
+     * ★★ 新增房间的五条业务规则（和前端弹窗一一对应，后端必须再拦一次）
+     *
+     *   ① 宿舍号 = **3 位数字**，第 1 位是楼层、后 2 位是房号（如 308 = 3 楼 08 室）
+     *      → 楼层不再单独存一列，房号本身就带楼层，改房号即改楼层，不会两处不一致。
+     *   ② 类别（dorm_gender）只能是 **1 男寝 / 2 女寝**
+     *      → 老数据的 0「不限」是历史遗留，新数据不允许再造（前端已经是二选一单选）。
+     *   ③ 状态只能是 **1 使用中 / 4 停用**（统一码；实训原码 1/2 由 repo 翻译）
+     *      → 「空置(2)」「维修(3)」不在本次口径内，传了直接拒，避免存进去显示不出来。
+     *   ④ 备注 ≤ 50 个汉字（按**字符数**算，不是字节数 —— utf8mb4 下一个汉字是 1 个字符）
+     *   ⑤ 床位数 1 ~ 50（大于 0、小于等于 50）—— 0 会让入住率除零
+     *
+     * 【为什么后端要重复校验】前端 el-form 的 rules 能被绕过（直接调接口 /
+     *   改 DOM），而且 ① 这类规则一旦绕过，dorm_no 唯一键会存进「A-1-3O8」这种脏值。
+     */
+    const roomNo = String(b.roomNo ?? '').trim();
+    /**
+     * ★ 房号 = 楼层 + 两位序号，长度跟着楼层位数走（见 dto 的 `dormRoomNo()`）：
+     *     ≤ 9 层 → 3 位（108）；≥ 10 层 → 4 位（1008）
+     *   所以这里是 3~4 位，不是死板的 3 位。
+     */
+    if (!DORM_ROOM_NO_ANY_RE.test(roomNo)) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        '宿舍号必须是 3~4 位数字：楼层 + 两位房号（如 308 = 3 楼 08 室，1008 = 10 楼 08 室）',
+      );
     }
+    const dormType = numOrUndef(b.dormType);
+    if (dormType !== undefined && dormType !== 1 && dormType !== 2) {
+      throw new BizError(BizCode.PARAM_ERROR, '类别只能选「男寝」或「女寝」');
+    }
+    // ★ 新建必须选（老数据的 0「不限」是历史遗留，新数据不允许再造）
+    if (!b.id && dormType === undefined) {
+      throw new BizError(BizCode.PARAM_ERROR, '请选择类别（男寝 / 女寝）');
+    }
+    const roomStatus = numOrUndef(b.roomStatus);
+    if (
+      roomStatus !== undefined &&
+      roomStatus !== UnifiedDormStatus.IN_USE &&
+      roomStatus !== UnifiedDormStatus.DISABLED
+    ) {
+      throw new BizError(BizCode.PARAM_ERROR, '房间状态只能选「使用中」或「停用」');
+    }
+    /**
+     * ⑤ 床位数：1 ~ 50（大于 0、小于等于 50）
+     *    → 0 会让入住率除零（入住率 = 已住 / 床位）；上限 50 是业务口径。
+     *    → 前端 el-input-number 有 min/max，但那个能被绕过，后端必须再挡一次。
+     */
+    const bedCount = numOrUndef(b.bedCount);
+    if (bedCount !== undefined && (!Number.isInteger(bedCount) || bedCount < 1 || bedCount > 50)) {
+      throw new BizError(BizCode.PARAM_ERROR, '床位数必须是 1 ~ 50 之间的整数');
+    }
+
+    const remark = strOrNull(b.remark);
+    if (remark !== undefined && remark !== null && [...remark].length > 50) {
+      throw new BizError(BizCode.PARAM_ERROR, '备注不能超过 50 个字');
+    }
+
     const r = await svc.saveDorm(
       {
         stage,
         id: str(b.id),
         buildingName: String(b.buildingName).trim(),
-        roomNo: String(b.roomNo).trim(),
+        roomNo,
         // ★ NOT NULL 列（floorNo / dormType / bedCount / roomStatus）一律 numOrUndef，
         //   传 null 会被降级成 undefined（= 不修改），避免 ER_BAD_NULL_ERROR
         floorNo: numOrUndef(b.floorNo),
@@ -284,5 +366,30 @@ teachingDormRouter.post(
       req.user,
     );
     res.json(ok(r, '申请已提交，等待审批'));
+  }),
+);
+
+/**
+ * 13.1 审批通过（★ 2026-10-21）
+ * 通过时同步改床位与学生主档：调宿 = 放旧床 + 占新床；退宿 = 放旧床 + 清空宿舍。
+ */
+teachingDormRouter.post(
+  '/change/approve',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    await svc.approveDormChange(stage, requireId(b.id, '申请ID'), req.user);
+    res.json(ok(null, '已通过，床位与学生宿舍已更新'));
+  }),
+);
+
+/** 13.2 审批驳回（只改状态，不动床位） */
+teachingDormRouter.post(
+  '/change/reject',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    await svc.rejectDormChange(stage, requireId(b.id, '申请ID'), String(b.reason ?? ''), req.user);
+    res.json(ok(null, '已驳回'));
   }),
 );

@@ -12,7 +12,7 @@
  *     description: |
  *       前端所有下拉框的取值集中在这里。
  *
- *       > 集中在一个接口是为了避免「A 页面叫管理角色、B 页面叫管理层」这类脏数据。
+ *       > 集中在一个接口是为了避免「A 页面叫管理职位、B 页面叫管理层」这类脏数据。
  *
  *       > ⚠️ 所有字段都是 **`{ value, label }` 对象数组**，不是裸字符串数组。
  *       >   `logActionTypes / logModules / logResults` 在 `PermOptions` 类型里没声明，
@@ -38,7 +38,7 @@
  *                       type: array
  *                       items:
  *                         $ref: '#/components/schemas/PermOptionItem'
- *                       description: 业务角色 / 管理角色 / 职能角色 / 系统角色
+ *                       description: 业务职位 / 管理职位 / 职能职位 / 系统职位
  *                     roleStatuses:
  *                       type: array
  *                       items:

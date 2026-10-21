@@ -78,6 +78,15 @@ export interface ConsultStudentListItem {
   /** 收费情况摘要 */
   paidCount: number;
   pendingCount: number;
+  /**
+   * ★ 2026-10-16 分期欠费金额（分）
+   *
+   * 来源：该学生所有「未终止」分期计划的待缴余额之和。
+   * > 0 表示还有尾款没缴清，列表上打「欠费」标记。
+   */
+  arrearAmount?: number;
+  /** 是否欠费（arrearAmount > 0），前端列表筛选与标记用 */
+  inArrear?: boolean;
   infoCompleteness: InfoCompleteness;
   createTime: string;
 }
@@ -99,6 +108,10 @@ export interface ConsultStudent extends BaseEntity {
   sourceChannelName: string;
   /** 来源备注，如「青山社区」 */
   sourceRemark?: string;
+  /** 转介绍招生老师姓名（来源=转介绍时填） */
+  referrerName?: string;
+  /** 转介绍招生老师手机号 */
+  referrerPhone?: string;
   ownerId?: string;
   ownerName?: string;
   ownerTitle?: string;
@@ -143,8 +156,13 @@ export interface ConsultStudent extends BaseEntity {
   id: string;
   /** 跟进历史（按时间正序） */
   history?: ConsultHistoryItem[];
-  /** 该生的缴费单 */
-  fees?: ConsultFeeOrder[];
+  /**
+   * 该生的缴费单
+   *
+   * ★ 2026-10-16 用户口径：只保留「总金额」一行，总金额下面列出它包含的费用项
+   *    （一次勾选多项发起收费时，库里是一张单据一个费用类型，共享一张凭证）
+   */
+  fees?: ConsultStudentFeeGroup[];
   /** 该生的退费单（最多一条，没有则为 null） */
   refund?: ConsultRefundOrder | null;
   /** 可选班级列表（分班弹窗用） */
@@ -180,6 +198,10 @@ export interface ConsultStudentSavePayload {
   phone?: string;
   sourceChannel: LeadChannel;
   sourceRemark?: string;
+  /** 转介绍招生老师姓名（来源=转介绍时填） */
+  referrerName?: string;
+  /** 转介绍招生老师手机号 */
+  referrerPhone?: string;
   /** 意向课程（可留空） */
   intendCourse?: string;
   parentContact?: string;
@@ -205,6 +227,65 @@ export interface ConsultStudentExtraPayload {
 /* ============================================================
  * 二、收款单（咨询发起 → 财务核对）
  * ============================================================ */
+
+/**
+ * 学生档案 →「缴费单」里的一行
+ *
+ * ★ 2026-10-16 用户口径：只保留【总金额】一行，总金额下面列出它包含的费用项。
+ *   一次勾选多项发起收费时，库里是「一张单据一个费用类型」（共享一张凭证），
+ *   平铺会出现 6 行、同一张凭证重复 6 次 —— 这里按同一次发起合并成一行。
+ */
+export interface ConsultStudentFeeGroup {
+  /** 代表单 id（合并批次取第一张） */
+  orderId: string;
+  orderNo: string;
+  /** 本行覆盖的全部单据 id（合并批次的每一张） */
+  orderIds: string[];
+  /**
+   * ★ 2026-10-19 分期单标记：有值说明这一行属于某张分期计划（第 stageNo 期）。
+   *    分期各期天然是同一个费用项，前端不做「重复收费」标注、也不给作废入口。
+   */
+  planId?: string;
+  stageNo?: number;
+  /** 展示用类型名，如「学费 等 6 项」 */
+  feeTypeName: string;
+  /** 总金额（分） */
+  amount: number;
+  amountYuan: string;
+  status: ConsultFeeStatus;
+  statusName: string;
+  /** 整批共用的缴费凭证（取第一张有值的） */
+  voucherUrl?: string;
+  createTime: string;
+  /** 总金额下面列出的费用项 */
+  included: Array<{
+    /** ★ 2026-10-19 带上类型码：前端要判断「同一费用项被重复发起」 */
+    feeType?: number;
+    feeTypeName: string;
+    amountYuan: string;
+    status: ConsultFeeStatus;
+    statusName: string;
+    /** 该子项对应的单据 id（按类型分别建立的老批次才有，合并单没有） */
+    orderId?: string;
+  }>;
+  /**
+   * ★ 2026-10-19 疑似重复收费：
+   *    同一学生的同一费用项，在多张【未终结】的单据上同时存在
+   *    （例如学费既挂在 SK20261015-001 待财务确认、又挂在 SK20261015-007 待上传凭证）。
+   *    前端据此标红，提示老师作废多余的那一批。
+   */
+  duplicated?: boolean;
+  /** 与其他单据重复的费用项名称（duplicated=true 时有值） */
+  duplicatedTypes?: string[];
+}
+
+/** 作废收款单结果 */
+export interface ConsultFeeCancelResult {
+  /** 成功作废的单据数 */
+  cancelled: number;
+  /** 没能作废的单据及原因（已到账的要走退费，不能作废） */
+  skipped: Array<{ orderNo: string; reason: string }>;
+}
 
 /** 收款单 */
 export interface ConsultFeeOrder {
@@ -257,6 +338,255 @@ export interface ConsultFeeOrder {
   createTime: string;
   /** 最近一次操作描述 */
   lastAction?: string;
+
+  /* ---------- ★ 2026-10-15 一次缴清的多项费用合并为一行 ---------- */
+
+  /**
+   * 本次收款包含的费用项明细。
+   * 单笔收款也带（长度 1），这样前端展示不用分两套逻辑。
+   */
+  included?: Array<{
+    orderId: string;
+    feeTypeName: string;
+    amountYuan: string;
+    statusName: string;
+  }>;
+  /** 本行覆盖的所有单据 id（上传凭证 / 重新提交要批量作用在这些单据上） */
+  orderIds?: string[];
+  /** true = 一次缴清的多项费用合并行（feeTypeName 形如「学费 等 6 项」） */
+  merged?: boolean;
+  /**
+   * ★ 2026-10-15 合并缴费（一张合计单）时勾选的费用项原始明细。
+   *    与 included 的区别：included 是「行」级别的展示数据（带状态），
+   *    itemDetail 是单据自带的明细快照（金额，单位分）。
+   *
+   *    ★ 2026-10-16 新增 standardAmount / discount：
+   *      standardAmount = 财务标准应缴（分）；discount = 应缴 - 实缴（分，>0 表示优惠）。
+   *      用于「发起收费」时按 应缴/实缴/优惠 三个口径展示与回看。
+   */
+  itemDetail?: Array<{
+    feeType: number;
+    feeTypeName: string;
+    /** 实缴（本次实际收取，分） */
+    amount: number;
+    /** 应缴（财务标准，分）；老数据没有这个字段时 = amount */
+    standardAmount?: number;
+    /** 优惠（应缴 - 实缴，分） */
+    discount?: number;
+  }>;
+  /** ★ 2026-10-16 整单口径：应缴合计（分） */
+  dueAmount?: number;
+  /** ★ 2026-10-16 整单口径：优惠合计（分） */
+  discountAmount?: number;
+
+  /* ---------- ★ 2026-10-15 缴费完成后的操作人与时间 ---------- */
+
+  /** 财务确认到账的操作人（缴费完成之后才有） */
+  paidByName?: string;
+  /** 财务确认到账的时间（缴费完成之后才有） */
+  paidTime?: string;
+
+  /* ---------- ★ 2026-10-16 分期付款 ---------- */
+
+  /** 所属分期计划 id（一次性缴费为 undefined） */
+  planId?: string;
+  /** 分期计划号，如 FP20261016-001 */
+  planNo?: string;
+  /** 第几期，从 1 开始 */
+  stageNo?: number;
+  /** 「第 1 期 / 共 3 期」，一次性缴费为 undefined */
+  stageText?: string;
+  /** 分期时整单应收（分） */
+  totalDueAmount?: number;
+  totalDueAmountYuan?: string;
+}
+
+/* ============================================================
+ * ★ 2026-10-16 分期付款
+ *
+ * 业务口径（用户 2026-10-16 确认）：
+ *   · 一次「发起收费」= 一张分期计划（plan），下挂 N 个期次（item）
+ *   · 应收总额 = 勾选费用项按财务标准算出；实缴不足的部分分两种性质：
+ *       - 优惠（discount）：机构让利，账当场平掉
+ *       - 待缴（pending）：还要继续收，挂在待缴余额里
+ *   · 待缴 = 应收 - 优惠 - 已缴，归零才算缴清
+ *   · 首付（第 1 期）到账即可分班，尾款没缴清的挂「欠费」标记
+ *
+ * ⚠️ 金额一律「分」。
+ * ============================================================ */
+
+/** 分期计划状态 */
+export enum InstallmentPlanStatus {
+  ONGOING = 1, // 进行中（还有期次没缴清）
+  FINISHED = 2, // 已完成（全部缴清）
+  TERMINATED = 3, // 已终止（退费/流失后不再收）
+}
+
+export const INSTALLMENT_PLAN_STATUS_NAME: Record<number, string> = {
+  [InstallmentPlanStatus.ONGOING]: '进行中',
+  [InstallmentPlanStatus.FINISHED]: '已完成',
+  [InstallmentPlanStatus.TERMINATED]: '已终止',
+};
+
+/** 期次状态 */
+export enum InstallmentItemStatus {
+  WAIT = 0, // 待缴（还没发起收款）
+  PENDING = 1, // 待确认（已发起/已传凭证，等财务核对）
+  ARRIVED = 2, // 已到账
+  OVERDUE = 3, // 已逾期（过了到期日还没到账）
+}
+
+export const INSTALLMENT_ITEM_STATUS_NAME: Record<number, string> = {
+  [InstallmentItemStatus.WAIT]: '待缴',
+  // ★ 2026-10-16 与收费单状态叫法保持一致：待确认 → 待财务确认
+  [InstallmentItemStatus.PENDING]: '待财务确认',
+  [InstallmentItemStatus.ARRIVED]: '已到账',
+  [InstallmentItemStatus.OVERDUE]: '已逾期',
+};
+
+/** 一个期次 */
+export interface ConsultInstallmentItem {
+  itemId: string;
+  planId: string;
+  /** 第几期，从 1 开始 */
+  stageNo: number;
+  /** 本期应收（分） */
+  dueAmount: number;
+  dueAmountYuan: string;
+  /** 到期日 YYYY-MM-DD */
+  dueDate?: string;
+  /** 本期已缴（分，到账才计入） */
+  paidAmount: number;
+  paidAmountYuan: string;
+  status: InstallmentItemStatus;
+  statusName: string;
+  /** 是否已逾期（没到账且过了到期日；自动顺延后一般不会出现） */
+  overdue: boolean;
+  /** ★ 2026-10-16 自动顺延次数：到期未缴时到期日自动后移一个周期，每顺延一次 +1 */
+  postponeCount?: number;
+  /** 关联的缴费单 */
+  feeOrderId?: string;
+  orderNo?: string;
+  /** ★ 2026-10-16 该期单据已绑定的缴费凭证（没有则需要在「分期操作」里补缴凭证） */
+  voucherUrl?: string;
+  payTime?: string;
+  remark?: string;
+}
+
+/** 分期计划 */
+export interface ConsultInstallmentPlan {
+  planId: string;
+  planNo: string;
+  consultStudentId: string;
+  studentName: string;
+  studentNo?: string;
+  deptCode?: number;
+  deptName?: string;
+
+  /** 应收总额（分） */
+  totalAmount: number;
+  /** 已缴（分，到账才计入） */
+  paidAmount: number;
+  /** 优惠（分） */
+  discountAmount: number;
+  /** 待缴（分）= 应收 - 优惠 - 已缴 */
+  pendingAmount: number;
+
+  totalAmountYuan: string;
+  paidAmountYuan: string;
+  discountAmountYuan: string;
+  pendingAmountYuan: string;
+
+  stageCount: number;
+  paidStages: number;
+  status: InstallmentPlanStatus;
+  statusName: string;
+
+  /** 费用项明细快照 */
+  itemDetail?: Array<{
+    feeType: number;
+    feeTypeName: string;
+    amount: number;
+    standardAmount?: number;
+    discount?: number;
+  }>;
+
+  remark?: string;
+  createByName?: string;
+  createTime?: string;
+
+  /** 期次明细 */
+  items: ConsultInstallmentItem[];
+}
+
+/** 创建分期计划的入参 */
+export interface ConsultInstallmentCreatePayload {
+  consultStudentId: string;
+  /** 本次要收的费用类型 */
+  feeTypes: FeeType[];
+  /** 实缴自定义（分），key = feeType；与应收的差额记「优惠」 */
+  amountByType?: Record<number, number>;
+  /** 缴费方式 */
+  payMethod?: string;
+  /**
+   * 期次划分，按 stageNo 升序。amount 单位：分。
+   * ⚠️ 各期之和必须 = 应收 - 优惠（即实缴合计），否则会拦下来。
+   */
+  stages: Array<{
+    stageNo: number;
+    amount: number;
+    /** 到期日 YYYY-MM-DD */
+    dueDate?: string;
+  }>;
+  remark?: string;
+  /** 是否在创建后立刻发起第 1 期收款（默认 true） */
+  startFirstStage?: boolean;
+  /**
+   * ★ 2026-10-19 用户口径：「只要缴费就要有凭证」。
+   *    创建分期时就要带上第 1 期的缴费凭证，随第 1 期单据一起落库，
+   *    避免出现「计划建了、第 1 期却是待上传凭证」的中间态。
+   */
+  voucherUrl?: string;
+  voucherNo?: string;
+}
+
+/** 缴某一期的入参 */
+export interface ConsultInstallmentPayPayload {
+  planId: string;
+  /** 第几期 */
+  stageNo: number;
+  /** 缴费方式 */
+  payMethod?: string;
+  /** 本期实收（分），不传则按本期应收 */
+  amount?: number;
+  /**
+   * ★ 2026-10-16 用户口径：发起收款必须当场传凭证（无论一次性还是分期），
+   *    传了就绑定到本期单据并直接置「待确认（待财务确认）」。
+   */
+  voucherUrl?: string;
+  voucherNo?: string;
+}
+
+/** 学生缴费账本（应收 / 已收 / 待缴） */
+export interface ConsultStudentLedger {
+  consultStudentId: string;
+  studentName: string;
+  /** 应收总额（分） */
+  totalAmount: number;
+  /** 已缴（分） */
+  paidAmount: number;
+  /** 优惠（分） */
+  discountAmount: number;
+  /** 待缴（分） */
+  pendingAmount: number;
+  totalAmountYuan: string;
+  paidAmountYuan: string;
+  discountAmountYuan: string;
+  pendingAmountYuan: string;
+  /** 是否欠费（待缴 > 0） */
+  inArrear: boolean;
+  /** 分期计划列表（可能为空数组，表示还没发起过收费） */
+  plans: ConsultInstallmentPlan[];
 }
 
 /** 收款单查询 */
@@ -276,6 +606,22 @@ export interface ConsultFeeCreatePayload {
   feeTypes: FeeType[];
   /** 缴费方式 */
   payMethod?: string;
+  /**
+   * ★ 2026-10-15 金额自定义（单位：分），key = feeType
+   *
+   * 传了就用传入值，没传仍按财务「费用标准」取值 —— 规则2 保持不变，
+   * 只是给老师开一个「本次实际收了多少就填多少」的口子。
+   *
+   * 目前前端只开放「试学费」可改（试学金额常因优惠/减免而变），
+   * 正式学费六项仍按标准取，不传本字段。
+   */
+  amountByType?: Record<number, number>;
+  /**
+   * ★ 2026-10-19 用户口径：「只要缴费就要有凭证」。
+   *    发起收费必须带缴费凭证，建单时直接落库（财务侧即为待核对）。
+   */
+  voucherUrl?: string;
+  voucherNo?: string;
 }
 
 /**

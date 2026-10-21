@@ -4,7 +4,7 @@
  *
  * 页面结构严格对齐高保真原型《学管系统-权限体系高保真原型.html》：
  *   · 第 2682~2721 行 renderOrg()    —— KPI 4 卡 + 「部门结构」表格
- *   · 第 2722~2734 行 deptRoles()    —— 查看角色弹窗
+ *   · 第 2722~2734 行 deptRoles()    —— 查看职位弹窗
  *   · 第 2735~2748 行 deptUsers()    —— 查看账号弹窗
  *   · 第 2749~2769 行 dlgDeptForm()  —— 新建 / 编辑部门弹窗
  *   · 第 2770~2785 行 submitDept()   —— 校验 + 确认后落库
@@ -20,12 +20,10 @@
  *       避免建出「无层级名」的第 4 层。
  *
  * ⚠️ 删除规则（后端已强制，前端提前拦一次，少一次无谓请求）：
- *    · 有子部门 / 被角色引用 / 被账号引用 → 不可删（弹「不可删除」并给出关联明细）
+ *    · 有子部门 / 被职位引用 / 被账号引用 → 不可删（弹「不可删除」并给出关联明细）
  *    · 校级部门不在表格里（原型 renderOrg 用 filter(d=>d.id!=='all') 排除了根节点），天然不可删
  */
 import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
-import { PERM_ROUTE, permUserEditRoute } from '@/perm/utils/links';
 import type {
   DeptOverview,
   PermDept,
@@ -40,10 +38,9 @@ import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
 import PermTreeDialog from '@/perm/components/PermTreeDialog.vue';
 import UserDetailDialog from '@/perm/components/UserDetailDialog.vue';
+import UserEditDialog from '@/perm/components/UserEditDialog.vue';
 import { roleIconOf } from '@/perm/utils/roleIcon';
 import { toast } from '@/perm/utils/toast';
-
-const router = useRouter();
 
 /** 部门层级上限（shared-types 的 DeptLevel：1 校级 / 2 部门 / 3 学段） */
 const MAX_DEPT_LEVEL = 3;
@@ -63,6 +60,12 @@ const loading = ref(false);
 const overview = ref<DeptOverview | null>(null);
 /** 拍平后的全部部门节点（含校级根节点） */
 const flatNodes = ref<PermDeptTreeNode[]>([]);
+/**
+ * ★ 2026-10-19 按用户要求新增：每个部门在部门树里的深度。
+ *   校级=1；市场咨询部 / 教学部等=2；初中部 / 高中部 / 大学部=3。
+ *   用途：表格「部门名称」列按层级缩进，让下级部门一眼看出从属关系。
+ */
+const deptDepth = ref<Record<string, number>>({});
 /** 部门列表（带 remark / deptShort，树上没有） */
 const deptList = ref<PermDept[]>([]);
 
@@ -80,6 +83,19 @@ const nameOf = (id: string): string =>
 
 const childrenOf = (id: string): PermDeptTreeNode[] =>
   flatNodes.value.filter((n) => n.parentId === id);
+
+/**
+ * ★ 2026-10-19 部门结构树形缩进（按用户要求：下级部门不再在单元格里重复列一遍）。
+ *   depthOf  —— 树深度；数据还没到手时按「直接挂在校级下」= 2 处理（即不缩进）
+ *   indentOf —— 「部门名称」列的缩进量；第 2 层（校级直属）为 0，每深一层 +20px
+ *   isLastSibling —— 同级里是不是最后一个，决定前面画「└」还是「├」
+ */
+const depthOf = (id: string): number => deptDepth.value[id] || 2;
+const indentOf = (id: string): string => `${Math.max(0, depthOf(id) - 2) * 20}px`;
+const isLastSibling = (d: PermDeptTreeNode): boolean => {
+  const sibs = flatNodes.value.filter((n) => (n.parentId || '') === (d.parentId || ''));
+  return sibs.length > 0 && sibs[sibs.length - 1].id === d.id;
+};
 
 const deptOf = (id: string): PermDept | undefined => deptList.value.find((d) => d.id === id);
 
@@ -100,16 +116,19 @@ async function loadAll(): Promise<void> {
     overview.value = ov;
     deptList.value = page.list || [];
 
-    // 拍平一份，便于查上级名字 / 算下级部门
+    // 拍平一份，便于查上级名字 / 算下级部门；顺手把「树深度」也记下来给表格缩进用
     const flat: PermDeptTreeNode[] = [];
-    const walk = (nodes: PermDeptTreeNode[]): void => {
+    const depth: Record<string, number> = {};
+    const walk = (nodes: PermDeptTreeNode[], d: number): void => {
       nodes.forEach((n) => {
         flat.push(n);
-        if (n.children?.length) walk(n.children);
+        depth[n.id] = d;
+        if (n.children?.length) walk(n.children, d + 1);
       });
     };
-    walk(t);
+    walk(t, 1);
     flatNodes.value = flat;
+    deptDepth.value = depth;
   } catch {
     /* 错误已在 request 拦截器里弹过提示 */
   } finally {
@@ -199,7 +218,7 @@ function submitDept(): void {
         { k: '上级部门', v: isSchoolParent(form.parentId) ? '校部' : esc(nameOf(form.parentId)) },
         { k: '部门说明', v: esc(form.remark.trim()) || '—' },
       ],
-      tip: '创建后可在新建角色/账号时选择该部门。',
+      tip: '创建后可在新建职位/账号时选择该部门。',
       okText: isEdit ? '确认保存' : '确认创建',
     },
     () => {
@@ -250,7 +269,7 @@ async function delDept(node: PermDeptTreeNode): Promise<void> {
     const detail: { k: string; v: string }[] = [];
     if (childCount) detail.push({ k: '下级部门', v: `<b>${childCount}</b> 个` });
     detail.push(
-      { k: '关联角色', v: `<b>${roleCount}</b> 个` },
+      { k: '关联职位', v: `<b>${roleCount}</b> 个` },
       { k: '关联账号', v: `<b>${userCount}</b> 个` },
     );
     openConfirm(
@@ -260,8 +279,8 @@ async function delDept(node: PermDeptTreeNode): Promise<void> {
         iconBg: 'var(--dg-l)',
         msg: `部门「${node.deptName}」仍有关联数据`,
         detail,
-        desc: '请先将相关角色与账号转移至其他部门，再执行删除。',
-        okText: '查看关联角色',
+        desc: '请先将相关职位与账号转移至其他部门，再执行删除。',
+        okText: '查看关联职位',
         okClass: 'wn',
       },
       () => {
@@ -277,7 +296,7 @@ async function delDept(node: PermDeptTreeNode): Promise<void> {
       icon: '🗑',
       iconBg: 'var(--dg-l)',
       msg: `确认删除部门「${node.deptName}」？`,
-      warn: '删除后不可恢复，相关角色与账号的部门归属将同步失效。',
+      warn: '删除后不可恢复，相关职位与账号的部门归属将同步失效。',
       okText: '确认删除',
       okClass: 'dg',
     },
@@ -345,7 +364,7 @@ function onConfirmOk(): void {
 }
 
 /* ============================================================
- * 五、查看角色 / 查看账号（原型 deptRoles / deptUsers）
+ * 五、查看职位 / 查看账号（原型 deptRoles / deptUsers）
  * ============================================================ */
 
 const rolesOpen = ref(false);
@@ -356,20 +375,34 @@ const deptRolesList = ref<PermRoleListItem[]>([]);
 
 const rolesTitle = computed(
   () =>
-    `部门下角色 · <span class="em">${esc(rolesDeptName.value)}</span>` +
+    `部门下职位 · <span class="em">${esc(rolesDeptName.value)}</span>` +
     ` <span class="tag n" style="font-weight:400">${esc(rolesSub.value)}</span>`,
 );
 
 async function openDeptRoles(node: PermDeptTreeNode): Promise<void> {
   rolesDeptName.value = node.deptName;
-  rolesSub.value = `${node.roleCount || 0} 个角色`;
+  rolesSub.value = `${node.roleCount || 0} 个职位`;
   deptRolesList.value = [];
   rolesOpen.value = true;
   rolesLoading.value = true;
   try {
-    const page = await roleApi.list({ deptId: node.id, page: 1, size: 100 });
-    deptRolesList.value = page.list || [];
-    rolesSub.value = `${deptRolesList.value.length} 个角色`;
+    // ★ 2026-10-16：「账号数」改为【本部门（含子部门）内】挂该职位的人数 ——
+    //   职位接口的 userCount 是全系统口径（别的部门的咨询老师也算进来），
+    //   会出现「弹窗里咨询老师 4 人、本部门账号只有 3 个」的对不上。
+    //   这里直接拉本部门账号（与「查看账号」弹窗同源、同口径），按职位分组计数。
+    const [page, upage] = await Promise.all([
+      roleApi.list({ deptId: node.id, page: 1, size: 100 }),
+      userApi.list({ deptId: node.id, page: 1, size: 100 }),
+    ]);
+    const cnt = new Map<string, number>();
+    (upage.list || []).forEach((u: PermUserListItem) => {
+      (u.roleIds || []).forEach((rid) => cnt.set(rid, (cnt.get(rid) || 0) + 1));
+    });
+    deptRolesList.value = (page.list || []).map((r) => ({
+      ...r,
+      userCount: cnt.get(r.id) || 0,
+    }));
+    rolesSub.value = `${deptRolesList.value.length} 个职位`;
   } catch {
     /* 已提示 */
   } finally {
@@ -382,6 +415,8 @@ const usersLoading = ref(false);
 const usersDeptName = ref('');
 const usersSub = ref('');
 const deptUsersList = ref<PermUserListItem[]>([]);
+/** 当前弹窗对应的部门 id —— 保存账号后原样再拉一次用（★ 2026-10-20） */
+const usersDeptId = ref('');
 
 const usersTitle = computed(
   () =>
@@ -390,13 +425,20 @@ const usersTitle = computed(
 );
 
 async function openDeptUsers(node: PermDeptTreeNode): Promise<void> {
+  usersDeptId.value = node.id;
   usersDeptName.value = node.deptName;
   usersSub.value = `${node.userCount || 0} 个账号`;
   deptUsersList.value = [];
   usersOpen.value = true;
+  await reloadDeptUsers();
+}
+
+/** 重拉当前部门下的账号（打开弹窗 / 就地编辑保存后都走它） */
+async function reloadDeptUsers(): Promise<void> {
+  if (!usersDeptId.value) return;
   usersLoading.value = true;
   try {
-    const page = await userApi.list({ deptId: node.id, page: 1, size: 100 });
+    const page = await userApi.list({ deptId: usersDeptId.value, page: 1, size: 100 });
     deptUsersList.value = page.list || [];
     usersSub.value = `${deptUsersList.value.length} 个账号`;
   } catch {
@@ -413,8 +455,8 @@ const isNormal = (st: string): boolean => st === '正常';
  * 六、账号详情弹窗
  *
  * 【用户反馈】「点击账号详情后有问题，应该弹出相应的页面，页面包含所有应该查看的内容」
- * 原先点「详情」只是 router.push('/user') 跳回用户管理列表页 —— 既不弹详情，
- * 还得自己再搜一次这个账号。现在就地弹完整详情（基本信息 + 所属角色 + 有效权限明细）。
+ * 原先点「详情」只是 router.push('/user') 跳回账号管理列表页 —— 既不弹详情，
+ * 还得自己再搜一次这个账号。现在就地弹完整详情（基本信息 + 所属职位 + 有效权限明细）。
  * ============================================================ */
 
 const userDetailOpen = ref(false);
@@ -428,10 +470,10 @@ function openUserDetail(u: PermUserListItem): void {
 }
 
 /* ============================================================
- * 七、角色权限弹窗（「看权限 / 编辑权限」）
+ * 七、职位权限弹窗（「看权限 / 编辑权限」）
  *
  * 【用户反馈】「部门管理页面里面看权限和编辑权限的操作都有问题，点击后应该弹出相应的页面」
- * 原先两处都只是 router.push('/assign') —— 跳过去还不知道该选哪个角色，等于把活儿丢给用户。
+ * 原先两处都只是 router.push('/assign') —— 跳过去还不知道该选哪个职位，等于把活儿丢给用户。
  * 现在直接就地叠一层权限树：查看态只读、编辑态可勾选并保存。
  * ============================================================ */
 
@@ -485,39 +527,53 @@ async function onRolePermConfirm(perms: RolePermMap): Promise<void> {
 }
 
 /**
- * 「编辑」账号仍要跳「用户管理」
- * ⚠️ 账号表单（密码策略、角色勾选、部门级联…）体量大，不在这里复刻；
- *    带上 ?edit=<id> 让用户管理把编辑表单直接打开，免去二次查找。
+ * 账号编辑：就地弹窗，不再跳「账号管理」
+ *
+ * ★ 2026-10-20 按用户要求改动。原先是 router.push('/user?edit=<id>')，
+ *   跳到账号管理页再打开编辑表单 —— 用户原话「跳转到账号管理进行修改很别扭」。
+ *   现在改用共享组件 UserEditDialog：字段、校验、保存接口与账号管理完全一致
+ *   （同一份 基本信息 表单 + PUT /api/perm/user/update），就地改、就地存。
+ *
+ * ⚠️ 保存后要做两件事：① 刷新「部门下账号」这张表（姓名可能改了）；
+ *   ② 刷新部门树 / KPI（账号状态、归属计数可能变）。
  */
-function gotoUserEdit(id: string): void {
-  rolesOpen.value = false;
-  usersOpen.value = false;
-  void router.push(permUserEditRoute(id));
+const userEditOpen = ref(false);
+const userEditId = ref('');
+const userEditRow = ref<PermUserListItem | null>(null);
+
+function openUserEdit(u: PermUserListItem): void {
+  userEditRow.value = u;
+  userEditId.value = u.id;
+  userEditOpen.value = true;
 }
 
-/** 「为该部门新建角色 / 新建账号」——新建动作本来就在对应页，跳过去即可 */
-function gotoPage(path: string): void {
-  rolesOpen.value = false;
-  usersOpen.value = false;
-  void router.push(path);
+async function onUserEdited(): Promise<void> {
+  // 账号弹窗还开着 → 就地刷新它，别让用户看到旧姓名
+  if (usersOpen.value) await reloadDeptUsers();
+  await loadAll();
 }
+
+/** 「为该部门新建职位 / 新建账号」按钮已随 2026-10-16 界面清理移除（gotoPage 一并删除） */
 </script>
 
 <template>
   <div>
     <!-- ==================== KPI（原型 renderOrg 第 2687~2692 行） ==================== -->
     <div class="kpi">
-      <div class="k" @click="toast('部门总数已合并统计：初中部/高中部/大学部计入教学部')">
+      <!-- ★ 2026-10-20：实训教学部 + 就业管理部 合并为「就业部」，其下挂 实训管理 / 就业管理。
+           原来第 1 张卡的口径是「部门总数 = 全部 - 校级 - 3 个学段」，第 2 张卡写死「学段（教学部）」；
+           现在下设子部门变成 5 个（教学部 3 + 就业部 2），沿用旧文案会自相矛盾，故两处一起改口径。 -->
+      <div class="k" @click="toast('部门总数只统计校级直属的一级部门：教学部的 3 个学段、就业部的 2 个下设部门不重复计入')">
         <div class="n b">{{ overview?.deptTotal ?? '—' }}</div>
         <div class="l">部门总数</div>
       </div>
-      <div class="k" @click="toast('教学部下设 初中部 / 高中部 / 大学部 3 个学段，统一归入教学部')">
+      <div class="k" @click="toast('下设子部门：教学部的 初中部 / 高中部 / 大学部 + 就业部的 实训管理 / 就业管理')">
         <div class="n g">{{ overview?.stageTotal ?? '—' }}</div>
-        <div class="l">下设学段（教学部）</div>
+        <div class="l">下设子部门</div>
       </div>
-      <div class="k" @click="toast('全部门角色均在此列表')">
+      <div class="k" @click="toast('全部门职位均在此列表')">
         <div class="n p">{{ overview?.roleTotal ?? '—' }}</div>
-        <div class="l">归属角色数</div>
+        <div class="l">归属职位数</div>
       </div>
       <div class="k" @click="toast(`共 ${overview?.userTotal ?? 0} 个账号已归属部门`)">
         <div class="n w">{{ overview?.userTotal ?? '—' }}</div>
@@ -529,35 +585,56 @@ function gotoPage(path: string): void {
     <div class="card">
       <div class="card-h">
         <div class="t">
-          <span class="bar"></span>部门结构 <span class="sub">用于角色归属与账号划分</span>
+          <span class="bar"></span>部门结构 <span class="sub">用于职位归属与账号划分</span>
         </div>
         <div class="r">
-          <button class="btn" type="button" @click="openAdd">＋ 新建部门</button>
+          <!-- ★ 2026-10-19 按用户要求：主操作按钮统一成品牌红（与「新建职位」「新建账号」一致）——
+               原来是普通白底按钮 class="btn"，与职位管理 / 账号管理的主按钮观感不一致。 -->
+          <button class="btn pri" type="button" @click="openAdd">＋ 新建部门</button>
         </div>
       </div>
       <div class="card-b p0">
-        <table class="tb">
+        <!-- ★ 2026-10-20 按用户反馈（截图框出「部门说明」右侧的大片空白）改列宽口径：
+               原来只有「部门说明」是自适应列，其余 5 列写死 px（230/150/80/80/250），
+               → 卡片宽出来多少全部砸到说明列上：卡片 1132px 时说明格 340px，
+                 而实测文字只有 81~161px，右边挂着 180~260px 纯空白。
+               现在 6 列全给百分比（合计 100%）+ table-layout:fixed，
+               富余空间按比例摊到每一列，不再集中成「说明列右侧一个大洞」。
+               百分比取值：名称 24 / 上级 12 / 说明 21 / 职位 10 / 账号 10 / 操作 23
+               —— 名称要装得下「📂 部门名 + 含 N 个下级」标签，操作要装得下 4 个链接。
+               另外外面套了 .tb-wrap（与职位管理 / 操作日志两张表一致）+
+           CSS 里给本表 min-width:960px：视口窄到装不下 960 时改为横向滚动，
+           而不是把「查看职位 / 查看账号 / 编辑 / 删除」挤断成两行。 -->
+        <div class="tb-wrap">
+        <table class="tb tb-dept">
           <thead>
             <tr>
-              <th style="width: 230px">部门名称</th>
-              <th style="width: 150px">上级部门</th>
-              <th>部门说明</th>
-              <th style="width: 80px">角色数</th>
-              <th style="width: 80px">账号数</th>
-              <th style="width: 250px">操作</th>
+              <th style="width: 24%">部门名称</th>
+              <th style="width: 12%">上级部门</th>
+              <th style="width: 21%">部门说明</th>
+              <!-- ★ 2026-10-20 用户第二次反馈（截图框住「职位数 / 账号数」两列表头）：
+                   「字段和下面对应的数字歪到姥姥家」—— 上一轮只给 <td> 加了居中，
+                   表头还是左对齐 → 表头文字贴左、数字落在列中间，两行错开半个列宽。
+                   现在表头也挂 num 类，表头与单元格走**同一条**对齐规则，
+                   不会再出现「改了行没改头」的半套。 -->
+              <th class="num" style="width: 10%">职位数</th>
+              <th class="num" style="width: 10%">账号数</th>
+              <th style="width: 23%">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="d in rows" :key="d.id">
-              <td>
+              <!-- ★ 2026-10-19 按用户要求：原来这里在「含 N 个下级」下面还把下级部门名
+                   一个个列了一遍（└ 初中部 / └ 高中部 / └ 大学部），可下面又有它们自己的
+                   表格行 —— 同一批部门出现两遍，而且三个学段的行跟「市场咨询部 / 教学部」
+                   平级，看不出谁从属于谁。现在改成：单元格里不再重复列下级，改为在
+                   「部门名称」列按层级缩进（父级部门照旧带「含 N 个下级」标签）。
+                   ⚠️ 三个学段仍保留自己的行 —— 它们是真部门（有职位 / 有账号），
+                      行内的「查看职位 / 查看账号 / 编辑 / 删除」入口不能丢。 -->
+              <td class="dept-name" :style="{ '--dept-indent': indentOf(d.id) }">
+                <span v-if="depthOf(d.id) > 1" class="branch">{{ isLastSibling(d) ? '└' : '├' }}</span>
                 <b>{{ childrenOf(d.id).length ? '📂' : '📁' }} {{ d.deptName }}</b>
                 <span v-if="childrenOf(d.id).length" class="tag n" style="margin-left: 5px">含 {{ childrenOf(d.id).length }} 个下级</span>
-                <div
-                  v-for="c in childrenOf(d.id)"
-                  :key="c.id"
-                  class="desc"
-                  style="padding-left: 16px"
-                >└ {{ c.deptName }}</div>
               </td>
               <td>
                 <span v-if="isSchoolParent(d.parentId || '')" class="tag n">校部</span>
@@ -572,7 +649,7 @@ function gotoPage(path: string): void {
               </td>
               <td>
                 <div class="acts">
-                  <span class="lk" @click="openDeptRoles(d)">查看角色</span>
+                  <span class="lk" @click="openDeptRoles(d)">查看职位</span>
                   <span class="lk" @click="openDeptUsers(d)">查看账号</span>
                   <span class="lk" @click="openEdit(d)">编辑</span>
                   <span class="lk dg" @click="delDept(d)">删除</span>
@@ -589,6 +666,7 @@ function gotoPage(path: string): void {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -597,7 +675,7 @@ function gotoPage(path: string): void {
       <div class="fm" style="grid-template-columns: 1fr">
         <div class="f">
           <label>部门名称 <span class="req">*</span></label>
-          <input v-model="form.deptName" class="inp" placeholder="如：实训教学部" />
+          <input v-model="form.deptName" class="inp" placeholder="如：就业部" />
         </div>
         <div class="f">
           <label>上级部门 <span class="req">*</span></label>
@@ -618,11 +696,11 @@ function gotoPage(path: string): void {
           <textarea
             v-model="form.remark"
             class="inp"
-            placeholder="简述部门职责与典型角色"
+            placeholder="简述部门职责与典型职位"
           ></textarea>
         </div>
       </div>
-      <div class="notice i mt12">ℹ<div>部门用于角色归属与账号划分，删除前请确保无角色/账号关联。</div></div>
+      <div class="notice i mt12">ℹ<div>部门用于职位归属与账号划分，删除前请确保无职位/账号关联。</div></div>
       <template #footer>
         <button class="btn" type="button" @click="formOpen = false">取消</button>
         <button class="btn pri" type="button" @click="submitDept">
@@ -656,14 +734,12 @@ function gotoPage(path: string): void {
       @ok="onConfirmOk"
     />
 
-    <!-- ==================== 部门下角色（原型 deptRoles） ==================== -->
+    <!-- ==================== 部门下职位（原型 deptRoles） ==================== -->
     <ProtoDialog v-model="rolesOpen" :title="rolesTitle" size="md">
       <table v-if="deptRolesList.length" class="tb">
         <thead>
           <tr>
-            <th>角色名称</th>
-            <th>编码</th>
-            <th>类型</th>
+            <th>职位名称</th>
             <th>账号数</th>
             <th>操作</th>
           </tr>
@@ -671,8 +747,6 @@ function gotoPage(path: string): void {
         <tbody>
           <tr v-for="r in deptRolesList" :key="r.id">
             <td><b>👤 {{ r.roleName }}</b></td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode }}</code></td>
-            <td>{{ r.roleType }}</td>
             <td class="num">{{ r.userCount }}</td>
             <td>
               <span class="lk" @click="openRolePerm(r, true)">看权限</span>
@@ -684,11 +758,10 @@ function gotoPage(path: string): void {
       </table>
       <div v-else class="empty">
         <div class="ic">🎭</div>
-        {{ rolesLoading ? '加载中…' : '该部门下暂无角色' }}
+        {{ rolesLoading ? '加载中…' : '该部门下暂无职位' }}
       </div>
       <template #footer>
         <button class="btn" type="button" @click="rolesOpen = false">关闭</button>
-        <button class="btn pri" type="button" @click="gotoPage(PERM_ROUTE.role)">为该部门新建角色</button>
       </template>
     </ProtoDialog>
 
@@ -698,10 +771,9 @@ function gotoPage(path: string): void {
         <thead>
           <tr>
             <th>姓名</th>
-            <th>工号</th>
             <th>账号</th>
             <th>具体部门</th>
-            <th>角色</th>
+            <th>职位</th>
             <th>状态</th>
             <th>操作</th>
           </tr>
@@ -709,7 +781,6 @@ function gotoPage(path: string): void {
         <tbody>
           <tr v-for="u in deptUsersList" :key="u.id">
             <td><b>{{ u.userName }}</b></td>
-            <td class="num">{{ u.gwNo }}</td>
             <td><code style="font-size: 11.5px">{{ u.account }}</code></td>
             <td>{{ u.deptName }}</td>
             <td>
@@ -727,7 +798,8 @@ function gotoPage(path: string): void {
             <td>
               <span class="lk" @click="openUserDetail(u)">详情</span>
               <span class="sep">|</span>
-              <span class="lk" @click="gotoUserEdit(u.id)">编辑</span>
+              <!-- ★ 2026-10-20：就地弹「编辑账号」，不再跳账号管理页 -->
+              <span class="lk" @click="openUserEdit(u)">编辑</span>
             </td>
           </tr>
         </tbody>
@@ -738,11 +810,10 @@ function gotoPage(path: string): void {
       </div>
       <template #footer>
         <button class="btn" type="button" @click="usersOpen = false">关闭</button>
-        <button class="btn pri" type="button" @click="gotoPage(PERM_ROUTE.user)">为该部门新建账号</button>
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 角色权限（看权限 / 编辑权限，就地弹窗） ==================== -->
+    <!-- ==================== 职位权限（看权限 / 编辑权限，就地弹窗） ==================== -->
     <PermTreeDialog
       v-model="permOpen"
       :title="permTitle"
@@ -753,12 +824,21 @@ function gotoPage(path: string): void {
       @confirm="onRolePermConfirm"
     />
 
-    <!-- ==================== 账号详情（就地弹窗，不跳用户管理） ==================== -->
+    <!-- ==================== 账号详情（就地弹窗，不跳账号管理） ==================== -->
+    <!-- ★ 2026-10-19：底部「去编辑」按钮已删除（组件里已无此按钮，故也无 @edit 绑定）；
+         本页改账号走「部门下账号」弹窗行操作里的「编辑」→ 就地弹 UserEditDialog。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
-      @edit="gotoUserEdit"
+    />
+
+    <!-- ==================== 编辑账号（就地弹窗，与账号管理同一份表单） ==================== -->
+    <UserEditDialog
+      v-model="userEditOpen"
+      :user-id="userEditId"
+      :fallback="userEditRow"
+      @saved="onUserEdited"
     />
   </div>
 </template>

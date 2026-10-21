@@ -29,7 +29,7 @@
  * ============================================================
  */
 
-import { PAGE_REGISTRY } from '../perm/config/pageRegistry';
+import { PAGE_REGISTRY, pageCodesOf } from '../perm/config/pageRegistry';
 import { consultMenusFromPerm, financeMenusFromPerm } from 'shared-types/consult';
 import { getRolePagePermissions } from './pagePermissionSource';
 import { extraPageCodesFromModuleItems, isBuiltinRoleCode } from './permPointToPages';
@@ -148,6 +148,20 @@ export function deriveDefaultPathsFor(
     for (const p of board.pages) {
       let visible = false;
       switch (board.moduleKey) {
+        case 'workbench':
+          /**
+           * ★ 2026-10-20 新增：工作台 = 全站首页，**每个角色都默认可见**。
+           *
+           * 【为什么必须显式写这一条】
+           *   工作台没有页面权限码（它不靠 pageCode 判可见，谁登录谁就能看），
+           *   如果不特殊处理就会掉进 default 分支 →
+           *   `pageCodesOf(p)` 为空 → 推导成 false →
+           *   职位模式界面显示「工作台 0/1」，看着像这个职位连首页都被禁了。
+           *   而它其实 locked（不可取消），保存时会被强制保留，
+           *   于是界面显示与真实权限**对不上**。这里显式给 true 抹平。
+           */
+          visible = true;
+          break;
         case 'consult':
           visible = consultMenus.has(p.key);
           break;
@@ -174,8 +188,17 @@ export function deriveDefaultPathsFor(
           visible = roleCode === 'SYS_ADMIN' || roleCode === 'RM_PRINCIPAL';
           break;
         default:
-          // ③ legacy 四板块：看该角色的页面权限码里有没有这一页
-          visible = !!p.pageCode && legacySet.has(p.pageCode);
+          /* ③ legacy 板块：看该角色的页面权限码里有没有这一页
+           *
+           * ★ 2026-10-20 合并板块改口径：一页现在可能挂多个学段码
+           *   （如 /teaching/attendance 同时挂 classjh / class / job 三个码）。
+           *   旧写法 `legacySet.has(p.pageCode)` 只认第一个码 →
+           *   「大学部班主任有 class:attendance:view」也会被判成不可见，
+           *   于是配置界面把默认勾选漏掉、管理员得手工补勾，改完还对不上。
+           *   现口径 = **任一码命中即可见**，与前端 STAGE_ACCESS 的
+           *   anyStageAccessible 完全一致。
+           */
+          visible = pageCodesOf(p).some((c) => legacySet.has(c));
           break;
       }
       if (visible) out.add(`${board.moduleKey}||${p.path}`);

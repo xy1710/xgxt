@@ -14,6 +14,8 @@ import { applySyncScope } from '../shared/syncScope';
 import { resolveSyncStudentId } from '../shared/studentRef';
 import { wrap } from '../../middleware/error';
 import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../../../teaching/shared/uniTable';
+import { boolFlag } from '../../../utils/query';
+import { checkPayDate, saveVoucherImage, PAY_METHOD, PAY_METHOD_NAME } from '../../../utils/feeVoucher';
 
 /**
  * ★ 第 10 批：催费域切读
@@ -204,7 +206,9 @@ const urgeListSchema = z.object({
   classId: z.string().optional(),
   feeType: z.coerce.number().int().optional(),
   payStatus: z.coerce.number().int().optional(),
-  onlyOverdue: z.coerce.boolean().optional(),
+  // ★ 2026-10-20：显式布尔解析（z.coerce.boolean 会把 "false" 当 true，
+  //   前端把「仅看紧急」关掉后仍然只出逾期的）
+  onlyOverdue: boolFlag.optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   keyword: z.string().optional(),
@@ -246,7 +250,20 @@ urgeRouter.get(
     await applySyncScope(base, user);
     if (query.classId) base.where('class_id', query.classId);
     if (query.feeType) base.where('fee_type', query.feeType);
-    if (query.payStatus) base.where('pay_status', query.payStatus);
+    // ★ 2026-10-20：缴费状态按「展示口径」筛。
+    //   财务侧不写 4（逾期只存在于列注释里），过了到期日的行库里还是「待缴」，
+    //   所以「逾期」= 库里就是 4，或者「待缴 + 已过到期日」；「待缴」则要排掉已过期的。
+    if (query.payStatus === PayStatus.OVERDUE) {
+      base.where(function (this: Knex.QueryBuilder) {
+        this.where('pay_status', PayStatus.OVERDUE).orWhere(function (this: Knex.QueryBuilder) {
+          this.where('pay_status', PayStatus.UNPAID).andWhere('expire_date', '<', t);
+        });
+      });
+    } else if (query.payStatus === PayStatus.UNPAID) {
+      base.where('pay_status', PayStatus.UNPAID).andWhere('expire_date', '>=', t);
+    } else if (query.payStatus) {
+      base.where('pay_status', query.payStatus);
+    }
     if (query.startDate) base.where('expire_date', '>=', query.startDate);
     if (query.endDate) base.where('expire_date', '<=', query.endDate);
     if (query.onlyOverdue) base.where('expire_date', '<', t).whereNot('pay_status', PayStatus.PAID);
@@ -263,16 +280,23 @@ urgeRouter.get(
       return rows.map((r) => {
         const c = rowsToCamel<Record<string, unknown>>([r])[0];
         const expire = r.expire_date as string;
-        const paid = (r.pay_status as number) === PayStatus.PAID;
+        const rawPayStatus = Number(r.pay_status ?? 0);
+        const paid = rawPayStatus === PayStatus.PAID;
         const overdueDays = paid ? 0 : daysBetween(expire, t);
+        // ★ 2026-10-20：逾期按到期日派生（库里可能还写着「待缴」）
+        const payStatus =
+          rawPayStatus === PayStatus.UNPAID && overdueDays > 0 ? PayStatus.OVERDUE : rawPayStatus;
         const amount = Number(r.amount ?? 0);
         return {
           ...c,
           feeTypeName: FeeTypeName[r.fee_type as number] ?? '未知',
-          payStatusName: PayStatusName[r.pay_status as number] ?? '未知',
+          payStatus,
+          payStatusName: PayStatusName[payStatus] ?? '未知',
           amountYuan: (amount / 100).toFixed(2),
           overdueDays,
           isOverdue: overdueDays > 0,
+          // ★ 2026-10-21：登记缴费五列（与初高 t_class_fee 同口径），大学行也能显示实缴/方式/日期/凭证
+          payMethodName: r.pay_method != null ? PAY_METHOD_NAME[Number(r.pay_method)] ?? '' : '',
         };
       });
     });
@@ -388,5 +412,93 @@ urgeRouter.get(
       rowsToCamel(await qb as Array<Record<string, unknown>>),
     );
     return ok(res, pageData(paged.total, paged.page, paged.size, paged.list), '查询成功');
+  }),
+);
+
+/* ------------------------------ 登记缴费（对齐初高） ------------------------------ */
+
+/**
+ * ★ 2026-10-21 用户要求：催费页里**大学**要与初高功能对齐。
+ *
+ * 【为什么要这个接口】
+ *   初高的行早就能「上传缴费凭证（登记缴费）」，大学催缴副本原来只有 pay_status，
+ *   钱怎么交的、交了多少、哪天交的、有没有凭证一概没有 → 页面上操作列只能显示「—」。
+ *
+ * 【写哪里】
+ *   只写本模块自己的副本 `sms_common.t_class_urge_sync`（pay_method / paid_amount /
+ *   pay_date / voucher_url / pay_remark + pay_status）。**不回写上游财务** ——
+ *   这张表本身就是财务推来的只读副本，反写会与财务核对流程打架
+ *   （初高台账能反写是因为它是「本模块建的台账 + 财务单副本」双重身份，这里不是）。
+ *
+ * 【状态怎么变】
+ *   未结清（待缴 1 / 逾期 4）→ 已缴 2；已缴 / 已核对保持原状，只补登记信息。
+ */
+const urgeVoucherSchema = z.object({
+  urgeId: z.string().min(1, '缺少催缴记录ID'),
+  /** 缴费方式 1微信支付 2支付宝 3现金 */
+  payMethod: z.coerce.number().int().min(1).max(3, '缴费方式只能是 微信支付 / 支付宝 / 现金'),
+  /** 实缴金额（分）；允许与应缴不同（部分缴），必须为正 */
+  paidAmount: z.coerce.number().int().positive('缴费金额必须大于 0'),
+  payDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '缴费时间格式应为 YYYY-MM-DD'),
+  remark: z.string().max(200, '备注最多 200 字').optional(),
+  /** 缴费截图；现金可不传（见 saveVoucherImage 的调用处） */
+  dataUrl: z.string().optional(),
+});
+
+urgeRouter.post(
+  '/voucher',
+  requirePerm('urge', PermAction.ADD),
+  validate({ body: urgeVoucherSchema }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const b = req.body as z.infer<typeof urgeVoucherSchema>;
+
+    const dateErr = checkPayDate(b.payDate);
+    if (dateErr) throw Errors.param(dateErr);
+
+    const rec = (await notDeleted(SYNC()).where('id', b.urgeId).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!rec) throw Errors.param('催费记录不存在或已失效');
+
+    /* ---- 截图：现金不强制，微信/支付宝必须有 ---- */
+    let voucherUrl: string | null = null;
+    if (b.dataUrl) {
+      const saved = saveVoucherImage(b.dataUrl, 'urge');
+      if (!saved.ok) throw Errors.param(saved.message);
+      voucherUrl = saved.voucherUrl;
+    } else if (b.payMethod !== PAY_METHOD.CASH) {
+      throw Errors.param('请上传缴费截图（微信支付 / 支付宝需要凭证，现金可不传）');
+    }
+
+    const rawStatus = Number(rec.pay_status ?? PayStatus.UNPAID);
+    const nextStatus =
+      rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE ? PayStatus.PAID : rawStatus;
+
+    const patch: Record<string, unknown> = {
+      pay_method: b.payMethod,
+      paid_amount: b.paidAmount,
+      pay_date: b.payDate,
+      pay_remark: b.remark ?? null,
+      pay_status: nextStatus,
+      update_time: now(),
+    };
+    // 现金且没传截图：保留原来的凭证，不要把它清空
+    if (voucherUrl) patch.voucher_url = voucherUrl;
+
+    await SYNC()
+      .where({ id: b.urgeId })
+      .update((await uniUpdCols(commonDb, SRC_COMMON, SYNC_T, patch)) as never);
+
+    return ok(
+      res,
+      {
+        urgeId: b.urgeId,
+        voucherUrl: voucherUrl ?? (rec.voucher_url ?? null),
+        payStatus: nextStatus,
+        payMethodName: PAY_METHOD_NAME[b.payMethod] ?? '',
+      },
+      '缴费登记成功',
+    );
   }),
 );

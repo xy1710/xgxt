@@ -11,10 +11,35 @@ import type { TeachingStage } from './attendance';
 export type { TeachingStage };
 
 export const STAGE_NAME: Record<TeachingStage, string> = {
-  jh: '初高',
-  class: '大学',
-  job: '实训',
+  jh: '初高部',
+  class: '大学部',
+  // ★ 2026-10-21 用户要求：部门口径里「实训」改叫「就业」（同一个 sms_job 库）
+  job: '就业',
 };
+
+/**
+ * 部门（界面口径，取代原来的「学段」）
+ *
+ * ★ 2026-10-21 用户要求：部门「实训」改为「就业」。
+ *   退费的三个库（初高 / 大学 / 就业）本来就都有表与仓储，
+ *   `job` 这条就是「就业部」（`sms_job`），只是显示名以前写的是「实训」。
+ *   与 `api/leave.ts` 的 LEAVE_DEPARTMENTS 同一份口径：初高中 / 大学 / 就业。
+ * ★ 界面上不再出现「学段」这个词（那是内部技术词）；页面统一用 deptNameOf() 翻译。
+ */
+export interface RefundDepartment {
+  /** 部门码（与学段同码：jh / class / job） */
+  code: string;
+  /** 部门中文名 */
+  name: string;
+  /** 对应学段；null = 该部门暂无退费业务（当前没有这种部门） */
+  stage: TeachingStage | null;
+}
+
+export const REFUND_DEPARTMENTS: RefundDepartment[] = [
+  { code: 'jh', name: '初高中', stage: 'jh' },
+  { code: 'class', name: '大学', stage: 'class' },
+  { code: 'job', name: '就业', stage: 'job' },
+];
 
 /** 统一状态码（= 实训那套 ApprovalStatus） */
 export const REFUND_STATUS = {
@@ -65,6 +90,10 @@ export const FEE_TYPE_OPTIONS = [
   { value: 5, label: '试学费' },
   { value: 9, label: '其他' },
 ];
+
+/** 单项退费费用上限：10 万元（元）。费用项输入框 max 与 doCreate 兜底共用；
+ *  后端同口径见 server-job dto.ts 的 REFUND_ITEM_MAX_AMOUNT（分），两边同步改 */
+export const REFUND_ITEM_MAX_YUAN = 100000;
 
 export interface RefundItem {
   feeType: number;

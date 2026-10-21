@@ -180,7 +180,14 @@ export interface EmploymentLog extends BaseEntity {
 
 export interface EmploymentLogSavePayload {
   id?: string;
-  studentId: string;
+  /**
+   * ★ 2026-10-16：姓名改为可直接手填，本字段变为可选。
+   *   后端会用 studentName 去学生库精确匹配：唯一命中就自动关联（带出学号/班级），
+   *   匹配不到则只存姓名、不关联学生。
+   */
+  studentId?: string;
+  /** 姓名（手填）。后端会尝试用它匹配学生 */
+  studentName: string;
   logDate: string;
   resumeCount: number;
   interviewInvite: number;
@@ -200,6 +207,19 @@ export interface EmploymentLogQuery extends PageQuery {
   /** YYYY-MM-DD */
   endDate?: string;
   studentId?: string;
+  /** ★ 2026-10-16：按班级筛选（后端经 student_id 子查询，兼容学生被调班的历史数据） */
+  classId?: string;
+}
+
+/**
+ * ★ 2026-10-16：就业日志 / 复盘 筛选用「班级下拉」选项（只读）
+ *
+ * 走各自业务路由下的 /classes（沿用 job:employmentLog:view / job:review:view），
+ * **不要**改用 /api/job/class/options —— 就业老师没有「班级管理」页面权限，会 403。
+ */
+export interface JobClassOption {
+  id: string;
+  className: string;
 }
 
 /* ============================================================
@@ -245,7 +265,14 @@ export interface Review extends BaseEntity {
 
 export interface ReviewSavePayload {
   id?: string;
-  studentId: string;
+  /**
+   * ★ 2026-10-16：姓名改为可直接手填，本字段变为可选。
+   *   后端会用 studentName 去学生库精确匹配：唯一命中就自动关联（带出学号/班级），
+   *   匹配不到则只存姓名、不关联学生。
+   */
+  studentId?: string;
+  /** 姓名（手填）。后端会尝试用它匹配学生 */
+  studentName: string;
   reviewTime: string;
   interviewTime?: string;
   position?: string;
@@ -265,6 +292,8 @@ export interface ReviewQuery extends PageQuery {
   startDate?: string;
   endDate?: string;
   studentId?: string;
+  /** ★ 2026-10-16：按班级筛选（后端经 student_id 子查询，兼容学生被调班的历史数据） */
+  classId?: string;
 }
 
 /* ============================================================

@@ -1,15 +1,17 @@
 /**
  * 账号路由（统一账号 · 门户）
  *
- *   POST   /api/portal/account/login      登录（公开）
- *   GET    /api/portal/account/profile    当前登录人 + 可见模块
- *   GET    /api/portal/account/modules    全部模块注册表（账号管理页勾选用）
- *   GET    /api/portal/account/list       账号列表（管理员）
- *   GET    /api/portal/account/stats      账号统计（管理员）
- *   POST   /api/portal/account/add        新增账号（管理员）
- *   POST   /api/portal/account/update     编辑账号（管理员）
- *   POST   /api/portal/account/remove     删除账号（管理员）
- *   POST   /api/portal/account/toggle     启用/停用（管理员）
+ *   POST   /api/portal/account/login             登录（公开）
+ *   GET    /api/portal/account/profile           当前登录人 + 可见模块
+ *   GET    /api/portal/account/modules           全部模块注册表（账号管理页勾选用）
+ *   GET    /api/portal/account/list              账号列表（管理员）
+ *   GET    /api/portal/account/stats             账号统计（管理员）
+ *   POST   /api/portal/account/add               新增账号（管理员）
+ *   POST   /api/portal/account/update            编辑账号（管理员）
+ *   POST   /api/portal/account/remove            删除账号（管理员）
+ *   POST   /api/portal/account/toggle            启用/停用（管理员）
+ *   POST   /api/portal/account/verify-password   ★ 校验本人原密码（所有登录人）
+ *   POST   /api/portal/account/change-password   ★ 修改本人密码（所有登录人）
  */
 
 import { Router } from 'express';
@@ -28,6 +30,11 @@ import {
   toAccountView,
   visibleModulesOf,
   landingPathOf,
+  /* ★ 2026-10-15 新增：登录人自助改密 */
+  verifyOwnPassword,
+  changeOwnPassword,
+  /* ★ 2026-10-19 新增：把当前密码策略给前端，改密弹窗按它提示 + 预校验 */
+  getPwdPolicy,
 } from '../services/account.service';
 
 const router = Router();
@@ -252,6 +259,73 @@ router.post(
     }
     await db(ACCOUNT_TABLE).where({ id: accountId }).update({ active, update_time: new Date() });
     res.json(ok(null, active ? '已启用' : '已停用'));
+  }),
+);
+
+/* ============================================================
+ * 6. ⭐ 2026-10-15 新增：登录人【自助修改密码】（所有角色可用）
+ *
+ * ★ 2026-10-19 修复：原先「改密规则」被写死在三处（本模块服务里一套、
+ *   权限模块一套、前端弹窗又一套），口径不一致 →
+ *   规则要求含大写字母，用户全小写照样改成功。
+ *   现在规则只由权限管理的 t_perm_rule 提供一份，
+ *   前端通过下面的 /pwd-policy 取，后端由 assertPwdStrength 把关。
+ * ============================================================ */
+
+/**
+ * 当前生效的密码策略（只读）
+ *
+ * ⚠️ 不挂权限点：任何登录人都能改自己的密码，规则本身也不是秘密。
+ *    但必须过 authMiddleware —— 未登录不该知道系统内部策略。
+ */
+router.get(
+  '/pwd-policy',
+  authMiddleware,
+  wrap(async (_req, res) => {
+    const policy = await getPwdPolicy();
+    res.json(ok(policy, '密码策略已取回'));
+  }),
+);
+
+/** 第一步：校验原密码是否正确 —— 前端据此决定「新密码」输入框是否可填 */
+router.post(
+  '/verify-password',
+  authMiddleware,
+  validate(z.object({ password: z.string().min(1, '请输入原密码').max(100) })),
+  wrap(async (req, res) => {
+    const { password } = (req as any).validated as { password: string };
+    await verifyOwnPassword(req.user!.accountId, password);
+    res.json(ok({ verified: true }, '原密码正确'));
+  }),
+);
+
+/** 第二步：确认修改 —— 后端再复核一次原密码，并把新密码写入 */
+router.post(
+  '/change-password',
+  authMiddleware,
+  validate(
+    z.object({
+      oldPassword: z.string().min(1, '请输入原密码').max(100),
+      /**
+       * ⚠️ 这里只做「非空」校验，长度/空格/与旧密码相同 这三条规则
+       *    统一放在 assertNewPassword 里判 —— 那里能返回人话提示，
+       *    而本项目的 zod 中间件会把 too_small 统一翻成「太小或为空」，用户看不懂。
+       */
+      newPassword: z.string().min(1, '请输入新密码').max(50),
+    }),
+  ),
+  wrap(async (req, res) => {
+    const { oldPassword, newPassword } = (req as any).validated as {
+      oldPassword: string;
+      newPassword: string;
+    };
+    const synced = await changeOwnPassword(req.user!.accountId, oldPassword, newPassword);
+    res.json(
+      ok(
+        { synced },
+        synced ? '密码修改成功（业务账号已同步）' : '密码修改成功',
+      ),
+    );
   }),
 );
 

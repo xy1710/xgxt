@@ -156,7 +156,16 @@ export async function myUniversityClassIds(user: {
 /** 从 req 里取出 { userId, roles }（各路由都有 getOperator，形状一样） */
 export function operatorOf(req: any): { userId: string; roles: string[] } {
   const u = req?.user || {};
-  return { userId: u.userId || '', roles: u.roles || [] };
+  /**
+   * ★ 2026-10-15 修复：业务表责任人列（t_job_class.employment_teacher_id、
+   *   project_manager_id、t_class_info.head_teacher_id 等）存的是【权限库用户 id】
+   *   （如 U009），而门户 token 的 userId 是【门户账号 UUID】。直接拿 userId 比
+   *   永远比不中，表现就是「就业老师 / 项目经理 / 班主任进去什么都看不到」。
+   *   auth 中间件已把映射结果放在 req.user.businessUserId，这里优先用它，
+   *   缺失时退回 userId（保持兼容）。
+   */
+  const effectiveUserId = u.businessUserId || u.userId || '';
+  return { userId: effectiveUserId, roles: u.roles || [] };
 }
 
 /** 学生主档表（唯一同时挂着 class_id / dorm_id / student_id 的表） */
@@ -195,6 +204,14 @@ export interface TrainingScopeOpts {
   column?: string;
   /** 关联方式，默认 direct */
   via?: TrainingScopeVia;
+  /**
+   * ★ 2026-10-16：额外放行「本人创建」的记录（要求被查表有 `create_by` 列）。
+   *
+   *   背景：就业日志的姓名改成可直接手填 → 姓名匹配不到学生时 `student_id` 为 NULL。
+   *   若只按 `student_id IN (我班学生)` 过滤，**建单人自己反而看不到自己建的记录**。
+   *   开启后条件变成：`<关联列> IN (我班...) OR create_by = 本人`。
+   */
+  ownCreatedBy?: boolean;
 }
 
 /**
@@ -231,27 +248,52 @@ export async function applyTrainingScope(
   const via = opts.via || 'direct';
   const col = `${opts.table}.${opts.column || defaultColumnOf(via)}`;
 
-  if (via === 'student') {
-    // 本表存 student_id → 换成一串「我班上的学生 id」
-    query.whereIn(
-      col,
-      db(STUDENT_TABLE).select('id').whereIn('class_id', ids).where('is_deleted', 0),
-    );
-    return;
+  /** 按关联方式把「我负责的范围」条件挂到给定的 query builder 上 */
+  const applyReach = (b: any) => {
+    if (via === 'student') {
+      // 本表存 student_id → 换成一串「我班上的学生 id」
+      b.whereIn(
+        col,
+        db(STUDENT_TABLE).select('id').whereIn('class_id', ids).where('is_deleted', 0),
+      );
+      return;
+    }
+    if (via === 'dorm') {
+      // 本表是房间 → 用「我班学生住过的房间 id」反查
+      b.whereIn(
+        col,
+        db(STUDENT_TABLE)
+          .select('dorm_id')
+          .whereIn('class_id', ids)
+          .whereNotNull('dorm_id')
+          .where('is_deleted', 0),
+      );
+      return;
+    }
+    b.whereIn(col, ids);
+  };
+
+  // ★ 2026-10-16：手填姓名、未关联学生的记录（关联列为 NULL）也要让建单人自己看到，
+  //   否则建完就"消失"了。
+  //   ⚠️ 只额外放行「**没挂到任何目标上**」的本人记录 —— 挂了别的班学生的记录，
+  //      仍然不该被本人看到（口径：老师只能看自己的班级）。
+  if (opts.ownCreatedBy) {
+    // ⚠️ create_by 里存的是【门户账号 UUID】(req.user.userId)，
+    //    而 op.userId 是【权限库 id】(businessUserId)——两套 id 都放行，避免写法不同漏掉记录。
+    const raw = req?.user?.userId || '';
+    const mine = Array.from(new Set([op.userId, raw].filter(Boolean)));
+    if (mine.length) {
+      query.where((b: any) => {
+        applyReach(b);
+        b.orWhere((b2: any) => {
+          b2.whereNull(col).whereIn('create_by', mine);
+        });
+      });
+      return;
+    }
   }
-  if (via === 'dorm') {
-    // 本表是房间 → 用「我班学生住过的房间 id」反查
-    query.whereIn(
-      col,
-      db(STUDENT_TABLE)
-        .select('dorm_id')
-        .whereIn('class_id', ids)
-        .whereNotNull('dorm_id')
-        .where('is_deleted', 0),
-    );
-    return;
-  }
-  query.whereIn(col, ids);
+
+  applyReach(query);
 }
 
 /** 各关联方式下，被查表默认用哪一列去挂目标 */

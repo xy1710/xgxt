@@ -50,9 +50,9 @@
 ### 推荐方式：一键启动
 
 1. 将项目源码包解压到本机目录，保留 `shared-types/`、`server-job/`、`web-job/` 和 `tools/` 等目录。数据库初始化 SQL 已随仓库放在 `server-job/sql/init/`，无需另行索取。
-2. 启动 MySQL 服务。
+2. 启动 MySQL 服务。如果 MySQL 装在项目同级的 `mysql/` 目录或常见安装目录下，且 `DB_HOST` 指向本机，可以跳过这一步：`一键启动.bat` 检测到 3306 没在监听时会自动把 `mysqld` 拉起来（等端口就绪后再继续）。
 3. 若没有 `server-job/.env`，将 `server-job/.env.example` 复制为 `server-job/.env`；填写 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`JWT_SECRET` 和 `INTERNAL_TOKEN`。模板值是占位符，必须替换。默认数据库名为 9 个 `sms_*` 数据库，通常无需修改。请勿将含真实凭据的 `.env` 对外分享。
-4. 双击项目根目录的 `一键启动.bat`。启动器会检查环境、安装缺少的 npm 依赖、编译共享类型、创建所需数据库、运行五组数据库迁移，导入 `server-job/sql/init/` 中的初始化 SQL（四个模块库仅在该库为空时导入；统一表用 `IF NOT EXISTS` 补齐，可重复执行），最后启动前后端。
+4. 双击项目根目录的 `一键启动.bat`。启动器会检查环境（含自动启动本机 MySQL）、安装缺少的 npm 依赖、编译共享类型、创建所需数据库、运行五组数据库迁移，导入 `server-job/sql/init/` 中的初始化 SQL（四个模块库仅在该库为空时导入；统一表用 `IF NOT EXISTS` 补齐，可重复执行），最后启动前后端。
 5. 首次安装也可以直接在项目根目录运行 `node tools/start.mjs`。加 `--no-browser` 可跳过自动打开浏览器；加 `--frontend=5174` 可更改前端端口（默认 5173）。
 
 ### 手动安装
@@ -110,6 +110,7 @@ mysql -uroot -p sms_finance  < sql\init\sms_finance.sql
 - 系统使用 9 个数据库：`sms_job`、`sms_edu`、`sms_class`、`sms_common`、`sms_class_jh`、`sms_portal`、`sms_consult`、`sms_finance`、`sms_perm`。它们应位于同一个 MySQL 实例中，项目存在跨库读取和同步。
 - 一键启动仅对五个业务数据库运行迁移；门户、咨询、财务、权限四个库以及 43 张统一表不在迁移范围内，由 `server-job/sql/init/` 下的初始化 SQL 建立。启动器会自动导入：四个模块库**仅在该库为空时**导入（文件含 `DROP TABLE`），统一表用 `CREATE TABLE IF NOT EXISTS` 补齐（可重复执行、不动数据）。
 - 新建空环境完成一键启动后，如需生成项目内置的完整演示业务数据，可在 `server-job/` 执行 `npm run seed:all`。**该脚本会重建多个业务库中的演示数据，执行前先确认连接的是可丢弃的演示环境并备份重要数据。**
+- 只想给「教学管理」补数据（学生 / 班级 / 出勤 / 考试 / 成绩 / 宿舍 / 催费 / 退费 / 休学退学）时，用 `npm run seed:teaching`（预演加 `--dry`）。它**不清库**、走真实接口做加法、并可重复执行；需要后端已在 8004 运行。改动教学管理页面后可跑 `node tools\_verify-teaching-demo-data.mjs` 逐页核对是否还有数据。
 - **演示数据安全提示**：`sql/init/` 里的四个库 SQL 是演示数据，其中门户演示账号密码统一为 `123456` 且以**明文**存储。生产或正式使用前必须：① 改掉所有演示账号密码；② 将密码字段改为哈希存储；③ 替换掉演示业务数据。不要把演示环境直接当作生产环境使用。
 - 生产或正式使用前，应由部署负责人配置真实账号、数据库权限及安全密钥；在 `server-job/.env` 中配置真实数据库凭据和随机 JWT/内部令牌密钥，并妥善保管数据库备份及上传文件。
 

@@ -6,7 +6,7 @@
  * ⚠️ 这些取值和文案必须与原型保持一致，否则页面显示会和原型对不上。
  *    原型里这些都是写在页面脚本里的常量，这里把它们提升为前后端共用的契约。
  */
-import { StudentStatus } from './edu-enums.js';
+import { StudentStatus, FeeType } from './edu-enums.js';
 
 // ========== 常量 ==========
 
@@ -20,6 +20,26 @@ import { StudentStatus } from './edu-enums.js';
 export const FEE_TYPES = ['学费', '住宿费', '保险费', '餐费'] as const;
 
 export type PaymentCategory = (typeof FEE_TYPES)[number];
+
+/**
+ * ⭐ 2026-10-15 新增：教务「中文类别」→ 财务「数字费用类型」的映射
+ *
+ * 【为什么需要它】
+ *   教务的缴费记录存的是【中文类别】（原型就是中文），而财务的
+ *   `t_finance_fee.fee_type` 是【数字枚举】（1 学费 / 2 住宿费 / 3 餐费 / 4 保险费）。
+ *   教务上传的缴费截图要回传给财务，就必须把两边的口径对上。
+ *
+ * ⚠️ 这是**唯一**的换算口径 —— 不许在路由、service 里各写一份 if-else，
+ *    否则以后加类别（如「教材费」）必然漏改一处。
+ *
+ * 💡 试学费(5)不在此表内：它由咨询模块发起，教务侧没有这个类别。
+ */
+export const CATEGORY_TO_FEE_TYPE: Record<string, FeeType> = {
+  学费: FeeType.TUITION,
+  住宿费: FeeType.ACCOMMODATION,
+  餐费: FeeType.MEAL,
+  保险费: FeeType.INSURANCE,
+};
 
 /**
  * 类别徽章配色（原型 FEE_BADGES）
@@ -109,7 +129,7 @@ export const PAY_STATUS_FROZEN = '已冻结';
  * 缴费状态：这笔费用缴了没有
  *
  * ⚠️ 不叫 PayStatus —— enums.ts 里已经有一个给财务模块用的数字枚举 PayStatus
- *    （待缴/已缴/已核对/逾期/冻结），这里是中文字符串，命名要区分开。
+ *    （待缴/待核对/已缴/冻结），这里是中文字符串，命名要区分开。
  */
 export enum PayPaidStatus {
   PAID = '已缴',
@@ -410,6 +430,16 @@ export interface OcrResult {
   rawText?: string;
   /** 是否至少识别出了一项 */
   recognized: boolean;
+  /**
+   * ⭐ 2026-10-15 新增：截图落盘后的相对地址，如 `/uploads/voucher/edu_xxx.png`
+   *
+   * 【为什么返回它】
+   *   教务的缴费截图原先只在 OCR 时「路过」后端就被丢掉了 ——
+   *   图片从来没落盘，所以财务侧永远看不到凭证（用户反馈的问题）。
+   *   识别时顺手把图存下来、把地址带回去，前端点「确认」时再一并提交，
+   *   由 `/upload` 落库并回传给财务。
+   */
+  certificateUrl?: string;
 }
 
 /** 上传凭证 */
@@ -421,6 +451,29 @@ export interface UploadCertificatePayload {
   amount?: number;
   /** 截图识别出的订单号（只读回填，不允许手改） */
   orderNo?: string;
+  /**
+   * ⭐ 2026-10-15 新增：截图地址（来自 `/ocr` 的返回）
+   *
+   * 落库到 `t_edu_payment.certificate_url`，并由本模块回传给财务 ——
+   * 财务侧「缴费管理」核对时看到的就是这张图。
+   */
+  certificateUrl?: string;
+}
+
+/**
+ * ⭐ 2026-10-15 新增：上传凭证的返回
+ *
+ * 【为什么不是 void】
+ *   教务上传凭证后还要把图回传给财务，这一步可能失败（财务没建对应缴费单 /
+ *   财务服务没起 / 类别对不上）。如果只返回 null，页面上看不出来，
+ *   就成了「教务以为传好了、财务其实没有」——这正是用户反馈的问题本质。
+ *   所以把同步结果返回给页面，失败时能明确提示。
+ */
+export interface UploadCertificateResult {
+  /** 是否已成功同步到财务（财务缴费管理里能看到这张凭证） */
+  financeSynced: boolean;
+  /** 未同步时的原因（已转成人话可直接展示）；成功时为 null */
+  financeSyncMessage: string | null;
 }
 
 /** 批量/单个通知的结果 */

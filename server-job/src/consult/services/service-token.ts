@@ -66,6 +66,15 @@ const SVC_IDENTITY: Record<string, { userId: string; account: string; userName: 
     account: 'svc-job',
     userName: '就业模块（服务调用）',
   },
+  /**
+   * ★ 2026-10-15 新增：教务模块上传缴费截图后要回传给财务，
+   *   否则财务侧建/改单据时 applicant 会显示成别的模块（同上文的坑）。
+   */
+  edu: {
+    userId: 'SVC_EDU',
+    account: 'svc-edu',
+    userName: '教务模块（服务调用）',
+  },
 };
 
 /** 每个来源模块各缓存一份 token */
@@ -77,10 +86,10 @@ const cacheByCaller = new Map<string, { token: string; exp: number }>();
  * ⚠️ 带 1 小时缓存：避免每次跨模块调用都做一次 HMAC 计算（虽然很便宜，
  *    但更主要的是让日志里的 token 稳定，便于排查）。
  *
- * @param caller 调用方模块名（`consult` / `job`），默认 `consult` 保持向后兼容。
+ * @param caller 调用方模块名（`consult` / `job` / `edu`），默认 `consult` 保持向后兼容。
  *               仅影响 token 里的「自报家门」字段，不影响鉴权强度。
  */
-export function getServiceToken(caller: 'consult' | 'job' = 'consult'): string {
+export function getServiceToken(caller: 'consult' | 'job' | 'edu' = 'consult'): string {
   const now = Math.floor(Date.now() / 1000);
   const cacheKey = caller;
   const hit = cacheByCaller.get(cacheKey);

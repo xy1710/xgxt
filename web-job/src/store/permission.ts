@@ -45,7 +45,7 @@ export const myPermissions = ref<string[]>([]);
 export const myRoles = ref<string[]>([]);
 /** 当前用户 ID（★ 2026-10-04 交棒模型：按「岗位责任人是不是我」判断按钮显隐） */
 export const myUserId = ref('');
-/** ★ 2026-10-07 被「角色-权限分配」显式撤销的操作码（前端按钮据此叠加隐藏） */
+/** ★ 2026-10-07 被「职位权限分配」显式撤销的操作码（前端按钮据此叠加隐藏） */
 export const myRemovedCodes = ref<string[]>([]);
 
 /**
@@ -216,7 +216,7 @@ export function hasPerm(code: string): boolean {
  *
  *   job/edu 板块的按钮默认显隐由「角色白名单」决定（各页面自己写死的
  *   canInitiate / canOperate），这套默认是准的。这里在它之上再叠加一层：
- *   —— 管理员在「角色-权限分配」里**取消**某个动作后，对应按钮要消失。
+ *   —— 管理员在「职位权限分配」里**取消**某个动作后，对应按钮要消失。
  *
  *   @param code        操作码（如 job:refund:apply）
  *   @param roleDefault 角色层面的默认可见性（调用方把原来的角色判断传进来）

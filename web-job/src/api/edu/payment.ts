@@ -21,6 +21,7 @@ import type {
   PaymentExpiringStats,
   NotifyResult,
   OcrResult,
+  UploadCertificateResult,
 } from 'shared-types/edu';
 
 const BASE = '/api/edu/payment';
@@ -92,15 +93,21 @@ export function recognizeCertificate(file: File): Promise<OcrResult> {
   });
 }
 
-/** 单个上传凭证（amount / orderNo 来自截图识别，只读回填） */
+/**
+ * 单个上传凭证（amount / orderNo / certificateUrl 来自截图识别，只读回填）
+ *
+ * ⭐ 2026-10-15：新增 certificateUrl（截图地址）与返回的同步结果 ——
+ *    后端落库后会把这张图回传给财务，返回体告诉页面有没有同步成功。
+ */
 export function uploadCertificate(payload: {
   id: string;
   certificateName?: string;
   uploadRemark?: string;
   amount?: number;
   orderNo?: string;
-}): Promise<null> {
-  return http.post<null>(`${BASE}/upload`, payload);
+  certificateUrl?: string;
+}): Promise<UploadCertificateResult> {
+  return http.post<UploadCertificateResult>(`${BASE}/upload`, payload);
 }
 
 /** 批量上传：传 ids 则只处理勾选的行，不传则按筛选条件整批处理 */

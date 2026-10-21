@@ -167,6 +167,22 @@ export const financeClient = {
     voucherNo?: string;
     payMethod?: string;
     remark?: string;
+    /** ★ 2026-10-15 自定义金额（单位：分）；不传则由财务按费用标准取值 */
+    amount?: number;
+    /**
+     * ★ 2026-10-19 合计单的分项明细
+     *
+     * 用户口径：「一张凭证就是交的总金额，总金额下面列出包含什么」。
+     * 传了这个，财务侧才能在总金额下面展示子项；
+     * 单项单不传。
+     */
+    itemDetail?: Array<{
+      feeType: FeeType;
+      feeTypeName: string;
+      amount: number;
+      standardAmount: number;
+      discount: number;
+    }>;
   }): Promise<{ id: string; amount?: number }> {
     return request<{ id: string; amount?: number }>('/api/finance/fee/add', {
       method: 'POST',
@@ -195,6 +211,21 @@ export const financeClient = {
     await request<null>('/api/finance/fee/attach-voucher', {
       method: 'POST',
       body: payload,
+    });
+  },
+
+  /**
+   * ★ 2026-10-19 作废财务缴费单（咨询发起错了 / 重复发起时撤销）
+   *
+   * POST /api/finance/fee/cancel
+   *
+   * ⚠️ 财务只允许作废「未核对入账」的单；已入账会报错 —— 那种必须走退费，
+   *    否则账已经出了，作废会把账单和缴费单对不上。
+   */
+  async cancelFee(id: string, reason?: string): Promise<null> {
+    return request<null>('/api/finance/fee/cancel', {
+      method: 'POST',
+      body: { id, reason },
     });
   },
 
@@ -249,6 +280,18 @@ export const financeClient = {
    * ⭐ 上报退费单给财务（经理批准后）
    *
    * POST /api/finance/refund/apply
+   *
+   * ⚠️⚠️ 2026-10-15 修复：入参必须对齐财务的 applySchema
+   *
+   *   【原来的错】只传了 `reason`，但财务那边是：
+   *     · refundItems  —— 必填（zod .min(1)），退费项目数组
+   *     · refundReason —— 必填（zod .min(1)），退费原因
+   *   两个都没传 → 财务直接 400「参数「refundItems」类型不正确」，
+   *   **咨询发起的退费单永远进不了财务**（用户 2026-10-15 反馈的现象）。
+   *
+   *   【返回字段也对不上】财务返回的是 `orderNo`（TF 单号），
+   *   不是 refundNo —— 原先读 refundNo 拿到 undefined，
+   *   上游 finance_refund_no 永远存不进去。
    */
   async applyRefund(payload: {
     studentId: string;
@@ -256,14 +299,19 @@ export const financeClient = {
     studentName?: string;
     classId?: string;
     className?: string;
+    /** 部门编码 1 二三期 / 2 大学部 —— 财务退费列表按部门分 Tab，不传会看不到 */
+    deptCode?: number;
+    /** 退费项目（财务必填，至少 1 个），取值与 FeeType 一致 */
+    refundItems: number[];
+    /** 退费金额（单位：分） */
     refundAmount: number;
-    /** 退费原因 */
-    reason?: string;
-    /** 上游单号（本模块的 TK 单号），便于财务溯源 */
-    sourceNo?: string;
+    /** 退费原因（财务必填，≤255） */
+    refundReason: string;
+    /** 来源类型：1 咨询 / 2 就业 */
+    sourceType?: number;
     remark?: string;
-  }): Promise<{ id: string; refundNo?: string }> {
-    return request<{ id: string; refundNo?: string }>('/api/finance/refund/apply', {
+  }): Promise<{ id: string; orderNo?: string }> {
+    return request<{ id: string; orderNo?: string }>('/api/finance/refund/apply', {
       method: 'POST',
       body: payload,
     });

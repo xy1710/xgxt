@@ -61,7 +61,7 @@
  *                   properties:
  *                     fileName:
  *                       type: string
- *                       example: 角色清单_20260929205528_db9812.xls
+ *                       example: 职位清单_20260929205528_db9812.xls
  *                     total:
  *                       type: integer
  *                       example: 14

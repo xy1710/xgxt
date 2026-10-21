@@ -16,6 +16,10 @@ export enum Gender {
 export enum DeptCode {
   JUNIOR_SENIOR = 1,  // 初高部
   UNIVERSITY = 2,     // 大学部
+  /** ★ 2026-10-19 新增：就业部（独立学段「就业」） */
+  EMPLOYMENT = 3,     // 就业部
+  /** ★ 2026-10-20 新增：高中部（4；3 已被就业部占用） */
+  SENIOR = 4,         // 高中部
 }
 
 /** 学生状态（全系统最重要的字段） */
@@ -55,6 +59,15 @@ export enum PayStatus {
   UNPAID = 1,    // 待缴
   PAID = 2,      // 已缴
   VERIFIED = 3,  // 已核对
+  /**
+   * 逾期（到期日已过、钱还没交）
+   *
+   * ★ 2026-10-20 补：库里的 `t_class_fee.pay_status` 列注释一直是
+   *   「1待缴2已缴3已核对4逾期5冻结」，演示数据里也确实写着 4，
+   *   但枚举里漏了 4 →
+   *     ① nameOf 取不到名字，缴费状态列直接空白（用户反馈「有些人没有缴费状态」）；
+   *     ② 「未结清」判断 UNPAID_STATUSES 也没算 4，逾期行不标「紧急」。
+   */
   OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
 }
@@ -271,6 +284,8 @@ export const GENDER_NAME: Record<number, string> = {
 export const DEPT_NAME: Record<number, string> = {
   [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
+  [DeptCode.EMPLOYMENT]: '就业部',
+  [DeptCode.SENIOR]: '高中部',
 };
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {
@@ -309,6 +324,26 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
+};
+
+/**
+ * 缴费方式（★ 2026-10-20 催费页「登记缴费」）
+ *
+ * ⚠️ 别和 `FeeType`（缴费类型：学费/住宿费/餐费…）搞混：
+ *   FeeType 是「交的是什么钱」，PayMethod 是「怎么交的」。
+ *   用户口语把它叫「缴费类型」，但选项是 微信支付/支付宝/现金 —— 本质是支付方式，
+ *   所以库里单开一列 `t_class_fee.pay_method`，绝不复用 `fee_type`（否则财务对账口径会乱）。
+ */
+export enum PayMethod {
+  WECHAT = 1, // 微信支付
+  ALIPAY = 2, // 支付宝
+  CASH = 3,   // 现金
+}
+
+export const PAY_METHOD_NAME: Record<number, string> = {
+  [PayMethod.WECHAT]: '微信支付',
+  [PayMethod.ALIPAY]: '支付宝',
+  [PayMethod.CASH]: '现金',
 };
 
 export const PAY_STATUS_NAME: Record<number, string> = {
@@ -421,12 +456,29 @@ export const HANDOVER_ROLE_NAME: Record<number, string> = {
   [HandoverRole.TEACHER]: '教员',
 };
 
-/** 催费触达渠道中文名 */
+/** 催费触达渠道中文名（含历史渠道：老记录里的「站内消息」仍要能显示） */
 export const SHARE_CHANNEL_NAME: Record<number, string> = {
   [ShareChannel.INNER_MESSAGE]: '站内消息',
   [ShareChannel.WECHAT]: '微信',
   [ShareChannel.SMS]: '短信',
 };
+
+/**
+ * 催费推送「触达渠道」下拉的可选项（★ 2026-10-20 用户要求）
+ *
+ * 只保留 微信 / 短信 两个真实能触达家长的渠道；
+ * 「站内消息」（码 1）从下拉里下线，但 SHARE_CHANNEL_NAME 里留着它 ——
+ * 否则历史催费记录里的渠道名会显示成空白。
+ *
+ * ⚠️ 前端下拉、后端校验、自检脚本三处共用这一份口径，别各写一遍。
+ */
+export const SHARE_CHANNEL_PUSH_OPTIONS: Array<{ value: ShareChannel; label: string }> = [
+  { value: ShareChannel.SMS, label: SHARE_CHANNEL_NAME[ShareChannel.SMS] },
+  { value: ShareChannel.WECHAT, label: SHARE_CHANNEL_NAME[ShareChannel.WECHAT] },
+];
+
+/** 催费推送允许的渠道码（后端校验用，与下拉同源） */
+export const SHARE_CHANNEL_PUSH_CODES: number[] = SHARE_CHANNEL_PUSH_OPTIONS.map((o) => o.value);
 
 /** 考试内容类型中文名 */
 export const EXAM_CONTENT_TYPE_NAME: Record<number, string> = {

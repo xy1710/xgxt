@@ -28,6 +28,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import path from 'path';
+import fs from 'fs';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
 import {
@@ -61,6 +63,8 @@ import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
 import { recognizePaymentScreenshot } from '../services/ocr.service';
+// ★ 2026-10-15：教务上传的缴费截图要回传给财务，否则财务核对时看不到凭证
+import { pushVoucherToFinance } from '../utils/eduFinanceClient';
 
 export const paymentRouter = Router();
 
@@ -756,6 +760,32 @@ paymentRouter.post(
  * → 点「确认」才带着 amount / orderNo 调 /upload 落库。
  * ============================================================ */
 
+/**
+ * 把教务上传的缴费截图写入 uploads/voucher/，返回相对地址
+ *
+ * ⚠️ 为什么必须有这一步（2026-10-15）：
+ *   改造前这张图只在 OCR 时「路过」后端就被丢掉了 ——
+ *   库里只留一个文件名占位（certificate_name），图片本身并不存在，
+ *   所以**财务侧永远看不到教务上传的凭证**。
+ *
+ * ⚠️ 落盘目录必须与 app.ts 的静态托管根一致：
+ *   app.ts 用 `path.resolve(__dirname, '../uploads')`（= server-job/uploads），
+ *   而服务启动时 cwd 就是 server-job，所以 `process.cwd()/uploads` 是同一目录。
+ *   写法与咨询侧 `/api/consult/fee/upload-file` 保持一致，
+ *   两边的相对路径 `/uploads/voucher/xxx` 在同一个服务下都能访问。
+ */
+function saveEduVoucher(buffer: Buffer, originalName: string): string {
+  const rawExt = (path.extname(originalName || '') || '.png').toLowerCase();
+  const ext = /^\.(jpe?g|png|bmp|webp|gif)$/.test(rawExt) ? rawExt : '.png';
+  const fileName = `edu_${Date.now()}_${randomUUID().slice(0, 8)}${ext}`;
+  const uploadDir = path.resolve(process.cwd(), 'uploads/voucher');
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+  fs.writeFileSync(path.join(uploadDir, fileName), buffer);
+  return `/uploads/voucher/${fileName}`;
+}
+
 const uploadShot = multer({
   storage: multer.memoryStorage(),
   // ⚠️ 保险写法：万一契约包的常量没编进来（NaN）会让 multer 直接抛错把进程打挂
@@ -782,9 +812,18 @@ paymentRouter.post(
       throw new BizError(BizCode.PARAM_ERROR, OCR_FAILED_TIP);
     }
 
+    /**
+     * ⭐ 2026-10-15：识别成功的同时把截图落盘，并把地址一并返回。
+     *
+     * 前端拿到的 certificateUrl 会随「确认」一起提交给 /upload，
+     * 落库后由本模块回传给财务 —— 这样财务才看得到这张凭证。
+     * （放在识别成功之后存：识别失败时前端会换图重试，存了也是垃圾文件）
+     */
+    const certificateUrl = saveEduVoucher(file.buffer, file.originalname);
+
     res.json(
       ok(
-        result,
+        { ...result, certificateUrl },
         result.amount != null && result.orderNo
           ? '识别成功'
           : '识别成功，但有一项未识别到，请确认截图是否清晰',
@@ -812,15 +851,22 @@ paymentRouter.post(
       // 规范：金额是整数、单位「分」，所以不允许小数
       amount: z.coerce.number().int().min(0).max(99999999).optional(),
       orderNo: z.string().max(64).optional(),
+      /**
+       * ⭐ 2026-10-15 新增：截图相对地址（来自 /ocr 的返回）
+       * 存入 certificate_url，并回传给财务 —— 财务核对时看到的就是这张图。
+       */
+      certificateUrl: z.string().max(255).optional(),
     }),
   ),
   wrap(async (req, res) => {
-    const { id, certificateName, uploadRemark, amount, orderNo } = (req as any).validated as {
+    const { id, certificateName, uploadRemark, amount, orderNo, certificateUrl } = (req as any)
+      .validated as {
       id: string;
       certificateName?: string;
       uploadRemark?: string;
       amount?: number;
       orderNo?: string;
+      certificateUrl?: string;
     };
 
     const row = await db(TABLE).where({ id, is_deleted: false }).first();
@@ -846,11 +892,41 @@ paymentRouter.post(
       // 截图识别结果：没识别到就不覆盖已有的（避免把老数据清成空）
       ...(amount != null ? { amount } : {}),
       ...(orderNo ? { order_no: orderNo } : {}),
+      // ⭐ 截图地址：本次没带就保留库里已有的（避免把上次传的图清掉）
+      ...(certificateUrl ? { certificate_url: certificateUrl } : {}),
       update_time: now,
       update_by: (req as any).user?.userId || 'system',
     });
 
-    res.json(ok(null, canReupload ? '凭证重新上传成功' : '凭证上传成功'));
+    /**
+     * ⭐ 2026-10-15：把这张截图回传给财务
+     *
+     * 为什么放在这里：教务的职责到「上传凭证」为止，但这张凭证必须让财务看得到，
+     * 否则财务在「缴费管理」核准时是瞎的（用户反馈的正是这个问题）。
+     *
+     * ⚠️ 非阻断：回传失败只记日志 + 在返回文案里说明，**不回滚**教务侧的上传 ——
+     *    教务自己的状态流转是对的，财务那边可人工补录。
+     */
+    const rawRow = row as Record<string, any>;
+    const sync = await pushVoucherToFinance({
+      studentNo: rawRow.student_no,
+      category: rawRow.category,
+      // 本次传了地址用本次的；没传则回退到库里已存的
+      voucherUrl: certificateUrl || rawRow.certificate_url,
+      voucherNo: orderNo || rawRow.order_no,
+    });
+    if (!sync.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(`[教务→财务] 缴费 ${id} 凭证回传未成功（不影响教务侧上传）：${sync.message}`);
+    }
+
+    const baseTip = canReupload ? '凭证重新上传成功' : '凭证上传成功';
+    res.json(
+      ok(
+        { financeSynced: sync.ok, financeSyncMessage: sync.ok ? null : (sync.message ?? null) },
+        sync.ok ? `${baseTip}，已同步至财务` : `${baseTip}（${sync.message}）`,
+      ),
+    );
   }),
 );
 

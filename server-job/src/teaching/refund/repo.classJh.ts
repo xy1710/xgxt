@@ -24,6 +24,7 @@ import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import { tbl } from '../shared/uniTable';
+import { hydrateWithArchive } from '../shared/studentRef';
 
 const T = 't_class_refund';
 const S = 't_class_student';
@@ -47,7 +48,7 @@ async function decorate(row: Record<string, any>): Promise<RefundRow> {
 
   return {
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     id: String(row.id),
     studentId: String(row.student_id || ''),
     studentNo: String(row.student_no || ''),
@@ -115,7 +116,21 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
     });
   }
-  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.classId) {
+    /**
+     * ★ 2026-10-20：班级筛选「单据快照 + 档案现状」两边命中。
+     *   列表显示的班级已改为档案最新值，只按单据 class_id 筛会出现
+     *   「显示 B 班、按 B 班筛不到」（学生换班场景）。
+     */
+    const inClass = (await db(S)
+      .where({ is_deleted: 0, class_id: q.classId })
+      .select('id')) as Array<Record<string, any>>;
+    const ids = [...new Set(inClass.map((r) => String(r.id || '')).filter(Boolean))];
+    base.andWhere((b) => {
+      b.where('class_id', q.classId);
+      if (ids.length) b.orWhereIn('student_id', ids);
+    });
+  }
   if (q.startDate) base.andWhere('apply_date', '>=', q.startDate);
   if (q.endDate) base.andWhere('apply_date', '<=', q.endDate);
 
@@ -134,6 +149,8 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
 
+  // ★ 2026-10-20：学生属性以档案最新值为准（快照列只留作审计）
+  await hydrateWithArchive(STAGE, rows, { conn: db });
   return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
 }
 
@@ -142,7 +159,10 @@ export async function detail(id: string): Promise<RefundRow | null> {
   const row = (await db(T).where({ id, is_deleted: 0 }).first()) as
     | Record<string, any>
     | undefined;
-  return row ? decorate(row) : null;
+  if (!row) return null;
+  // ★ 2026-10-20：详情与列表同口径（档案最新值）
+  await hydrateWithArchive(STAGE, [row], { conn: db });
+  return decorate(row);
 }
 
 /** 汇总 */

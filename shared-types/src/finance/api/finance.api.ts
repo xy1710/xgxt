@@ -147,8 +147,6 @@ export interface FeeStats {
   verified: number;
   /** 已打回：等上游重新上传凭证 */
   rejected: number;
-  /** 已逾期 */
-  overdue: number;
   /** 已冻结 */
   frozen: number;
 }
@@ -185,6 +183,22 @@ export interface FeeListItem {
   /** 是否已上传凭证 */
   hasVoucher: boolean;
   voucherNo?: string;
+  /**
+   * ★ 2026-10-19 这张凭证一共覆盖了多少笔单据 / 合计多少钱（单位：分）
+   *
+   * 业务背景（用户反馈「缴费凭证和实缴金额对不上」）：
+   *   一次缴清多项费用时，家长只转一笔钱、只给一张截图，
+   *   但这张截图要挂到「学费 / 住宿费 / 押金 / 保险费 / 餐费 / 校服」多张单据上。
+   *   于是每张单据的 amount 只是其中一项（如学费 28000），
+   *   而凭证截图上的金额是合计（32400）—— 单看一行必然「对不上」。
+   *
+   * 所以列表/详情要把「共 N 笔、合计 ¥X」标出来：
+   *   本单金额与凭证金额的关系就一目了然，不会再被当成数据错乱。
+   *
+   * voucherGroupCount = 1 时表示这张凭证只对应本单（此时两者必然相等）。
+   */
+  voucherGroupCount?: number;
+  voucherGroupAmount?: number;
   /** 是否可核对（已缴 且 有凭证 且 未核对） */
   canVerify: boolean;
 }
@@ -195,6 +209,24 @@ export type FeeListResponse = PageResponse<FeeListItem>;
 export interface FeeDetail extends FeeListItem {
   studentPhone?: string;
   parentPhone?: string;
+  /**
+   * ★ 2026-10-19 这笔钱包含的费用项（总金额下面列的小列）
+   *
+   * 后端 toFeeDetail 保证一定返回：合计单取 item_detail，
+   * 单项单用本单自身兜一个，前端可无脑渲染成子表。
+   */
+  items?: Array<{
+    feeType: FeeType;
+    feeTypeName: string;
+    /** 实缴（分 / 元字符串双返回，与列表一致） */
+    amount: number;
+    amountYuan: string;
+    standardAmount: number;
+    standardAmountYuan: string;
+    /** 优惠 = 应缴 - 实缴（>0 优惠，<0 补收） */
+    discount: number;
+    discountYuan: string;
+  }>;
   voucherUrl?: string;
   voucherTime?: string;
   /** 上传凭证的操作人 ID */

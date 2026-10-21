@@ -23,7 +23,7 @@ import { verifyToken, looksLikeJwt } from '../utils/jwt';
 import type { JwtPayload } from '../utils/jwt';
 // ★ 2026-10-06：本地账号表缺失时，按门户账号 × sms_perm 角色现推岗位
 import { resolveConsultRoleFromPerm, portalAccountOf } from '../services/perm-roles';
-// ★ 2026-10-07：接口级打通 —— 把「角色-权限分配」的显式改动叠加到咨询模块的接口上。
+// ★ 2026-10-07：接口级打通 —— 把「职位权限分配」的显式改动叠加到咨询模块的接口上。
 //   本模块原本只按岗位角色（requireManager / requireAdmin）判权，不认权限树；
 //   现在写接口会额外核对 market 模块对应的权限点。
 import { resolveBusinessRoles } from '../../middleware/auth';
@@ -433,7 +433,7 @@ export function checkPermission(permissionCode: string) {
  *
  * 【背景】
  *   咨询模块 28 个写接口只按**岗位角色**判权（requireManager / requireAdmin），
- *   而「角色-权限分配」维护的是 **market 模块的功能点 × 动作**（如 学生档案·新增）。
+ *   而「职位权限分配」维护的是 **market 模块的功能点 × 动作**（如 学生档案·新增）。
  *   两者粒度不同 → 管理员在权限树里取消了某动作，接口照样通。
  *
  * 【做法】

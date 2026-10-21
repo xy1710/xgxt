@@ -112,9 +112,9 @@ export const MODULES: ModuleDef[] = [
     menus: [
       { key: 'overview', title: '权限总览', path: '/overview' },
       { key: 'dept', title: '部门管理', path: '/dept' },
-      { key: 'role', title: '角色管理', path: '/role' },
-      { key: 'user', title: '用户管理', path: '/user' },
-      { key: 'assign', title: '角色-权限分配', path: '/assign' },
+      { key: 'role', title: '职位管理', path: '/role' },
+      { key: 'user', title: '账号管理', path: '/user' },
+      { key: 'assign', title: '职位权限分配', path: '/assign' },
       { key: 'log', title: '操作日志', path: '/log' },
       { key: 'rule', title: '规则配置', path: '/rule' },
     ],

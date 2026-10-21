@@ -122,7 +122,7 @@ function toggleModule(m: PermModule, checked: boolean) {
   draft.value = next;
 }
 
-/** 复制当前角色的权限映射（提交用） */
+/** 复制当前职位的权限映射（提交用） */
 function getPerms(): RolePermMap {
   const out: RolePermMap = {};
   Object.keys(draft.value).forEach((k) => {

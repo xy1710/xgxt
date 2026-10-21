@@ -41,6 +41,7 @@
 
       <!-- 筛选 -->
       <el-card shadow="never" class="search-card">
+      <!-- ★ 2026-10-19：筛选「选完即查」（@change → loadTotal），不用再点筛选 -->
         <el-form :model="totalQuery" inline>
           <el-form-item label="班级">
             <el-select
@@ -49,6 +50,7 @@
               clearable
               filterable
               style="width: 140px"
+              @change="loadTotal"
             >
               <el-option v-for="c in ALL_CLASSES" :key="c" :label="c" :value="c" />
             </el-select>
@@ -60,6 +62,7 @@
               clearable
               style="width: 240px"
               @keyup.enter="loadTotal"
+              @clear="loadTotal"
             />
           </el-form-item>
           <el-form-item label="状态">
@@ -236,6 +239,7 @@
 
       <!-- 筛选 -->
       <el-card shadow="never" class="search-card">
+      <!-- ★ 2026-10-19：筛选「选完即查」（@change → reloadExpiringWithClear，筛选变了勾选结果一并清空） -->
         <el-form :model="expQuery" inline>
           <el-form-item label="班级">
             <el-select
@@ -244,6 +248,7 @@
               clearable
               filterable
               style="width: 140px"
+              @change="reloadExpiringWithClear"
             >
               <el-option v-for="c in ALL_CLASSES" :key="c" :label="c" :value="c" />
             </el-select>
@@ -254,6 +259,7 @@
               placeholder="全部"
               clearable
               style="width: 110px"
+              @change="reloadExpiringWithClear"
             >
               <el-option v-for="s in PAY_PAID_STATUS_LIST" :key="s" :label="s" :value="s" />
             </el-select>
@@ -264,6 +270,7 @@
               placeholder="全部"
               clearable
               style="width: 110px"
+              @change="reloadExpiringWithClear"
             >
               <el-option v-for="s in CERT_STATUS_LIST" :key="s" :label="s" :value="s" />
             </el-select>
@@ -275,6 +282,7 @@
               clearable
               style="width: 240px"
               @keyup.enter="loadExpiring"
+              @clear="reloadExpiringWithClear"
             />
           </el-form-item>
           <el-form-item>
@@ -1234,14 +1242,25 @@ async function submitUpload() {
   const re = isReupload.value;
   uploading.value = true;
   try {
-    await uploadCertificate({
+    const res = await uploadCertificate({
       id: uploadTarget.value.paymentId,
       certificateName: shotFileName.value || undefined,
       uploadRemark: uploadRemark.value || undefined,
       amount: ocrResult.value?.amount,
       orderNo: ocrResult.value?.orderNo || undefined,
+      // ⭐ 2026-10-15：把截图地址一并提交，后端落库后回传财务
+      certificateUrl: ocrResult.value?.certificateUrl,
     });
-    ElMessage.success(re ? '凭证重新上传成功' : '凭证上传成功');
+
+    const baseTip = re ? '凭证重新上传成功' : '凭证上传成功';
+    if (res?.financeSynced) {
+      ElMessage.success(`${baseTip}，已同步至财务`);
+    } else {
+      // 教务侧传成功了、但财务没收到 —— 必须明说，否则就是「以为传好了、财务那边没有」
+      ElMessage.warning(
+        `${baseTip}，但未同步至财务：${res?.financeSyncMessage || '未知原因'}`,
+      );
+    }
     uploadVisible.value = false;
     loadExpiring();
   } finally {

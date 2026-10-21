@@ -13,7 +13,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { BizCode } from 'shared-types/finance';
+import { BizCode, RefundStatus } from 'shared-types/finance';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
@@ -66,9 +66,25 @@ refundRouter.get(
     const query = buildRefundQuery(q);
 
     const [{ total }] = await query.clone().count({ total: '*' });
+
+    /**
+     * ⭐ 排序（2026-10-15 用户指令）：「待出退费的状态优先在上面」
+     *
+     * 为什么：
+     *   这一页是财务的【出款工作台】，财务进来第一眼要看的是
+     *   「还有哪些退费等着我打款」，而不是最新的申请。
+     *   只按 create_time 排的话，刚处理完的单会把待办淹下去。
+     *
+     * 怎么排（两级）：
+     *   ① 待财务出款(PENDING_FINANCE=4) → 0，排最前；其余 → 1
+     *   ② 同组内仍按 create_time desc（新单在前，保留原来的体感）
+     */
     const rows = await query
       .clone()
       .select('*')
+      .orderByRaw('CASE WHEN refund_status = ? THEN 0 ELSE 1 END ASC', [
+        RefundStatus.PENDING_FINANCE,
+      ])
       .orderBy('create_time', 'desc')
       .limit(q.size)
       .offset((q.page - 1) * q.size);

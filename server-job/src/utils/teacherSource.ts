@@ -30,7 +30,7 @@ import type { TeacherOption } from 'shared-types';
 /**
  * 假装这是 8006 权限管理返回的员工列表
  *
- * 说明：真实场景里这些数据来自「用户管理」里角色为教师的账号。
+ * 说明：真实场景里这些数据来自「账号管理」里角色为教师的账号。
  *      这里先写死，方便本地测试。
  */
 const MOCK_TEACHERS: TeacherOption[] = [

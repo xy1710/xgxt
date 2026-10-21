@@ -52,26 +52,26 @@ export const pageApi = {
   reset: () => http.post<{ affected: number }>(`${P}/page/reset`, {}),
 
   /* ------------------------------------------------------------
-   * ★ 2026-10-07 新增：**角色 → 页面** 台账
-   *   左栏「板块 → 角色」，右侧按角色编辑页面可见性。
+   * ★ 2026-10-07 新增：**职位 → 页面** 台账
+   *   左栏「板块 → 职位」，右侧按职位编辑页面可见性。
    * ------------------------------------------------------------ */
 
-  /** 左栏：板块 + 该板块下的角色 */
+  /** 左栏：板块 + 该板块下的职位 */
   roleTree: () => http.get<PermRoleTreeResult>(`${P}/page/role-tree`),
 
-  /** 右侧：某角色在全部板块下的页面勾选态 */
+  /** 右侧：某职位在全部板块下的页面勾选态 */
   rolePages: (roleId: string) =>
     http.get<PermRolePagesResult>(`${P}/page/role-pages`, { roleId }),
 
   /**
-   * 保存某角色的页面可见性
-   * @param roleId 角色 id
-   * @param items  该角色在全部板块下的最终勾选结果（全量）
+   * 保存某职位的页面可见性
+   * @param roleId 职位 id
+   * @param items  该职位在全部板块下的最终勾选结果（全量）
    */
   saveRole: (roleId: string, items: PermRolePageSavePayload['items']) =>
     http.put<PermRolePageSaveResult>(`${P}/page/role-save`, { roleId, items } as PermRolePageSavePayload),
 
-  /** 恢复默认：删光该角色的显式配置 */
+  /** 恢复默认：删光该职位的显式配置 */
   resetRole: (roleId: string) =>
     http.post<{ affected: number }>(`${P}/page/role-reset`, { roleId }),
 };

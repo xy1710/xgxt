@@ -9,26 +9,26 @@
  *  PUT  /save               按板块保存（全量覆盖：只认提交的这批为启用）
  *  POST /reset              全部恢复启用
  *
- * 【角色 → 页面（台账 B：t_perm_role_page）】★ 2026-10-07 新增
- *  GET  /role-tree          左栏：板块 → 该板块下的角色
- *  GET  /role-pages         右侧：某角色在全部板块下的页面勾选态
- *  PUT  /role-save          保存某角色的页面可见性（差异存储）
- *  POST /role-reset         恢复默认（删光该角色的显式配置）
+ * 【职位 → 页面（台账 B：t_perm_role_page）】★ 2026-10-07 新增
+ *  GET  /role-tree          左栏：板块 → 该板块下的职位
+ *  GET  /role-pages         右侧：某职位在全部板块下的页面勾选态
+ *  PUT  /role-save          保存某职位的页面可见性（差异存储）
+ *  POST /role-reset         恢复默认（删光该职位的显式配置）
  *
  * 【给所有账号用的轻量接口（不带 permAuth，单独挂载）】
  *  GET  /my-paths           → routes/myPaths.route.ts
  *
  * ⚠️ 页面台账的语义：**打勾 = 该板块有该页面**，去勾 = 该板块没有这个页面。
- *    它管的是「板块级」的页面存在性，与「角色-权限分配」（角色级的功能点授权）
- *    是两层，叠加生效：页面不存在 → 谁都没有；页面存在 → 再看角色有没有授权。
+ *    它管的是「板块级」的页面存在性，与「职位权限分配」（职位级的功能点授权）
+ *    是两层，叠加生效：页面不存在 → 谁都没有；页面存在 → 再看职位有没有授权。
  *
- * ⚠️ 角色-页面台账是**第三层**（角色级）：某个角色能不能看到某个页面。
+ * ⚠️ 职位-页面台账是**第三层**（职位级）：某个职位能不能看到某个页面。
  *    三层叠加顺序：
  *      ① 板块有这个页面（t_perm_page）
- *      ② 该角色被允许看这个页面（t_perm_role_page）★ 本文件后半部分
- *      ③ 该角色真的持有该页面的权限点（角色-权限分配 / pagePermissionSource）
+ *      ② 该职位被允许看这个页面（t_perm_role_page）★ 本文件后半部分
+ *      ③ 该职位真的持有该页面的权限点（职位权限分配 / pagePermissionSource）
  *
- * ⚠️ 权限码沿用 `perm:权限配置:editPerm`（与角色-权限分配同一个功能点）——
+ * ⚠️ 权限码沿用 `perm:权限配置:editPerm`（与职位权限分配同一个功能点）——
  *    页面台账本身就是「授权配置」的一部分，不另立权限树功能点，
  *    这样 sys_admin（permissions = ['*']）与权限模块负责人无需额外授权即可用。
  *    查询接口不挂 checkPermission，与本模块其他只读接口（role-list / tree）口径一致。
@@ -82,7 +82,7 @@ pageRouter.get(
  *    所以只有权限管理板块的账号能拉到。
  *    **非 perm 账号（班主任/教务/财务/咨询…）拉不到** ——
  *    它们的前端菜单过滤走的是 `/api/perm/page/my-paths`
- *    （routes/myPaths.route.ts，宽松鉴权，且已叠加「角色 → 页面」台账）。
+ *    （routes/myPaths.route.ts，宽松鉴权，且已叠加「职位 → 页面」台账）。
  *    本接口保留：权限管理页自己刷新台账状态时用得上，也是旧前端的兼容入口。
  * ============================================================ */
 
@@ -164,7 +164,7 @@ pageRouter.post(
 );
 
 /* ============================================================
- * 5. 左栏：板块 → 角色
+ * 5. 左栏：板块 → 职位
  *    GET /api/perm/page/role-tree
  * ============================================================ */
 
@@ -176,7 +176,7 @@ pageRouter.get(
 );
 
 /* ============================================================
- * 6. 右侧：某角色在全部板块下的页面勾选态
+ * 6. 右侧：某职位在全部板块下的页面勾选态
  *    GET /api/perm/page/role-pages?roleId=xxx
  * ============================================================ */
 
@@ -190,17 +190,17 @@ pageRouter.get(
     try {
       res.json(ok(await loadRolePages(roleId)));
     } catch (e: any) {
-      throw new BizError(BizCode.ROLE_NOT_FOUND, e?.message || '角色不存在');
+      throw new BizError(BizCode.ROLE_NOT_FOUND, e?.message || '职位不存在');
     }
   }),
 );
 
 /* ============================================================
- * 7. 保存某角色的页面可见性
+ * 7. 保存某职位的页面可见性
  *    PUT /api/perm/page/role-save
  *    body: { roleId, items: [{ moduleKey, pagePath, enabled }] }
  *
- * ⚠️ 语义 = 该角色【差异存储】：与默认一致的行不落库，
+ * ⚠️ 语义 = 该职位【差异存储】：与默认一致的行不落库，
  *    所以在界面上「改回默认」再保存 = 那一行消失。
  * ============================================================ */
 
@@ -239,7 +239,7 @@ pageRouter.put(
       operatorRole: req.user?.roles?.join('、'),
       moduleName: '权限管理',
       actionType: '权限变更',
-      targetObj: `角色 ${role.roleName} 的页面可见性`,
+      targetObj: `职位 ${role.roleName} 的页面可见性`,
       beforeValue: role.configured
         ? `已配置 ${role.overrideCount} 处 · 可见 ${role.enabledTotal}/${role.total} 页`
         : `沿用默认 · 可见 ${role.enabledTotal}/${role.total} 页`,
@@ -259,7 +259,7 @@ pageRouter.put(
 );
 
 /* ============================================================
- * 8. 恢复默认（删光该角色的显式配置）
+ * 8. 恢复默认（删光该职位的显式配置）
  *    POST /api/perm/page/role-reset   body: { roleId }
  * ============================================================ */
 
@@ -283,7 +283,7 @@ pageRouter.post(
       operatorRole: req.user?.roles?.join('、'),
       moduleName: '权限管理',
       actionType: '权限变更',
-      targetObj: `角色 ${role.roleName} 的页面可见性`,
+      targetObj: `职位 ${role.roleName} 的页面可见性`,
       beforeValue: `已配置 ${role.overrideCount} 处`,
       afterValue: `已恢复默认（清除 ${affected} 行）`,
       ip: clientIp(req),

@@ -82,7 +82,7 @@ const PERM_ROLE = {
    *
    * 用户口径「选角色的地方，选项要来自系统内账户所对应的角色」。
    * 系统里原来没有 教员 / 助教 / 项目经理 的账号 → 这 3 个下拉是空的。
-   * 补账号（gw_no / phone 一并给上，否则用户管理页那两列是空白）。
+   * 补账号（gw_no / phone 一并给上，否则账号管理页那两列是空白）。
    * ============================================================ */
   chenxf: { name: '陈晓峰', title: '教员', dept: 'D_TEACH_U', roles: ['TEACH_TUTOR'], gwNo: 'GW1022', phone: '13800000141' },
   zhaomx: { name: '赵梦雪', title: '助教', dept: 'D_TEACH_U', roles: ['TEACH_ASSIST'], gwNo: 'GW1023', phone: '13800000142' },
@@ -144,7 +144,7 @@ async function main() {
 
     if (!target) {
       // 门户有、权限库完全没有 → 新建
-      // ★ 2026-10-06：gw_no / phone 一并写入（否则用户管理页「工号 / 手机号」两列空白）
+      // ★ 2026-10-06：gw_no / phone 一并写入（否则账号管理页「工号 / 手机号」两列空白）
       const id = `U_${account}`;
       say(`  + ${account}（${want.title}）权限库缺失 → 新建 ${id}`);
       if (!DRY) {
@@ -166,7 +166,7 @@ async function main() {
           `UPDATE \`${DB_PERM}\`.t_perm_user
              SET account = ?, user_name = ?, dept_id = ?, user_status = '正常',
                  -- ⚠️ 软删时会把 gw_no / phone 改名成「xxx#DEL#时间戳」占位，
-                 --    恢复后必须一并还原，否则用户管理页的「工号 / 手机号」会带着 #DEL# 尾巴
+                 --    恢复后必须一并还原，否则账号管理页的「工号 / 手机号」会带着 #DEL# 尾巴
                  gw_no = SUBSTRING_INDEX(gw_no, '#DEL#', 1),
                  phone = SUBSTRING_INDEX(phone, '#DEL#', 1),
                  is_deleted = 0, update_time = NOW(), update_by = 'FIX'
@@ -180,9 +180,9 @@ async function main() {
 
     // 无论走哪个分支，都把软删期留下的「#DEL#时间戳」占位还原掉
     // （软删时 gw_no / phone 会被改名占位；只改 account 不还原这两个字段，
-    //   用户管理页就会显示 GW1016#DEL#179103354 这种工号）
+    //   账号管理页就会显示 GW1016#DEL#179103354 这种工号）
     // 顺带把 need_change_pwd 归零：演示账号是共享密码，不该被标记「首次登录强制改密」，
-    // 否则用户管理页会出现无意义的「待激活 / 需改密」角标。
+    // 否则账号管理页会出现无意义的「待激活 / 需改密」角标。
     if (!DRY) {
       await conn.query(
         `UPDATE \`${DB_PERM}\`.t_perm_user

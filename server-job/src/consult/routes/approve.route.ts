@@ -24,8 +24,15 @@ export const approveRouter = Router();
  *    GET /api/consult/approve/center
  * ============================================================ */
 
+/**
+ * ★ 2026-10-16 审批中心 = 咨询经理专属
+ *
+ * 口径：「咨询师发起退费 → 咨询经理审批 → 财务打款」，
+ *       所以咨询师不该在这里看到别人的待审批单（他只能发起，不能批）。
+ */
 approveRouter.get(
   '/center',
+  requireManager,
   wrap(async (req, res) => {
     const user = req.user!;
 
@@ -75,6 +82,7 @@ approveRouter.get(
 
 approveRouter.get(
   '/pending-assign',
+  requireManager,
   wrap(async (_req, res) => {
     const rows: any[] = await db('t_consult_student')
       .where({ is_deleted: false, consult_state: ConsultState.WAIT_ASSIGN })
@@ -102,6 +110,7 @@ approveRouter.get(
 
 approveRouter.get(
   '/pending-refund',
+  requireManager,
   wrap(async (_req, res) => {
     const rows: any[] = await db('t_consult_refund')
       .where({ is_deleted: false, status: ConsultRefundStatus.PENDING_MANAGER })

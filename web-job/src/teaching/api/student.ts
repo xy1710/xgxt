@@ -9,8 +9,11 @@
  */
 
 import { http } from '@/api/request';
+import type { StagePlanOption } from './class';
 
-export type StudentStage = 'jh' | 'class' | 'job' | 'edu';
+export type { StagePlanOption };
+
+export type StudentStage = 'jh' | 'class' | 'job' | 'emp' | 'edu';
 
 export interface StudentRow {
   stage: StudentStage;
@@ -36,6 +39,8 @@ export interface StudentRow {
   studentStatus: number;
   studentStatusName: string;
   phone: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName: string | null;
   parentPhone: string | null;
   education: string | null;
   enrollDate: string | null;
@@ -86,7 +91,45 @@ export interface StudentDetail {
   resume: Record<string, unknown> | null;
   flows: Array<Record<string, unknown>>;
   repeats: Array<Record<string, unknown>>;
+  /** 升云记录（初高部 → 大学部，2026-10-20）；后端按学号补齐 */
+  upgrades?: StudentUpgradeRow[];
   extra: Record<string, unknown> | null;
+}
+
+/** 升云记录（学生详情「基础信息」展示：原班级 / 原班主任 / 操作人） */
+export interface StudentUpgradeRow {
+  id: string;
+  studentNo: string;
+  studentName: string;
+  fromClassName: string | null;
+  fromHeadTeacherName: string | null;
+  toClassName: string | null;
+  toHeadTeacherName: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  upgradeTime: string | null;
+  remark: string | null;
+}
+
+/** 升云可选的目标班级（大学部 + 状态=开放） */
+export interface UpgradeTargetClass {
+  id: string;
+  name: string;
+  deptCode: number;
+  phaseCode: number | null;
+  phaseName: string;
+  headTeacherName: string | null;
+}
+
+export interface UpgradeResult {
+  moved: number;
+  skipped: Array<{
+    studentId: string;
+    studentNo: string;
+    studentName: string;
+    reason: string;
+  }>;
+  toClassName: string;
 }
 
 export interface StudentListParams {
@@ -119,6 +162,8 @@ export interface StudentSaveBody {
   graduateSchool?: string | null;
   enrollDate?: string | null;
   phone?: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName?: string | null;
   parentPhone?: string | null;
   homeAddress?: string | null;
   idCard?: string | null;
@@ -129,6 +174,9 @@ export interface StudentSaveBody {
   dormId?: string | null;
   dormNo?: string | null;
   bedNo?: string | null;
+  /** 校园网账号（初高表有列；留空时系统自动生成） */
+  netAccount?: string | null;
+  netInitPassword?: string | null;
   remark?: string | null;
   extra?: Record<string, unknown> | null;
 }
@@ -139,10 +187,48 @@ export interface StudentSaveResult {
   unfrozenCount?: number;
 }
 
+/** 详情扩展区块（2026-10-15 详情分签改版）：考试信息 / 调宿记录 / 宿舍长 */
+export interface StudentExtras {
+  scores: Array<{
+    id: string;
+    examId: string;
+    examName: string;
+    examDate: string | null;
+    examType?: number | null;
+    examTypeName?: string | null;
+    studentId: string;
+    studentNo: string | null;
+    studentName: string | null;
+    writtenScore: number | null;
+    machineScore: number | null;
+    interviewScore: number | null;
+    totalScore: number | null;
+    remark: string | null;
+  }>;
+  dormChanges: Array<{
+    changeId: string;
+    bizType: number;
+    bizTypeName: string;
+    studentId: string;
+    oldDormNo: string | null;
+    oldBedNo: string | null;
+    newDormNo: string | null;
+    newBedNo: string | null;
+    changeDate: string;
+    changeReason: string;
+    approvalStatus: number;
+    approvalStatusName: string;
+  }>;
+  dormOwnerName: string | null;
+  dormClassName: string | null;
+}
+
 export interface StudentStageMeta {
   stage: StudentStage;
   stageName: string;
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（见 api/class.ts 的 StagePlanOption） */
+  planOptions?: StagePlanOption[];
   sections: string[];
   supportUnassigned: boolean;
 }
@@ -167,6 +253,11 @@ export function getStudentDetail(stage: StudentStage, id: string) {
   return http.get<StudentDetail>('/api/teaching/student/detail', { stage, id });
 }
 
+/** 详情扩展区块：考试信息 / 调宿记录 / 宿舍长（2026-10-15 详情分签改版） */
+export function getStudentExtras(stage: StudentStage, id: string) {
+  return http.get<StudentExtras>('/api/teaching/student/extras', { stage, id });
+}
+
 export function saveStudent(body: StudentSaveBody) {
   return http.post<StudentSaveResult>('/api/teaching/student/save', body);
 }
@@ -181,4 +272,20 @@ export function getStudentMeta() {
 
 export function getStudentSummary(params: StudentListParams) {
   return http.get<StudentSummary>('/api/teaching/student/summary', params);
+}
+
+/* ---------------- 升云（2026-10-20 批注：初高部 → 大学部开放班级） ---------------- */
+
+/** 升云可选的目标班级（后端只返回大学部 + 状态=开放的班） */
+export function listUpgradeTargets() {
+  return http.get<UpgradeTargetClass[]>('/api/teaching/student/upgrade-targets');
+}
+
+/** 批量升云：档案从初高部移动到大学部班级，学号不变 */
+export function upgradeToUniversity(body: {
+  studentIds: string[];
+  targetClassId: string;
+  remark?: string | null;
+}) {
+  return http.post<UpgradeResult>('/api/teaching/student/upgrade-cloud', body);
 }

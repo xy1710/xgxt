@@ -43,7 +43,8 @@ const STATUS_OPTIONS = [
 ];
 
 const GENDER_OPTIONS = [Gender.MALE, Gender.FEMALE];
-const DEPT_OPTIONS = [DeptCode.JUNIOR_SENIOR, DeptCode.UNIVERSITY];
+/** ★ 2026-10-20 「初高部」拆成 初中部 + 高中部（顺序 初中 → 高中 → 大学） */
+const DEPT_OPTIONS = [DeptCode.JUNIOR_SENIOR, DeptCode.SENIOR, DeptCode.UNIVERSITY];
 /** ★ 2026-10-04：学历改用 shared-types 的 EDUCATION_LEVELS（原来这份少了「小学」，与另两个页面不一致） */
 const EDUCATION_OPTIONS = EDUCATION_LEVELS;
 /** 简历单文件上限（base64 存库，别太大） */

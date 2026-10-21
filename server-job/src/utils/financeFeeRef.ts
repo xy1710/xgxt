@@ -63,7 +63,6 @@ export const FEE_STATUS_TEXT: Record<number, string> = {
   1: '待缴',
   2: '已缴（待核对）',
   3: '已缴（已核对）',
-  4: '逾期',
   5: '冻结',
 };
 

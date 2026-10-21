@@ -20,11 +20,17 @@
     "seed:portal": "node scripts/seed-portal-accounts.mjs",
     "seed:portal:clean": "node scripts/seed-portal-accounts.mjs clean",
     "seed:class-jh": "node scripts/seed-class-jh-demo.js",
+    "seed:class-job": "node scripts/seed-class-job-demo.mjs",
     "seed:all": "node scripts/seed-all-demo.mjs",
     "seed:all:dry": "node scripts/seed-all-demo.mjs --dry",
+    "seed:teaching": "node scripts/seed-teaching-demo.mjs",
+    "seed:teaching:dry": "node scripts/seed-teaching-demo.mjs --dry",
     "fix:perm": "node scripts/fix-perm-accounts.mjs",
     "seed:perm-pages": "tsx scripts/seed-perm-pages.ts",
-    "check:action-overlay": "tsx scripts/check-action-overlay.ts"
+    "check:action-overlay": "tsx scripts/check-action-overlay.ts",
+    "uni:migrate:plan": "tsx scripts/uni-migrate.ts --plan",
+    "uni:migrate": "tsx scripts/uni-migrate.ts --run",
+    "uni:migrate:verify": "tsx scripts/uni-migrate.ts --verify"
   },
   "dependencies": {
     "axios": "^1.7.2",

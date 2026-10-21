@@ -3,8 +3,9 @@
  * ============================================================
  *
  * 【与实训（蓝本）的差异 —— 实测】
- *   · **没有「复学」**：`ApplyType` 只有 1休学 2退学 3退费 4升学
- *     → 本仓储只处理 1/2（页面也会据此隐藏"复学"选项，而不是给个点不动的按钮）
+ *   · ★ 复学：老表 ApplyType 只有 1休学 2退学 3退费 4升学；
+ *     2026-10-16 起**新增原码 5 = 复学**（统一码 3，见 shared/conf.ts），
+ *     并给本表补了 `new_class_id` / `new_class_name` 两列（migrations-class/20261016_012）
  *   · 状态字段 `apply_status` 用大学自己的 `SuspendStatus`：
  *     1待提交 2待经理 3待校长 4已同意 5已驳回 —— **与统一码一一对应（恒等）**
  *     撤回原来是**软删单据**（`is_deleted=1`），本次补了 `WITHDRAWN=6` 改为记状态
@@ -29,6 +30,7 @@ import {
 import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
 
 const T = 't_class_suspend_apply';
@@ -41,8 +43,8 @@ const SRC = 'sms_class';
 const WT = 'sms_class.t_class_suspend_apply';
 const WS = 'sms_class.t_class_student';
 
-/** ★ 大学只有 休学(1) / 退学(2) */
-const IN_SCOPE = [1, 2];
+/** ★ 大学：休学(1) / 退学(2) / 复学(5)（5 = 2026-10-16 新增原码，统一码 3） */
+const IN_SCOPE = [1, 2, 5];
 
 async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   const biz = (await toUnifiedLeaveBiz(STAGE, row.apply_type)) ?? 0;
@@ -50,7 +52,7 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
 
   return {
     stage: STAGE,
-    stageName: '大学',
+    stageName: '大学部',
     id: String(row.id),
     bizType: biz,
     bizTypeName: LEAVE_BIZ_TYPE_NAME[biz] || '',
@@ -67,8 +69,8 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
     headTeacherName: row.applicant_name || null,
     leaveDate: fmtDate(row.effect_date) || null,
     expectResumeDate: fmtDate(row.expect_resume_date) || null,
-    newClassId: null, // 大学无复学，也就没有复学班
-    newClassName: null,
+    newClassId: row.new_class_id ? String(row.new_class_id) : null,
+    newClassName: row.new_class_name || null,
     leaveReason: String(row.apply_reason || ''),
     attendedHours: null,
     relatedRefundNo: null,
@@ -82,9 +84,57 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   };
 }
 
-/** 学生下拉 */
-export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+/**
+ * ★ 未办结（= 统一码 1 待提交 / 2 待学管 / 3 待校长）
+ *
+ * 本表 `apply_status` 与统一码一一对应（恒等），所以直接写 1/2/3。
+ * 【为什么要含「待提交」】用户口径是「已有进行中的申请的学生不再出现在下拉里」，
+ *   草稿也是一张没办完的单子；且**下拉剔除必须与 hasPending 同口径**，
+ *   否则会出现「下拉选得到、提交被拒」的错位。
+ */
+const PENDING_APPLY_STATUS = [1, 2, 3];
+
+/** 有未办结异动单的学生 id（下拉剔除用；与 hasPending 同一口径） */
+async function pendingStudentIds(): Promise<string[]> {
+  const rows = (await tbl(db, SRC, T, STAGE)
+    .where('is_deleted', 0)
+    .whereIn('apply_type', IN_SCOPE)
+    .whereIn('apply_status', PENDING_APPLY_STATUS)
+    .whereNotNull('student_id')
+    .select('student_id')) as Array<Record<string, any>>;
+  // ⚠️ 去重 + 剔空：ids 里混进 NULL 会让 `id NOT IN (..., NULL)` 恒不成立 → 名单整片空掉
+  return [...new Set(rows.map((r) => String(r.student_id || '')).filter(Boolean))];
+}
+
+/**
+ * 学生下拉
+ *
+ * ★ `opts.onlySuspended` = 只挑「当前处于休学」的学生（`student_status = 6`）。
+ *   ★ 2026-10-16 起大学开放复学（`LEAVE_STAGE_BIZ.class` 含 RESUME），
+ *      复学（bizType=3）时 service 会传 `onlySuspended=true` —— 与初高/实训同口径。
+ * ★ `opts.excludeStatuses` = 剔除这些状态的学生（service 传「终态」：
+ *   退学 7 / 流失 11 / 已就业 10 —— 已经终结、不能再办任何学籍异动）。
+ *   ⚠️ `NOT IN (...) OR IS NULL`：老数据里 `student_status` 可能为 NULL，
+ *      单写 `NOT IN` 会把这类行一起滤掉（NULL NOT IN => NULL => 不成立）。
+ * ★ `opts.excludeWithPending` = **剔掉已有未办结申请的学生**（2026-10-16 用户要求）：
+ *   以前只有 `create()` 的 `hasPending` 兜底，下拉里仍能看到这些人，选完提交才被拒。
+ *   ⚠️ 口径与 `hasPending` 共用 `PENDING_APPLY_STATUS`，改一处就够。
+ */
+export async function studentOptions(
+  keyword: string,
+  limit: number,
+  opts: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean } = {},
+): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class', S, STAGE).where('is_deleted', 0);
+  if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
+  if (opts.excludeStatuses?.length) {
+    const ex = opts.excludeStatuses;
+    q.andWhere((b) => b.whereNotIn('student_status', ex).orWhereNull('student_status'));
+  }
+  if (opts.excludeWithPending) {
+    const ids = await pendingStudentIds();
+    if (ids.length) q.whereNotIn('id', ids);
+  }
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
@@ -126,7 +176,21 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
     });
   }
-  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.classId) {
+    /**
+     * ★ 2026-10-20：班级筛选「单据快照 + 档案现状」两边命中。
+     *   列表显示的班级已改为档案最新值，只按单据 class_id 筛会出现
+     *   「显示 B 班、按 B 班筛不到」（学生换班场景）。
+     */
+    const inClass = (await tbl(db, SRC, S, STAGE)
+      .where({ is_deleted: 0, class_id: q.classId })
+      .select('id')) as Array<Record<string, any>>;
+    const ids = [...new Set(inClass.map((r) => String(r.id || '')).filter(Boolean))];
+    base.andWhere((b) => {
+      b.where('class_id', q.classId);
+      if (ids.length) b.orWhereIn('student_id', ids);
+    });
+  }
   if (q.startDate) base.andWhere('apply_time', '>=', `${q.startDate} 00:00:00`);
   if (q.endDate) base.andWhere('apply_time', '<=', `${q.endDate} 23:59:59`);
   if (q.bizType) base.andWhere('apply_type', await toRawLeaveBiz(STAGE, q.bizType));
@@ -138,14 +202,38 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .orderBy('create_time', 'desc')
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
+  // ★ 2026-10-20：学生属性以档案最新值为准（快照列只留作审计）
+  await hydrateWithArchive(STAGE, rows, { conn: db });
   return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
+}
+
+/**
+ * ★ 批量取「学生当前状态」：`{ 学生id: student_status }`
+ *
+ * 列表要显示「学生现状」（区别于单据状态），但这是**实时值**、
+ * 不是异动单上的快照列，所以在 service 分页之后按页批量补，
+ * 一次 whereIn 拿完（不是每行查一次 —— 跨学段合并时可能有几百行）。
+ *
+ * ⚠️ 不过滤 `is_deleted`：软删的学生也要能看到状态，否则列表出现空白。
+ */
+export async function studentStatuses(ids: string[]): Promise<Record<string, number>> {
+  if (!ids.length) return {};
+  const rows = (await tbl(db, SRC, S, STAGE)
+    .whereIn('id', ids)
+    .select('id', 'student_status')) as Array<Record<string, any>>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[String(r.id)] = Number(r.student_status ?? 0);
+  return out;
 }
 
 export async function detail(id: string): Promise<LeaveRow | null> {
   const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).whereIn('apply_type', IN_SCOPE).first()) as
     | Record<string, any>
     | undefined;
-  return row ? decorate(row) : null;
+  if (!row) return null;
+  // ★ 2026-10-20：详情与列表同口径（档案最新值）
+  await hydrateWithArchive(STAGE, [row], { conn: db });
+  return decorate(row);
 }
 
 /** 汇总 */
@@ -209,6 +297,10 @@ export async function insert(conn: any, input: LeaveWriteInput): Promise<string>
     effect_date: input.leaveDate || todayStr(),
     expect_resume_date: input.expectResumeDate,
 
+    // ★ 复学单：发起申请时必填的复学班（休学/退学单为 NULL）
+    new_class_id: input.newClassId,
+    new_class_name: input.newClassName,
+
     apply_status: 1, // 待提交
     applicant_id: input.initiatorId,
     applicant_name: input.initiatorName,
@@ -230,24 +322,45 @@ export async function setStatus(
     .update({ apply_status: raw, update_time: new Date(), ...patch });
 }
 
-/** 大学无复学 → 空实现（保持三仓储签名一致） */
-export async function setResumeClass(): Promise<void> {
-  /* 大学没有复学，不涉及 */
+/**
+ * ★ 写入复学班（审批通过那一刻由 service 调；学管审批时可改班）
+ *   名字快照一起落库 —— 与实训同款（列表展示不用再反查班级名）
+ */
+export async function setResumeClass(
+  conn: any,
+  id: string,
+  classId: string,
+  className: string,
+): Promise<void> {
+  await tblTrx(conn, SRC, T, STAGE)
+    .where({ id })
+    .update({ new_class_id: classId, new_class_name: className });
 }
 
 /**
  * ★ 审批通过后：改 `t_class_student.student_status`
- *   休学 → 6 · 退学 → 7（大学无复学）
+ *   休学 → 6（休学）· 退学 → 7（退学）· 复学 → 5（正式在读），并回到复学班
+ *
+ * 【复学目标状态 = 5 正式在读，不是 8 实训中】
+ *   大学与初高同理（见 repo.classJh 的 2026-10-15 修复注释）：
+ *   `student_status` 是全系统主状态字段，出勤「应到名单」、统计都按它过滤；
+ *   大学学生一复学就被标成「实训中」会全线跟着错、页面还不报错。
  */
 export async function afterApproved(conn: any, id: string, operatorId: string): Promise<void> {
   const row = (await tblTrx(conn, SRC, T, STAGE).where({ id }).first()) as Record<string, any> | undefined;
   if (!row) return;
   const biz = (await toUnifiedLeaveBiz(STAGE, Number(row.apply_type))) ?? 0;
-  const newStatus = biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
+  const newStatus =
+    biz === 3 ? StudentStatus.STUDYING : biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
 
-  await tblTrx(conn, SRC, S, STAGE)
-    .where({ id: row.student_id })
-    .update({ student_status: newStatus, update_time: new Date(), update_by: operatorId });
+  const patch: Record<string, any> = {
+    student_status: newStatus,
+    update_time: new Date(),
+    update_by: operatorId,
+  };
+  // ★ 复学：回到复学班（service 在调本函数前已把复学班写进单据）
+  if (biz === 3 && row.new_class_id) patch.class_id = row.new_class_id;
+  await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 }
 
 /** 该学生是否有进行中的申请 */
@@ -255,7 +368,7 @@ export async function hasPending(studentId: string): Promise<boolean> {
   const row = await tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
     .whereIn('apply_type', IN_SCOPE)
-    .whereIn('apply_status', [1, 2, 3])
+    .whereIn('apply_status', PENDING_APPLY_STATUS)
     .first();
   return !!row;
 }

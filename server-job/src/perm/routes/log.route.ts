@@ -22,18 +22,28 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
+import { resolveLogRoleLabels } from '../services/perm.service';
 
 export const logRouter = Router();
 
 const TABLE = 't_perm_log';
 
-function toLogItem(r: any) {
+/**
+ * 行 → 接口对象
+ * @param roleLabel 已解析好的中文职位名（见 resolveLogRoleLabels）
+ *
+ * ★ 2026-10-20：`所属职位` 以前直接吐 `operator_role` 原值，
+ *   于是列表里出现 `SYS_STAFF` 这种英文编码（门户 token 只有粗粒度身份，
+ *   写日志时既没映射到业务职位、也没有备选来源）。现在统一走解析层：
+ *   编码→中文名，空值/门户级编码→按操作人现查真实职位。
+ */
+function toLogItem(r: any, roleLabel?: string) {
   return {
     id: r.id,
     logTime: r.log_time,
     operatorId: r.operator_id,
     operatorName: r.operator_name,
-    operatorRole: r.operator_role,
+    operatorRole: roleLabel ?? r.operator_role,
     moduleName: r.module_name,
     actionType: r.action_type,
     targetObj: r.target_obj,
@@ -45,6 +55,12 @@ function toLogItem(r: any) {
     createBy: r.create_by,
     isDeleted: !!r.is_deleted,
   };
+}
+
+/** 批量转接口对象（职位名一次解析，避免每行查两次库） */
+async function toLogItems(rows: any[]) {
+  const labels = await resolveLogRoleLabels(rows);
+  return rows.map((r, i) => toLogItem(r, labels[i]));
 }
 
 /** 组装筛选条件（列表 / 导出 / KPI 复用，保证口径一致） */
@@ -100,7 +116,7 @@ logRouter.get(
       .limit(q.size)
       .offset((q.page - 1) * q.size);
 
-    res.json(page(rows.map(toLogItem), Number(total), q));
+    res.json(page(await toLogItems(rows), Number(total), q));
   }),
 );
 
@@ -116,7 +132,8 @@ logRouter.get(
     const { id } = (req as any).validated as { id: string };
     const row = await db(TABLE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.LOG_NOT_FOUND, '日志不存在');
-    res.json(ok(toLogItem(row)));
+    const [roleLabel] = await resolveLogRoleLabels([row]);
+    res.json(ok(toLogItem(row, roleLabel)));
   }),
 );
 
@@ -159,7 +176,7 @@ logRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as Record<string, string | undefined>;
     const rows = await applyFilters(q).select('*').orderBy('log_time', 'desc').limit(10000);
-    const list = rows.map(toLogItem);
+    const list = await toLogItems(rows);
     res.json(ok({ total: list.length, list }));
   }),
 );

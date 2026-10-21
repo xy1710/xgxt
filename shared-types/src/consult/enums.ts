@@ -12,11 +12,31 @@ export enum Gender {
   FEMALE = 2,  // 女
 }
 
-/** 部门 */
+/**
+ * 部门
+ *
+ * ★ 2026-10-20 用户口径：「初中部和高中部分开，换成初中部、高中部、大学部」
+ *   → 原「初高部」拆成「初中部」+「高中部」，下拉顺序按 初中 → 高中 → 大学。
+ *
+ * ⚠️ 编码策略（值不动，避免洗数据）：
+ *    1 沿用旧「初高部」的值，只改名成「初中部」——存量 dept_code=1 的学生直接落到初中部；
+ *    4 新增「高中部」——不占 2 是为保住大学部存量数据，不占 3 是因为 3 已给就业部（PR#8）。
+ * ⚠️ 本枚举在 enums.ts / consult / finance / portal / perm 各有一份副本，改必须同步。
+ */
 export enum DeptCode {
-  JUNIOR_SENIOR = 1,  // 初高部
+  JUNIOR_SENIOR = 1,  // 初中部（成员名是历史命名，值不变以兼容存量数据）
   UNIVERSITY = 2,     // 大学部
+  /** ★ 2026-10-19：就业部（独立学段，与 enums.ts 保持一致） */
+  EMPLOYMENT = 3,     // 就业部
+  SENIOR = 4,         // 高中部（3 被就业部占用，见 shared-types/src/enums.ts）
 }
+
+/** 部门下拉顺序（初中部 → 高中部 → 大学部） */
+export const DEPT_OPTIONS: number[] = [
+  DeptCode.JUNIOR_SENIOR,
+  DeptCode.SENIOR,
+  DeptCode.UNIVERSITY,
+];
 
 /** 学生状态（全系统最重要的字段） */
 export enum StudentStatus {
@@ -48,6 +68,12 @@ export enum FeeType {
   MEAL = 3,          // 餐费
   INSURANCE = 4,     // 保险费
   TRIAL_FEE = 5,     // 试学费
+  /** 押金（★ 2026-10-15 新增，与公共字典 enums.ts 同步） */
+  DEPOSIT = 6,       // 押金
+  /** 校服（★ 2026-10-15 新增，与公共字典 enums.ts 同步） */
+  UNIFORM = 7,       // 校服
+  /** 补费（★ 2026-10-20 新增：试学转正尾款 / 差额补收，金额由老师自定义） */
+  SUPPLEMENT = 8,    // 补费
 }
 
 /** 缴费状态 */
@@ -55,7 +81,6 @@ export enum PayStatus {
   UNPAID = 1,    // 待缴
   PAID = 2,      // 待核对（已上传凭证，等财务核对）
   VERIFIED = 3,  // 已缴（财务核对通过、已入账）
-  OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
 }
 
@@ -88,9 +113,18 @@ export enum SourceModule {
 export const FEE_SOURCE_MODULE: Record<number, SourceModule> = {
   [FeeType.TUITION]: SourceModule.CONSULT,        // 正式学费 ← 咨询
   [FeeType.TRIAL_FEE]: SourceModule.CONSULT,      // 试学费   ← 咨询
-  [FeeType.ACCOMMODATION]: SourceModule.EDU,      // 住宿费   ← 教务
-  [FeeType.MEAL]: SourceModule.EDU,               // 餐费     ← 教务
-  [FeeType.INSURANCE]: SourceModule.EDU,          // 保险费   ← 教务
+  [FeeType.ACCOMMODATION]: SourceModule.CONSULT,  // 住宿费   ← 咨询（★ 2026-10-15 改：正式学费六项都由咨询发起）
+  [FeeType.MEAL]: SourceModule.CONSULT,           // 餐费     ← 咨询（同上）
+  [FeeType.INSURANCE]: SourceModule.CONSULT,      // 保险费   ← 咨询（同上）
+  [FeeType.DEPOSIT]: SourceModule.CONSULT,        // 押金     ← 咨询（★ 2026-10-15 新增类型）
+  [FeeType.UNIFORM]: SourceModule.CONSULT,        // 校服     ← 咨询（同上）
+  /**
+   * ★ 2026-10-20 补费 ← 咨询
+   *
+   * 场景：学生交了试学费、进班试学，试学结束后补缴尾款（或补差额）。
+   * 钱由咨询侧「收款与缴费」发起、老师手填金额，所以来源仍是咨询。
+   */
+  [FeeType.SUPPLEMENT]: SourceModule.CONSULT,     // 补费     ← 咨询（★ 2026-10-20）
 };
 
 /**
@@ -229,8 +263,10 @@ export const GENDER_NAME: Record<number, string> = {
 };
 
 export const DEPT_NAME: Record<number, string> = {
-  [DeptCode.JUNIOR_SENIOR]: '初高部',
+  [DeptCode.JUNIOR_SENIOR]: '初中部',
+  [DeptCode.SENIOR]: '高中部',
   [DeptCode.UNIVERSITY]: '大学部',
+  [DeptCode.EMPLOYMENT]: '就业部',
 };
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {
@@ -260,13 +296,15 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
+  [FeeType.SUPPLEMENT]: '补费',
+  [FeeType.DEPOSIT]: '押金',
+  [FeeType.UNIFORM]: '校服',
 };
 
 export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '待核对',
   [PayStatus.VERIFIED]: '已缴',
-  [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };
 

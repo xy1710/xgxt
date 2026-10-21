@@ -45,12 +45,14 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { today, fmtDate, fmtDateTime } from '../utils/date';
 import { validate } from '../middleware/validate';
+import { boolFlag } from '../utils/query';
 import { BizError } from '../middleware/errorHandler';
 import { sendNotice, NOTICE_TYPE } from '../utils/notice';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
 import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
 // ★ 信息流转：催费单新增/处理 → 推送班级管理模块（只读副本）
 import { syncFeeCallToClass } from '../services/urge-sync.service';
+import { checkPayDate, saveVoucherImage, PAY_METHOD, PAY_METHOD_NAME } from '../utils/feeVoucher';
 
 export const feeCallRouter = Router();
 
@@ -142,6 +144,16 @@ function decorate(row: any, operator: { userId: string; roles: string[] }): any 
     handleTime: fmtDateTime(row.handle_time),
     handleRemark: row.handle_remark || null,
 
+    /* ★ 2026-10-21：登记缴费五列（与初高 t_class_fee 同口径）——
+       催费页里就业的行也要能显示 实缴金额 / 缴费方式 / 缴费日期 / 凭证 */
+    payMethod: row.pay_method ?? null,
+    payMethodName: row.pay_method != null ? PAY_METHOD_NAME[Number(row.pay_method)] ?? '' : '',
+    paidAmount: row.paid_amount ?? null,
+    paidAmountText: row.paid_amount == null ? null : fenToYuanText(row.paid_amount),
+    payDate: fmtDate(row.pay_date),
+    voucherUrl: row.voucher_url || null,
+    payRemark: row.pay_remark || null,
+
     applicantId: row.applicant_id || null,
     applicantName: row.applicant_name || null,
 
@@ -162,8 +174,31 @@ const listSchema = z.object({
   keyword: z.string().optional(),
   feeType: z.coerce.number().int().optional(),
   classId: z.string().optional(),
-  callStatus: z.coerce.number().int().optional(),
+  /**
+   * 催费单状态：1 待催缴 / 2 催缴中 / 3 已缴清
+   *
+   * ★ 2026-10-20：支持多值（逗号分隔，如 `1,2`）。
+   *   催费页的「缴费状态」已统一成初高/大学那套（待缴/已缴/已核对/逾期/冻结），
+   *   其中「待缴」= 待催缴 + 催缴中 两种催费单状态，单选传不进来。
+   *   单值仍然照旧可用（`3` 就是只看已缴清），不影响就业模块自己的调用。
+   */
+  callStatus: z.union([z.coerce.number().int(), z.string()]).optional(),
+  /**
+   * 统一缴费状态（催费页用，与初高/大学同一套码：1待缴 2已缴 3已核对 4逾期 5冻结）
+   *
+   * ★ 2026-10-20：催费页「缴费状态」三部门统一后，就业侧不能再让前端自己折算
+   *   （「待缴」还要排掉已过期的、「逾期」要按应缴日派生），这里按展示口径翻译成
+   *   call_status + due_date 条件：
+   *     1 待缴 → call_status 1,2 且未过应缴日
+   *     2 已缴 → call_status 3（已缴清）
+   *     4 逾期 → call_status 1,2 且已过应缴日
+   *     3 已核对 / 5 冻结 → 就业没有这些状态 → 不出数据（不是忽略条件）
+   */
+  payStatus: z.coerce.number().int().optional(),
   onlyMine: z.coerce.boolean().optional(),
+  // ★ 2026-10-20：「仅看紧急」对就业也要生效 ——
+  //   就业行的 isUrgent 就是 overdue（逾期未缴清），这里按同一口径过滤。
+  onlyOverdue: boolFlag.optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
 });
@@ -186,9 +221,29 @@ feeCallRouter.get(
     }
     if (q.feeType !== undefined) base.andWhere('fee_type', q.feeType);
     if (q.classId) base.andWhere('class_id', q.classId);
-    if (q.callStatus !== undefined) base.andWhere('call_status', q.callStatus);
+    // 催费单状态：单值 / 逗号多值都支持（`1,2` = 待催缴 + 催缴中）
+    if (q.callStatus !== undefined && q.callStatus !== '') {
+      const arr = String(q.callStatus)
+        .split(',')
+        .map((s: string) => Number(s.trim()))
+        .filter((n: number) => Number.isInteger(n) && n > 0);
+      if (arr.length === 1) base.andWhere('call_status', arr[0]);
+      else if (arr.length > 1) base.whereIn('call_status', arr);
+    }
     if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
     if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
+    // 统一缴费状态 → 催费单状态 + 应缴日（口径见 payStatus 注释）
+    if (q.payStatus !== undefined) {
+      const t = today();
+      if (q.payStatus === 1) base.whereIn('call_status', [1, 2]).andWhere('due_date', '>=', t);
+      else if (q.payStatus === 2) base.where('call_status', 3);
+      else if (q.payStatus === 4) base.whereIn('call_status', [1, 2]).andWhere('due_date', '<', t);
+      else base.whereRaw('1 = 0'); // 已核对 / 冻结：就业无此状态
+    }
+    // 仅看逾期（= 仅看紧急）：已缴清的不算逾期，与 decorate 的 overdue 同口径
+    if (q.onlyOverdue) {
+      base.whereNot('call_status', FeeCallStatus.PAID).andWhere('due_date', '<', today());
+    }
 
     // ★ 班主任只看自己的班（数据范围）
     //   ★ 2026-10-08 修：补上项目经理 —— 原来只判班主任，
@@ -504,6 +559,99 @@ feeCallRouter.post(
     await syncFeeCallToClass(body.id);
 
     res.json(ok({ callStatus: body.callStatus }));
+  }),
+);
+
+/* ============================================================
+ * 5.5 登记缴费（对齐初高 · ★ 2026-10-21 用户要求）
+ *    POST /api/job/fee-call/voucher
+ *
+ * 【在做什么】
+ *   初高的催费行早就能「上传缴费凭证（登记缴费）」：缴费方式 / 实缴金额 /
+ *   缴费时间 / 备注 / 截图，五样一起落库。就业的催费单原来只有一个 call_status，
+ *   「钱怎么交的」完全没记录 → 催费页里就业的行操作列只能显示「—」。
+ *   本接口把那五项补到 t_job_fee_call（迁移 20261021_001）。
+ *
+ * 【状态怎么变】
+ *   登记成功 → call_status 置 3（已缴清），同时写 handle_time / handle_remark 留痕
+ *   （等于「班主任催完了、钱收到了」，与 /handle 的终态一致，但不覆盖原有催缴说明）。
+ *
+ * ⚠️ 仍然不产生财务账目：本模块只是催办工单，不写 sms_finance。
+ *    凭证只存在这张单上，供催费页「查看」和家长缴费核对用。
+ * ============================================================ */
+
+feeCallRouter.post(
+  '/voucher',
+  validate(
+    z.object({
+      id: z.string().min(1, '催费单ID必传'),
+      /** 缴费方式 1微信支付 2支付宝 3现金 */
+      payMethod: z.coerce.number().int().min(1).max(3, '缴费方式只能是 微信支付 / 支付宝 / 现金'),
+      /** 实缴金额（分）；允许与应缴（fee_amount）不同 */
+      paidAmount: z.coerce.number().int().positive('缴费金额必须大于 0'),
+      payDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '缴费时间格式应为 YYYY-MM-DD'),
+      remark: z.string().max(200, '备注最多 200 字').optional(),
+      /** 缴费截图；现金可不传 */
+      dataUrl: z.string().optional(),
+    }),
+  ),
+  wrap(async (req, res) => {
+    const body = (req as any).validated;
+    const operator = getOperator(req);
+
+    const dateErr = checkPayDate(body.payDate);
+    if (dateErr) throw new BizError(BizCode.PARAM_ERROR, dateErr);
+
+    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
+
+    // ★ 权限与 /handle 同款：该学生的班主任本人（或管理员）
+    const isHeadTeacher = row.head_teacher_id === operator.userId;
+    const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
+    if (!isHeadTeacher && !isAdmin && !operator.roles.includes('SUPER_TEST')) {
+      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有该学生的班主任能登记此催费单的缴费');
+    }
+
+    /* ---- 截图：现金不强制，微信/支付宝必须有（与初高同规则） ---- */
+    let voucherUrl: string | null = null;
+    if (body.dataUrl) {
+      const saved = saveVoucherImage(body.dataUrl, 'call');
+      if (!saved.ok) throw new BizError(BizCode.PARAM_ERROR, saved.message);
+      voucherUrl = saved.voucherUrl;
+    } else if (body.payMethod !== PAY_METHOD.CASH) {
+      throw new BizError(BizCode.PARAM_ERROR, '请上传缴费截图（微信支付 / 支付宝需要凭证，现金可不传）');
+    }
+
+    const patch: Record<string, any> = {
+      pay_method: body.payMethod,
+      paid_amount: body.paidAmount,
+      pay_date: body.payDate,
+      pay_remark: body.remark || null,
+      call_status: FeeCallStatus.PAID,
+      handle_time: new Date(),
+      handle_remark: body.remark || row.handle_remark || null,
+      update_time: new Date(),
+      update_by: operator.userId,
+    };
+    // 现金且没传截图：保留原来的凭证，不要把它清空
+    if (voucherUrl) patch.voucher_url = voucherUrl;
+
+    await db(TABLE).where({ id: body.id }).update(patch);
+
+    // 催缴状态变了 → 推给班级管理（只读副本），与 /handle 同口径
+    await syncFeeCallToClass(body.id);
+
+    res.json(
+      ok(
+        {
+          id: body.id,
+          voucherUrl: voucherUrl ?? (row.voucher_url || null),
+          callStatus: FeeCallStatus.PAID,
+          payMethodName: PAY_METHOD_NAME[body.payMethod] ?? '',
+        },
+        '缴费登记成功',
+      ),
+    );
   }),
 );
 

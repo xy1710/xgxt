@@ -19,6 +19,8 @@
 /数据库备份/
 /数据库导出/
 /server-job/uploads/
+# ★ 2026-10-20：数据对齐脚本落在这里的备份含真实业务数据快照，只留本机
+/server-job/exports/
 **/*.sql
 !server-job/sql/init/*.sql
 
@@ -26,6 +28,12 @@
 **/*.log
 **/*.bak
 /server-job/_p12-backup-env-*
+
+# Local AI/agent collaboration notes
+#
+# ★ 2026-10-20：AGENTS.md 是写给本机 AI 的协作说明，含个人工作习惯与本地
+#   环境细节，只留本机，不随仓库分发到 GitHub。
+/AGENTS.md
 
 # Temporary diagnostics and test output
 /.workbuddy/

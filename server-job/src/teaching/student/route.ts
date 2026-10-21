@@ -55,14 +55,14 @@ function boolTrue(v: unknown): boolean {
 }
 function reqStage(v: unknown): StudentStage {
   if (!isStudentStage(v)) {
-    throw new BizError(BizCode.PARAM_ERROR, 'stage 必填（jh / class / job / edu）');
+    throw new BizError(BizCode.PARAM_ERROR, 'stage 必填（jh / class / job / emp / edu）');
   }
   return v;
 }
 function optStage(v: unknown): StudentStage | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   if (!isStudentStage(v)) {
-    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / job / edu');
+    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / job / emp / edu');
   }
   return v;
 }
@@ -106,7 +106,18 @@ teachingStudentRouter.get(
   }),
 );
 
-/** 3. 保存（新增 / 修改） */
+/** 3. 详情扩展区块（考试信息 / 调宿记录 / 宿舍长 —— 2026-10-15 详情分签改版） */
+teachingStudentRouter.get(
+  '/extras',
+  wrap(async (req, res) => {
+    const stage = reqStage(req.query.stage);
+    const id = str(req.query.id);
+    if (!id) throw new BizError(BizCode.PARAM_ERROR, '缺少学生ID');
+    res.json(ok(await svc.getStudentExtras(stage, id, req.user)));
+  }),
+);
+
+/** 4. 保存（新增 / 修改） */
 teachingStudentRouter.post(
   '/save',
   wrap(async (req, res) => {
@@ -131,6 +142,7 @@ teachingStudentRouter.post(
         graduateSchool: strOrNull(b.graduateSchool),
         enrollDate: dateStr(b.enrollDate),
         phone: strOrNull(b.phone),
+        parentName: strOrNull(b.parentName),
         parentPhone: strOrNull(b.parentPhone),
         homeAddress: strOrNull(b.homeAddress),
         idCard: strOrNull(b.idCard),
@@ -141,6 +153,8 @@ teachingStudentRouter.post(
         dormId: strOrNull(b.dormId),
         dormNo: strOrNull(b.dormNo),
         bedNo: strOrNull(b.bedNo),
+        netAccount: strOrNull(b.netAccount),
+        netInitPassword: strOrNull(b.netInitPassword),
         remark: strOrNull(b.remark),
         extra: b.extra && typeof b.extra === 'object' ? b.extra : null,
         syncFreeze: b.syncFreeze === undefined ? undefined : boolTrue(b.syncFreeze),
@@ -199,5 +213,37 @@ teachingStudentRouter.get(
   '/classes',
   wrap(async (req, res) => {
     res.json(ok(await svc.listStudentClasses(req.user), '查询成功'));
+  }),
+);
+
+/** 8. 升云 · 目标班级（大学部 + 状态=开放；2026-10-20 批注） */
+teachingStudentRouter.get(
+  '/upgrade-targets',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listUpgradeTargets(req.user), '查询成功'));
+  }),
+);
+
+/**
+ * 9. 升云（初高部 → 大学部开放班级，批量）
+ *
+ * body: { studentIds: string[], targetClassId: string, remark?: string }
+ * 只适用于初高部学生 → 前端按钮只在该场景出现；后端仍按两个学段权限 + 班级状态兜底校验。
+ */
+teachingStudentRouter.post(
+  '/upgrade-cloud',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const studentIds = Array.isArray(b.studentIds) ? b.studentIds.map((x: unknown) => String(x)) : [];
+    const r = await svc.upgradeToUniversity(
+      {
+        studentIds,
+        targetClassId: str(b.targetClassId),
+        remark: strOrNull(b.remark) ?? null,
+      },
+      req.user,
+    );
+    const tip = `已升云 ${r.moved} 人 → ${r.toClassName}`;
+    res.json(ok(r, r.skipped.length ? `${tip}，${r.skipped.length} 人未处理` : tip));
   }),
 );

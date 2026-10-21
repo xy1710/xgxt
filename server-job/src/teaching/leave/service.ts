@@ -8,17 +8,20 @@
  *   ③ 审批引擎 = `utils/approval.ts`（submitApproval / doApprove / doReject / doCancel）
  *
  * 【本域特有的一件事：复学班】
- *   复学**必须在终审通过那一刻确定落到哪个班**，而且这个决定是**学管审批时选的**。
- *   所以 `approve` 多收一个 `newClassId`：
- *     · 只有「复学」类型 + 审批走完时必填（没给就报错，不会悄悄通过）
+ *   复学**必须在终审通过那一刻确定落到哪个班**，并把这个班写进学生主档。
+ *   这个班由**发起人填写**（2026-10-16 起：`create` 时 `newClassId` 必填），
+ *   学管终审时仍可改；写库发生在终审通过那一刻：
  *     · 顺序上是**先 doApprove（权限校验）→ 再写复学班**，越权的人碰不到数据
  *     · 写完之后**重新读一次单**再执行副作用（否则 afterApproved 读不到复学班）
+ *     · 老单（建单时没有复学班）在终审仍必须补选，两者都没有就报错、不悄悄通过
  */
 
 import {
   ApprovalBizType,
   ApprovalStatus,
   BizCode,
+  STUDENT_STATUS_NAME,
+  StudentStatus,
   canApprove,
   canInitiate,
   isMyApproval,
@@ -54,6 +57,11 @@ import {
   TEACHING_STAGES,
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
+import {
+  LEAVE_DATE_WINDOW_DAYS,
+  daysFromToday,
+  isWithinLeaveDateWindow,
+} from '../shared/format';
 import { classNameOf, listClassesOfStages } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption } from './types';
 import * as repoJh from './repo.classJh';
@@ -67,6 +75,22 @@ function bizToApproval(bizType: number): string {
   return ApprovalBizType.QUIT;
 }
 
+/**
+ * ★ 终态学生状态：**不再办理任何学籍异动**
+ *
+ * 退学 / 流失 / 已就业这三种状态一旦落到学生身上，这个人就不再是「在读学员」，
+ * 后面的休学/退学/复学都不该再对他开放 —— 否则会出现「先退学、再休学」这种
+ * 自相矛盾的单据，且审批通过时会把已经终结的状态又改回去（把数据改坏）。
+ *
+ * 【口径】`退学(7)` + `流失(11)` + `已就业(10)`（用户 2026-10-16 确认）。
+ *   两个口子都要堵：① 学生下拉候选名单剔除；② `create()` 再拦一次（下拉可被绕过）。
+ */
+const TERMINAL_STUDENT_STATUSES: number[] = [
+  StudentStatus.QUIT,
+  StudentStatus.LOST,
+  StudentStatus.EMPLOYED,
+];
+
 /* ============================================================
  * 仓储统一接口
  * ============================================================ */
@@ -74,7 +98,16 @@ function bizToApproval(bizType: number): string {
 type Repo = {
   list: (q: LeaveListQuery) => Promise<{ rows: LeaveRow[]; total: number }>;
   detail: (id: string) => Promise<LeaveRow | null>;
-  studentOptions: (keyword: string, limit: number) => Promise<StudentOption[]>;
+  studentOptions: (
+    keyword: string,
+    limit: number,
+    /**
+     * `onlySuspended` = 只放休学中的；
+     * `excludeStatuses` = 剔除这些**学生状态**的行；
+     * `excludeWithPending` = 剔除**已有未办结申请**的学生（与 hasPending 同口径）
+     */
+    opts?: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean },
+  ) => Promise<StudentOption[]>;
   findStudent: (id: string) => Promise<{
     no: string;
     name: string;
@@ -98,6 +131,8 @@ type Repo = {
   setResumeClass: (conn: any, id: string, classId: string, className: string) => Promise<void>;
   afterApproved: (conn: any, id: string, operatorId: string) => Promise<void>;
   hasPending: (studentId: string) => Promise<boolean>;
+  /** ★ 批量取学生**当前**状态（列表的「学生现状」列用） */
+  studentStatuses: (ids: string[]) => Promise<Record<string, number>>;
 };
 
 const REPOS: Record<TeachingStage, Repo> = {
@@ -196,6 +231,28 @@ function withActions(
  * 列表 / 详情
  * ============================================================ */
 
+/**
+ * 列表
+ *
+ * 【筛选条件分两类，必须区别对待】
+ *   ① **能下推到 SQL 的**：学段 / 类型 / 状态 / 关键字 / 班级 / 日期区间
+ *      —— 仓储直接拼进 where，分页与 total 都是数据库算的，天然正确。
+ *   ② **只能算出来的**：`onlyMine`（只看待我审批）
+ *      —— 它取决于「审批单当前节点 + 当前操作人的角色」，由 withActions() 判定，
+ *      SQL 里表达不了。
+ *
+ * 【所以有两条路径】
+ *   · 快路径：单学段 + 不开 onlyMine → 直接交给仓储分页（数据库分页，快且准）
+ *   · 慢路径：跨学段合并 或 开了 onlyMine → **取全量池 → 补审批单 → 算出 canApprove
+ *     → 过滤 → 排序 → 最后才分页**
+ *
+ * ★★ 顺序绝不能反（这是本页「筛选不生效」的真正原因）
+ *   旧实现是「先按页切片，再对切片做 onlyMine 过滤」，后果：
+ *     · size=20 时，数据库给回 20 条，其中只有 2 条待我审批 → 页面显示 2 条；
+ *       真正的第 3 条其实在后面几页里，用户翻页也看不到（因为每页都只过滤本页）
+ *     · total 取的是**过滤前**的总数 → 分页器显示「共 47 条」，翻到第 3 页却是空的
+ *   用户视角就是「筛选不生效 / 数据丢了」。
+ */
 export async function list(
   q: LeaveListQuery,
   user: any,
@@ -204,36 +261,89 @@ export async function list(
   const stages: TeachingStage[] = q.stage ? [q.stage] : await visibleStages(user);
   if (!stages.length) return { rows: [], total: 0 };
 
-  if (stages.length === 1) {
-    const stage = stages[0];
-    await assertStageView(user, stage);
-    const { rows, total } = await REPOS[stage].list(q);
-    const ap = await loadApprovals(rows.map((r) => r.id));
-    let out = rows.map((r) => withActions(r, ap[r.id], op));
-    if (q.onlyMine) out = out.filter((r) => r.canApprove);
-    return { rows: out, total: q.onlyMine ? out.length : total };
+  // ★ 指定了学段：先确认有权限，再确认「该学段支持这个类型」
+  //   不兼容时**明确报错**，因为旧实现会走 toRawLeaveBiz → null →
+  //   `where biz_type = NULL` → 恒不成立 → 静默返回空列表（用户以为「没数据」）。
+  if (q.stage) {
+    await assertStageView(user, q.stage);
+    if (q.bizType && !LEAVE_STAGE_BIZ[q.stage].includes(q.bizType)) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        `「${TEACHING_STAGE_NAME[q.stage]}」不支持「${LEAVE_BIZ_TYPE_NAME[q.bizType] || '该类型'}」`,
+      );
+    }
   }
 
-  const per = Math.max(q.size, 20);
+  // ---------- 快路径：单学段、且不需要按「待我审批」过滤 ----------
+  if (stages.length === 1 && !q.onlyMine) {
+    const { rows, total } = await REPOS[stages[0]].list(q);
+    const ap = await loadApprovals(rows.map((r) => r.id));
+    const out = rows.map((r) => withActions(r, ap[r.id], op));
+    await attachStudentStatus(out);
+    return { rows: out, total };
+  }
+
+  /**
+   * ---------- 慢路径：取全量池后在内存里过滤 / 排序 / 分页 ----------
+   *
+   * ⚠️ 抓取上限 `MERGE_FETCH_LIMIT`：池子是按「单学段最多 500 条」抓的。
+   *    单校规模（在办单据几十条）远够用；真到了某学段未办结单据超过 500 条，
+   *    这里要改成「按审批节点把 onlyMine 下推到 SQL」——已在注释里留记号，
+   *    别让这个上限悄悄变成「数据看不全」。
+   */
+  const MERGE_FETCH_LIMIT = 500;
   const all: LeaveRow[] = [];
-  let total = 0;
   for (const stage of stages) {
+    // 类型与学段不兼容的学段直接不查（如「复学」不存在于大学）
+    if (q.bizType && !LEAVE_STAGE_BIZ[stage].includes(q.bizType)) continue;
     try {
       await assertStageView(user, stage);
-      const { rows, total: t } = await REPOS[stage].list({ ...q, page: 1, size: per });
-      total += t;
+      const { rows } = await REPOS[stage].list({ ...q, page: 1, size: MERGE_FETCH_LIMIT });
       all.push(...rows);
     } catch {
-      /* 没权限的学段跳过 */
+      /* 没权限的学段跳过（与 summary 同口径） */
     }
   }
   all.sort((a, b) => String(b.createTime || '').localeCompare(String(a.createTime || '')));
+
+  const ap = await loadApprovals(all.map((r) => r.id));
+  let pool = all.map((r) => withActions(r, ap[r.id], op));
+  if (q.onlyMine) pool = pool.filter((r) => r.canApprove);
+
+  // ★ 过滤之后才分页，且 total 就是过滤后的池子长度 —— 分页器与内容永远自洽
   const start = (q.page - 1) * q.size;
-  const slice = all.slice(start, start + q.size);
-  const ap = await loadApprovals(slice.map((r) => r.id));
-  let out = slice.map((r) => withActions(r, ap[r.id], op));
-  if (q.onlyMine) out = out.filter((r) => r.canApprove);
-  return { rows: out, total };
+  const page = pool.slice(start, start + q.size);
+  await attachStudentStatus(page); // 只给这一页补「学生现状」，不必给整池补
+  return { rows: page, total: pool.length };
+}
+
+/**
+ * ★ 给列表行补上「学生**当前**状态」（实时值，不是建单快照）
+ *
+ * 【为什么要在分页之后、由 service 统一补】
+ *   · 这是**实时**值：读学生表，和异动单上的快照字段语义不同，不该混进仓储的 decorate；
+ *   · 跨学段合并时 rows 来自不同库 → 必须按 stage 分组，各自用本学段的连接查；
+ *   · 按页批量 whereIn（不是每行一次），避免跨学段池子几百行时打几百次查询。
+ *
+ * 查不到（学生被物理删掉 / id 不匹配）时留 `null`，前端显示 '—'，不能编一个状态出来。
+ */
+async function attachStudentStatus(rows: LeaveRow[]): Promise<void> {
+  if (!rows.length) return;
+  for (const stage of [...new Set(rows.map((r) => r.stage))]) {
+    const ids = rows.filter((r) => r.stage === stage).map((r) => r.studentId);
+    let map: Record<string, number> = {};
+    try {
+      map = await REPOS[stage].studentStatuses(ids);
+    } catch {
+      /* 学生表查不到就留空，不影响列表本身 */
+    }
+    for (const r of rows) {
+      if (r.stage !== stage) continue;
+      const st = map[r.studentId];
+      r.studentStatus = st === undefined ? null : st;
+      r.studentStatusName = st === undefined ? '' : STUDENT_STATUS_NAME[st] || '';
+    }
+  }
 }
 
 export async function detail(id: string, user: any): Promise<LeaveDetail> {
@@ -262,7 +372,9 @@ export async function detail(id: string, user: any): Promise<LeaveDetail> {
       time: l.create_time ? String(l.create_time).replace('T', ' ').slice(0, 19) : null,
     }));
   }
-  return { record: withActions(row, approval, op), logs };
+  const record = withActions(row, approval, op);
+  await attachStudentStatus([record]); // 详情也显示「学生现状」，与列表同一口径
+  return { record, logs };
 }
 
 const ACTION_NAME: Record<number, string> = { 1: '提交', 2: '同意', 3: '驳回', 4: '撤回' };
@@ -271,14 +383,43 @@ const ACTION_NAME: Record<number, string> = { 1: '提交', 2: '同意', 3: '驳�
  * 下拉
  * ============================================================ */
 
+/**
+ * 学生下拉
+ *
+ * ★ 复学（`bizType = 3`）**只能挑当前处于休学的学生**：
+ *   复学 = 把休学的人接回来，若下拉里混进在读/退学的人，用户很容易选错，
+ *   而错误直到审批通过（改学生状态那一刻）才暴露，已经晚了。
+ *   → 在下拉这一层就把名单收窄到 `student_status = 休学(6)`。
+ *
+ * ★★ 终态学生（退学 7 / 流失 11 / 已就业 10）**任何类型都不出现**：
+ *   退回学之后又出现在「休学/退学」的候选里，用户就能给他再开一张单，
+ *   审批通过时会把已经终结的学生状态改写掉（见 TERMINAL_STUDENT_STATUSES）。
+ *   → 与类型无关，一律剔除；`onlySuspended` 与它叠加（复学时两者同时成立）。
+ *
+ * ★★ 已有**未办结**申请的学生也不出现（2026-10-16 用户要求）：
+ *   以前只有 `create()` 里的 `hasPending` 拦一道 —— 用户在下拉里照样能看到这个人，
+ *   费劲选完、填完原因，提交时才被拒「请勿重复提交」，白跑一趟。
+ *   现在在下拉这一层就不列。
+ *   ⚠️ 这里的 `excludeWithPending` 与 `create()` 的 `hasPending` **共用仓储里的同一份
+ *      「未办结状态」常量**，两处口径不可能分叉（分叉 = 下拉选得到却提交失败）。
+ *
+ * ⚠️ 只收窄下拉是**不够的**：下拉是可以绕过的（直接调接口）。
+ *   所以 `create()` 里还有同样的校验，两处口径必须一致（同一个常量）。
+ */
 export async function studentOptions(
   stage: TeachingStage,
   keyword: string,
   limit: number,
   user: any,
+  bizType?: number,
 ): Promise<StudentOption[]> {
   await assertStageView(user, stage);
-  return REPOS[stage].studentOptions(keyword, limit);
+  const onlySuspended = bizType === LEAVE_BIZ_TYPE.RESUME;
+  return REPOS[stage].studentOptions(keyword, limit, {
+    onlySuspended,
+    excludeStatuses: TERMINAL_STUDENT_STATUSES,
+    excludeWithPending: true,
+  });
 }
 
 export async function classOptions(user: any) {
@@ -303,7 +444,7 @@ export async function create(body: LeaveSaveBody, user: any): Promise<{ id: stri
     throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有班主任 / 项目经理能发起');
   }
 
-  // ★ 学段是否支持该类型（大学没有复学）
+  // ★ 学段是否支持该类型（2026-10-16 起三学段均支持复学，矩阵兜底仍然保留）
   if (!LEAVE_STAGE_BIZ[stage].includes(body.bizType)) {
     throw new BizError(
       BizCode.PARAM_ERROR,
@@ -314,6 +455,67 @@ export async function create(body: LeaveSaveBody, user: any): Promise<{ id: stri
   const repo = REPOS[stage];
   const stu = await repo.findStudent(body.studentId);
   if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
+
+  /**
+   * ★ 终态学生（退学 7 / 流失 11 / 已就业 10）不能发起任何学籍异动
+   *
+   * 下拉里已经剔除了，但**下拉可以被绕过**（直接 POST /create）→ 这里必须再拦一次。
+   * 不拦的后果不是「多一张单子」那么轻：审批通过时 `afterApproved` 会把
+   * `student_status` 从「退学」改写成「休学」/「实训中」，把已经终结的学生
+   * 又改回在册状态，出勤/统计/宿舍全线跟着错。
+   */
+  if (stu.studentStatus != null && TERMINAL_STUDENT_STATUSES.includes(stu.studentStatus)) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `${stu.name} 当前是「${STUDENT_STATUS_NAME[stu.studentStatus] || '未知'}」，` +
+        `已不能再发起学籍异动申请（退学 / 流失 / 已就业均为终态）`,
+    );
+  }
+
+  /**
+   * ★ 复学：只有「当前处于休学」的学生办得通
+   *
+   * 下拉里已经过滤了，但**下拉可以被绕过**（直接 POST /create），
+   * 所以这里必须再拦一次 —— 否则能给在读生/退学生开出复学单，
+   * 审批通过时会把学生状态直接改成「实训中」，把在册学生改坏。
+   */
+  if (body.bizType === LEAVE_BIZ_TYPE.RESUME && stu.studentStatus !== StudentStatus.SUSPENDED) {
+    const cur = stu.studentStatus ?? -1;
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `只有「休学」中的学生才能办复学：${stu.name} 当前是「${STUDENT_STATUS_NAME[cur] || '未知'}」`,
+    );
+  }
+
+  /**
+   * ★ 复学必须填写「复学班级」（2026-10-16：由「审批时选」改为「发起申请时填」）
+   *
+   * 复学 = 回到某个班上课，这个班本来就必须有人定；原来放在学管终审时选，
+   * 结果是**发起人提交时不用想清楚、学管审批时才被迫猜**。
+   * 现在改成发起申请时必填，学管审批时仍可改（见 approve()）。
+   * ⚠️ 同样不能只靠前端：表单可以被绕过 → 服务端必须拦。
+   */
+  if (body.bizType === LEAVE_BIZ_TYPE.RESUME && !body.newClassId) {
+    throw new BizError(BizCode.PARAM_ERROR, '复学必须填写复学班级');
+  }
+
+  /**
+   * ★ 异动日期必须落在「今天 ± 10 天」内
+   *
+   * 前端 picker 已经用 disabled-date 禁掉了窗口外的日期，但**表单可以被绕过**
+   * （直接 POST /create）→ 服务端必须再拦一次。
+   * 这个窗口不是防坏人，是防手滑：把 2026-10-09 写成 2025-10-09 这种错，
+   * 列表上完全看不出来，却会让出勤 / 按天退费 / 宿舍退宿整体错位。
+   * 窗口天数与前端同源：`LEAVE_DATE_WINDOW_DAYS`（由 /meta 下发）。
+   */
+  if (body.leaveDate && !isWithinLeaveDateWindow(body.leaveDate)) {
+    const diff = daysFromToday(body.leaveDate);
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `异动日期只能选今天前后 ${LEAVE_DATE_WINDOW_DAYS} 天内的日期：` +
+        `填的 ${body.leaveDate} 距今天 ${diff === null ? '无法识别（需 YYYY-MM-DD）' : `${Math.abs(diff)} 天`}`,
+    );
+  }
 
   if (await repo.hasPending(body.studentId)) {
     throw new BizError(BizCode.STUDENT_LEAVE_DUPLICATE, '该学生已有进行中的申请，请勿重复提交');
@@ -473,13 +675,17 @@ export async function approve(
     finished = r.finished;
     nextStatus = Number(r.status);
 
-    // ② ★ 复学：**批到"通过"那一刻**才落复学班，且必须选
+    // ② ★ 复学：批到"通过"那一刻**才落复学班**
+    //   班级优先取**本次审批传的**（学管可在审批时改），没传就用
+    //   **发起申请时填的**（`row.newClassId`，2026-10-16 起建单必填）；
+    //   两者都没有（老单）才报错 —— 不悄悄通过。
     if (row.bizType === LEAVE_BIZ_TYPE.RESUME && finished) {
-      if (!body.newClassId) {
+      const newClassId = body.newClassId || row.newClassId || '';
+      if (!newClassId) {
         throw new BizError(BizCode.PARAM_ERROR, '复学审批必须选定复学班级');
       }
-      const clsName = await classNameOf(stage, body.newClassId);
-      await REPOS[stage].setResumeClass(trx, id, body.newClassId, clsName);
+      const clsName = await classNameOf(stage, newClassId);
+      await REPOS[stage].setResumeClass(trx, id, newClassId, clsName);
     }
 
     await REPOS[stage].setStatus(trx, id, nextStatus);

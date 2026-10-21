@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -197,6 +198,64 @@ const EXPECT_DBS = [
   ['sms_perm', '权限管理', 'sql'],
 ];
 
+/** 常见便携版 MySQL 安装位置（找不到 bin/mysqld.exe 的目录会被自动跳过） */
+function portableMysqlCandidates() {
+  const bases = [
+    process.env.MYSQL_HOME,
+    'C:/Users/jzh/mysql/mysql-8.0.46-winx64',
+    'C:/mysql', 'C:/tools/mysql',
+    'D:/mysql', 'D:/MySQL',
+    path.join(ROOT, '..', 'mysql'),
+    path.join(ROOT, 'mysql'),
+  ].filter(Boolean);
+  const hits = [];
+  for (const base of bases) {
+    const mysqld = path.join(base, 'bin', 'mysqld.exe');
+    if (fs.existsSync(mysqld)) hits.push({ mysqld, ini: path.join(base, 'my.ini') });
+  }
+  return hits;
+}
+
+/**
+ * ★ 3306 没在监听时自动拉起便携版 MySQL（2026-10-15）
+ *
+ * 目标机器常常只带便携版 MySQL（没有注册 Windows 服务），用户没东西可手动启动，
+ * 会卡死在「连不上 MySQL：localhost:3306 没有在监听」这一步。
+ *
+ * 行为：按候选路径找到 bin/mysqld.exe → 用同目录 my.ini 以「分离进程」方式启动
+ * （detached + unref，本脚本退出后 MySQL 继续跑）→ 最多等 30 秒端口就绪。
+ * 启动成功就不算错误；失败才报错并给出手动指引。
+ */
+async function tryAutoStartMysql(host, port) {
+  const candidates = portableMysqlCandidates();
+  if (candidates.length === 0) {
+    info('未找到便携版 MySQL（已尝试 MYSQL_HOME、C:/mysql、D:/mysql 等常见位置）。');
+    return false;
+  }
+  for (const { mysqld, ini } of candidates) {
+    try {
+      const args = ini && fs.existsSync(ini) ? [`--defaults-file=${ini}`] : [];
+      const child = spawn(mysqld, args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      process.stdout.write(
+        `       ${paint(C.gray, '检测到 ' + path.dirname(path.dirname(mysqld)) + '，正在自动启动 MySQL ...')}\n`,
+      );
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        if (await tcpAlive(host === 'localhost' ? '127.0.0.1' : host, port, 1000)) return true;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    } catch {
+      /* 换下一个候选路径 */
+    }
+  }
+  return false;
+}
+
 /** 用 mysql2（若装了）连库；没装就退回 TCP 探活 */
 async function probeMysql() {
   const host = env.get('DB_HOST') || 'localhost';
@@ -205,11 +264,28 @@ async function probeMysql() {
   const password = env.get('DB_PASSWORD') || '';
 
   // 先探端口
-  const portAlive = await tcpAlive(host === 'localhost' ? '127.0.0.1' : host, port);
+  let portAlive = await tcpAlive(host === 'localhost' ? '127.0.0.1' : host, port);
+  if (!portAlive && process.platform === 'win32') {
+    // ★ 未监听 → 先尝试自动拉起便携版 MySQL，而不是直接报错停下
+    portAlive = await tryAutoStartMysql(host, port);
+    if (portAlive) ok(`MySQL 原本没在运行，已自动启动（${host}:${port}）`);
+  }
   if (!portAlive) {
     bad(`连不上 MySQL：${host}:${port} 没有在监听`);
-    info('请确认 MySQL 服务已启动（Windows 服务里找 MySQL / mysql57 / mysql80）');
-    info('若 MySQL 装了但没启动，在“服务”里手动启动，或管理员 cmd 执行：net start mysql57');
+
+    // ★ 2026-10-16：提示必须说到点上。这台机器的 MySQL 是 D:\mysql 绿色版，
+    //   **没有注册成 Windows 服务**，所以「去服务里找 MySQL / net start mysql57」
+    //   这种通用建议对它是错的，用户照着做只会白折腾（实测踩过）。
+    const portable = ['D:\\mysql', 'C:\\mysql', path.join(ROOT, '..', 'mysql')]
+      .find((b) => fs.existsSync(path.join(b, 'bin', 'mysqld.exe')));
+    if (portable) {
+      info(`本机的 MySQL 是绿色版（${portable}），没有注册成 Windows 服务，重启后不会自动运行。`);
+      info(`两个办法：① 直接跑「一键启动.bat」，它现在会自动把 MySQL 拉起来；`);
+      info(`            ② 手动双击 ${portable}\\start_mysql.bat，再重跑本自检。`);
+    } else {
+      info('请确认 MySQL 服务已启动（Windows 服务里找 MySQL / mysql57 / mysql80）');
+      info('若 MySQL 装了但没启动，在“服务”里手动启动，或管理员 cmd 执行：net start mysql57');
+    }
     return;
   }
   ok(`MySQL 端口 ${host}:${port} 可以连接`);

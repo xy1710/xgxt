@@ -26,6 +26,7 @@
 
     <!-- ============ 搜索区 ============ -->
     <el-card shadow="never" class="search-card">
+      <!-- ★ 2026-10-19：筛选全部「选完即查」（@change → handleSearch），不用再点查询 -->
       <el-form :model="query" inline>
         <el-form-item label="关键字">
           <el-input
@@ -34,10 +35,11 @@
             clearable
             style="width: 180px"
             @keyup.enter="handleSearch"
+            @clear="handleSearch"
           />
         </el-form-item>
         <el-form-item label="费用类别">
-          <el-select v-model="query.feeType" placeholder="全部" clearable style="width: 120px">
+          <el-select v-model="query.feeType" placeholder="全部" clearable style="width: 120px" @change="handleSearch">
             <el-option
               v-for="(name, value) in FEE_CALL_CATEGORY_NAME"
               :key="value"
@@ -47,7 +49,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="催缴状态">
-          <el-select v-model="query.callStatus" placeholder="全部" clearable style="width: 120px">
+          <el-select v-model="query.callStatus" placeholder="全部" clearable style="width: 120px" @change="handleSearch">
             <el-option
               v-for="(name, value) in FEE_CALL_STATUS_NAME"
               :key="value"
@@ -65,10 +67,11 @@
             end-placeholder="结束"
             value-format="YYYY-MM-DD"
             style="width: 240px"
+            @change="handleSearch"
           />
         </el-form-item>
         <el-form-item v-if="!isHeadTeacher">
-          <el-checkbox v-model="query.onlyMine">只看我发起的</el-checkbox>
+          <el-checkbox v-model="query.onlyMine" @change="handleSearch">只看我发起的</el-checkbox>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>

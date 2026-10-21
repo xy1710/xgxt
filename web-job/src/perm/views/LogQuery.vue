@@ -156,6 +156,23 @@ function actionTagClass(a: string): string {
 
 const isFail = (r: string): boolean => r === '失败';
 
+/**
+ * 所属职位 → 胶囊用的数组
+ *
+ * ★ 2026-10-20 按用户要求（截图对比「账号管理」的所属职位列）：
+ *   原来这一列是 `{{ l.operatorRole }}` 裸文本，界面上直接显示 `SYS_STAFF` 这种英文编码，
+ *   且字体颜色是 .desc 的灰 —— 与「账号管理」里那种中文胶囊完全两个样子。
+ *   现在跟账号管理保持同一套观感：中文职位名 + `.tag.b` 胶囊，多职位拆成多个胶囊。
+ *   （编码 → 中文名的解析在后端做，见 perm.service.ts 的 resolveLogRoleLabels；
+ *     前端只负责显示，拿到的已经是中文。）
+ */
+function roleList(raw?: string): string[] {
+  return (raw || '')
+    .split('、')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /* ============================================================
  * 三、日志详情（原型 openLogDetail）
  * ============================================================ */
@@ -302,7 +319,7 @@ async function doExport(): Promise<void> {
               <tr>
                 <th style="width: 142px">操作时间</th>
                 <th style="width: 130px">操作人</th>
-                <th style="width: 110px">所属角色</th>
+                <th style="width: 118px">所属职位</th>
                 <th style="width: 100px">操作模块</th>
                 <th style="width: 80px">操作类型</th>
                 <th>操作对象</th>
@@ -321,7 +338,18 @@ async function doExport(): Promise<void> {
               >
                 <td class="desc num">{{ l.logTime }}</td>
                 <td><b>{{ l.operatorName }}</b></td>
-                <td class="desc">{{ l.operatorRole || '—' }}</td>
+                <td>
+                  <!-- 与「账号管理 → 所属职位」同一套观感：中文名 + .tag.b 胶囊
+                       ★ 2026-10-20 用户第二次指出「所属职位这个字段与下面的职位对齐，不要歪着」：
+                         胶囊盒子虽然在 14px（与表头文字同一起点），但胶囊自带 8px 左右内边距，
+                         胶囊**里的文字**实际落在 22px，肉眼就是表头比内容偏左 8px。
+                         `.tags` 用 -8px 外边距把胶囊整体往左顶回去，让胶囊文字与表头文字
+                         对齐（见 shared-ui.css 的 .tb .tags 注释）。 -->
+                  <span v-if="roleList(l.operatorRole).length" class="tags">
+                    <span v-for="n in roleList(l.operatorRole)" :key="n" class="tag b">{{ n }}</span>
+                  </span>
+                  <span v-else class="desc">—</span>
+                </td>
                 <td>{{ l.moduleName }}</td>
                 <td>
                   <span :class="actionTagClass(l.actionType)">{{ l.actionType }}</span>
@@ -380,8 +408,11 @@ async function doExport(): Promise<void> {
           <div class="f"><label>操作时间</label><div class="num">{{ cur.logTime }}</div></div>
           <div class="f"><label>操作人</label><div><b>{{ cur.operatorName }}</b></div></div>
           <div class="f">
-            <label>所属角色</label>
-            <div><span class="tag b">{{ cur.operatorRole || '—' }}</span></div>
+            <label>所属职位</label>
+            <div>
+              <span v-if="cur.operatorRole" class="tag b">{{ cur.operatorRole }}</span>
+              <span v-else class="desc">—</span>
+            </div>
           </div>
           <div class="f"><label>操作模块</label><div>{{ cur.moduleName }}</div></div>
           <div class="f"><label>操作类型</label><div>{{ cur.actionType }}</div></div>

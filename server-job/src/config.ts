@@ -119,5 +119,12 @@ export const config = {
     finance: process.env.FINANCE_URL || `http://localhost:${SELF_PORT}`,
     perm: process.env.PERM_URL || `http://localhost:${SELF_PORT}`,
     stat: process.env.STAT_URL || `http://localhost:${SELF_PORT}`,
+    /**
+     * ★ 2026-10-20 新增：咨询模块（原 8001，现已并入本进程）
+     *
+     * 用途：试学闭环里「班主任发起补费」「退学通过后回写咨询状态」，
+     * 班级模块要调咨询侧的 /api/consult/student/internal/* 内部接口。
+     */
+    consult: process.env.CONSULT_URL || `http://localhost:${SELF_PORT}`,
   },
 };

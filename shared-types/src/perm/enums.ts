@@ -7,27 +7,27 @@
  *
  * ────────────────────────────────────────────────────────────
  * 【2026-09-29 变更公告 · 权限管理模块 林晓】
- * RoleCode 由「ROLE_ 前缀的 12 个角色」改为「与权限体系原型一致的 14 个角色」。
- * 原因：权限管理模块的 PRD 与高保真原型定义了 14 个角色（含咨询经理 / 项目经理 /
- * 实训班主任等管理角色），与旧字典的 12 个角色无法一一对应。
+ * RoleCode 由「ROLE_ 前缀的 12 个职位」改为「与权限体系原型一致的 14 个职位」。
+ * 原因：权限管理模块的 PRD 与高保真原型定义了 14 个职位（含咨询经理 / 项目经理 /
+ * 实训班主任等管理职位），与旧字典的 12 个职位无法一一对应。
  * 影响：登录模块（王寒逸）签发的 token 里 roles[] 取值为新编码。
  * 详见交付文档《字典变更公告》。
  * ────────────────────────────────────────────────────────────
  * 【2026-10-02 变更公告 ① · 权限管理模块 林晓】
- * RoleCode 新增 1 个成员：`TEACH_DEAN`（学管主任），14 → 15 个角色。
- * 依据《三方操作清单 · 角色编码统一》1.1：实训条线把「教质经理 + 学术经理」
+ * RoleCode 新增 1 个成员：`TEACH_DEAN`（学管主任），14 → 15 个职位。
+ * 依据《三方操作清单 · 职位编码统一》1.1：实训条线把「教质经理 + 学术经理」
  * 合并为「学管主任」，权限库原先没有这个编码。
- * 详见交付文档《docs/10-角色编码统一与实训权限点落地-20261002.md》。
+ * 详见交付文档《docs/10-职位编码统一与实训权限点落地-20261002.md》。
  * ────────────────────────────────────────────────────────────
  * 【2026-10-02 变更公告 ② · 权限管理模块 林晓】
- * RoleCode **移除** 1 个成员：`TRAIN_HEAD`（实训班主任），15 → 14 个角色。
- * 依据《三方操作清单 · 角色编码统一》1.4 第 1 条（结论由「停用」升级为「去掉」）：
- * 该编码是 2026-09-29 建库时造的「自建角色」示例，不是学校里真实存在的岗位，
+ * RoleCode **移除** 1 个成员：`TRAIN_HEAD`（实训班主任），15 → 14 个职位。
+ * 依据《三方操作清单 · 职位编码统一》1.4 第 1 条（结论由「停用」升级为「去掉」）：
+ * 该编码是 2026-09-29 建库时造的「自建职位」示例，不是学校里真实存在的岗位，
  * 且与 `TEACH_HEAD`（班主任）完全同权 —— 留着只会让同一批人出现两个编码。
  * ⚠️ **破坏性变更**：其他模块若还在 import / 判断 `RoleCode.TRAIN_HEAD`，
  *    或还在用 `isPresetRoleCode('TRAIN_HEAD')`，编译会直接报错，请一并删掉。
  * 影响：各模块需重新 npm install + 编译。
- * 详见交付文档《docs/11-去掉实训班主任角色-20261002.md》。
+ * 详见交付文档《docs/11-去掉实训班主任职位-20261002.md》。
  * ────────────────────────────────────────────────────────────
  */
 
@@ -41,11 +41,26 @@ export enum Gender {
   FEMALE = 2,  // 女
 }
 
-/** 部门 */
+/**
+ * 部门
+ *
+ * ★ 2026-10-20：「初高部」拆成「初中部」+「高中部」，1 沿用旧值改名、4 新增高中部（3 已给就业部）
+ *   （与 consult/enums.ts 保持一致，五份副本必须同步）
+ */
 export enum DeptCode {
-  JUNIOR_SENIOR = 1,  // 初高部
+  JUNIOR_SENIOR = 1,  // 初中部（历史命名，值不变）
   UNIVERSITY = 2,     // 大学部
+  /** ★ 2026-10-19：就业部（独立学段，与 enums.ts 保持一致） */
+  EMPLOYMENT = 3,     // 就业部
+  SENIOR = 4,         // 高中部
 }
+
+/** 部门下拉顺序（初中部 → 高中部 → 大学部） */
+export const DEPT_OPTIONS: number[] = [
+  DeptCode.JUNIOR_SENIOR,
+  DeptCode.SENIOR,
+  DeptCode.UNIVERSITY,
+];
 
 /** 学生状态（全系统最重要的字段） */
 export enum StudentStatus {
@@ -77,6 +92,8 @@ export enum FeeType {
   MEAL = 3,          // 餐费
   INSURANCE = 4,     // 保险费
   TRIAL_FEE = 5,     // 试学费
+  /** 补费（★ 2026-10-20 新增） */
+  SUPPLEMENT = 8,    // 补费
 }
 
 /** 缴费状态 */
@@ -84,7 +101,6 @@ export enum PayStatus {
   UNPAID = 1,    // 待缴
   PAID = 2,      // 待核对（已上传凭证，等财务核对）
   VERIFIED = 3,  // 已缴（财务核对通过、已入账）
-  OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
 }
 
@@ -145,7 +161,7 @@ export enum ExamContentType {
 
 /**
  * 数据范围（行级权限）
- * ⚠️ 字典 4.13。以「数据权限（行级）」功能点的动作形式挂在角色上。
+ * ⚠️ 字典 4.13。以「数据权限（行级）」功能点的动作形式挂在职位上。
  */
 export enum DataScope {
   SELF = 1,   // 本人
@@ -190,15 +206,15 @@ export enum PermBaseAction {
  */
 export { PermBaseAction as PermAction };
 
-/** 角色类型（原型 14 角色的四类划分） */
+/** 职位类型（原型 14 职位的四类划分） */
 export enum RoleType {
-  BUSINESS = '业务角色',
-  MANAGE = '管理角色',
-  FUNCTION = '职能角色',
-  SYSTEM = '系统角色',
+  BUSINESS = '业务职位',
+  MANAGE = '管理职位',
+  FUNCTION = '职能职位',
+  SYSTEM = '系统职位',
 }
 
-/** 角色状态 */
+/** 职位状态 */
 export enum RoleStatus {
   ENABLED = '启用',
   DISABLED = '停用',
@@ -244,20 +260,20 @@ export enum PermModuleKey {
 }
 
 /**
- * 系统预置角色编码（14 个，全部 isSys = true，不可删除，只能编辑权限或停用）
+ * 系统预置职位编码（14 个，全部 isSys = true，不可删除，只能编辑权限或停用）
  *
- * ⚠️ 2026-10-02 起**不再有「自建角色示例」**：原 R14「实训班主任 TRAIN_HEAD」
- *    （建库时唯一 is_sys = false 的角色）已按《三方操作清单》1.4 结论删除。
- *    角色主键出现 `R01…R13、R15` 的断号属正常 —— 删掉的 R14 编码不再复用。
- * ⚠️ 因此「删除角色」在预置数据下没有可删对象（14 个全是预置）。
- *    演示删除功能时请现场新建一个自建角色，或临时把某个角色改成 is_sys = false。
- * ⚠️ 自定义角色编码规则：大写字母/数字/下划线，正则 ^[A-Z][A-Z0-9_]*$
+ * ⚠️ 2026-10-02 起**不再有「自建职位示例」**：原 R14「实训班主任 TRAIN_HEAD」
+ *    （建库时唯一 is_sys = false 的职位）已按《三方操作清单》1.4 结论删除。
+ *    职位主键出现 `R01…R13、R15` 的断号属正常 —— 删掉的 R14 编码不再复用。
+ * ⚠️ 因此「删除职位」在预置数据下没有可删对象（14 个全是预置）。
+ *    演示删除功能时请现场新建一个自建职位，或临时把某个职位改成 is_sys = false。
+ * ⚠️ 自定义职位编码规则：大写字母/数字/下划线，正则 ^[A-Z][A-Z0-9_]*$
  *
  * ────────────────────────────────────────────────────────────
  * 【2026-10-02 变更 · 权限管理模块 林晓】
- * 依据《三方操作清单 · 角色编码统一》第一节 1.1 + 《实训模块权限点申请单》第二节：
+ * 依据《三方操作清单 · 职位编码统一》第一节 1.1 + 《实训模块权限点申请单》第二节：
  * 新增 `TEACH_DEAN`（学管主任）。实训条线 2026-09-30 已把「教质经理 + 学术经理」
- * 合并为「学管主任」，权限库里没有这个角色 → 这批人一个权限都没有。
+ * 合并为「学管主任」，权限库里没有这个职位 → 这批人一个权限都没有。
  * ⚠️ TEACH_QTY / ACAD_MANAGER 两个旧编码**保留**（只读历史数据用），
  *    与 TEACH_DEAN 的映射关系待双方最终拍板。
  *
@@ -295,8 +311,10 @@ export const GENDER_NAME: Record<number, string> = {
 };
 
 export const DEPT_NAME: Record<number, string> = {
-  [DeptCode.JUNIOR_SENIOR]: '初高部',
+  [DeptCode.JUNIOR_SENIOR]: '初中部',
+  [DeptCode.SENIOR]: '高中部',
   [DeptCode.UNIVERSITY]: '大学部',
+  [DeptCode.EMPLOYMENT]: '就业部',
 };
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {
@@ -326,13 +344,13 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
+  [FeeType.SUPPLEMENT]: '补费',
 };
 
 export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '待核对',
   [PayStatus.VERIFIED]: '已缴',
-  [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };
 
@@ -399,7 +417,7 @@ export const PERM_BASE_ACTION_NAME: Record<number, string> = {
   [PermBaseAction.EXPORT]: '导出',
 };
 
-/** 角色编码 → 中文角色名（预置角色，后端双返回用） */
+/** 职位编码 → 中文职位名（预置职位，后端双返回用） */
 export const ROLE_CODE_NAME: Record<string, string> = {
   [RoleCode.MKT_CONSULT]: '咨询老师',
   [RoleCode.MKT_MANAGER]: '咨询经理',
@@ -417,7 +435,7 @@ export const ROLE_CODE_NAME: Record<string, string> = {
   [RoleCode.SYS_ADMIN]: '系统管理员',
 };
 
-/** 判断是否为系统预置角色编码（预置不可删除） */
+/** 判断是否为系统预置职位编码（预置不可删除） */
 export function isPresetRoleCode(code: string): boolean {
   return Object.prototype.hasOwnProperty.call(ROLE_CODE_NAME, code);
 }

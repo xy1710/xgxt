@@ -17,6 +17,8 @@ import { RoleCode } from 'shared-types/class';
 import { wrap } from '../../middleware/error';
 import { applySyncScope } from '../shared/syncScope';
 import { tbl, tblTrx, tblInsTrx } from '../../../teaching/shared/uniTable';
+// ★ 2026-10-20 试学闭环：退学通过后回写咨询侧状态（→ 流失）
+import { consultClient } from '../../lib/consultClient';
 
 /** 本模块只服务大学学段 */
 const SRC = 'sms_class';
@@ -388,6 +390,37 @@ suspendRouter.post(
         }
       }
     });
+
+    /* ★ 2026-10-20 试学闭环：退学审批通过 → 回写咨询侧状态（→ 流失）
+     *
+     * 用户口径：「试学中有问题就退学」。退学审批在本模块走完，但学生在咨询侧
+     * 还挂着「试学中」—— 咨询老师会一直以为人还在。这里同步过去。
+     *
+     * ⚠️ 放在事务外：跨模块 HTTP 不能进事务（对方不回滚，本地回滚就分叉了）。
+     * ⚠️ 失败只记日志：审批结果已经生效，不能因为咨询模块抖一下把审批结果撤掉。
+     * ⚠️ 只处理「从咨询同步进来」的学生（source_system='consult'）。
+     */
+    if (toStatus === SuspendStatus.APPROVED && applyType === ApplyType.QUIT) {
+      try {
+        const stu = (await notDeleted(tbl(db, SRC, 't_class_student', STAGE))
+          .where({ id: apply.student_id as string })
+          .first()) as Record<string, unknown> | undefined;
+        const consultNo = String(stu?.source_id || '');
+        if (stu && String(stu.source_system || '') === 'consult' && consultNo) {
+          const r = await consultClient.quit({
+            consultNo,
+            reason: (apply.apply_reason as string) || '试学未通过，退学',
+            operatorName: user.userName,
+            operatorTitle: '学管',
+          });
+          if (!r.ok) {
+            console.warn(`[suspend/approve] 回写咨询状态失败（${consultNo}）：${r.message}`);
+          }
+        }
+      } catch (e: any) {
+        console.warn('[suspend/approve] 回写咨询状态异常', e?.message);
+      }
+    }
 
     const statusName = SuspendStatusName[toStatus] ?? '';
     const okMsg = toStatus === SuspendStatus.PENDING_PRINCIPAL

@@ -32,16 +32,28 @@ import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
 const STAGE = 'class' as const;
-const STAGE_NAME = '大学';
+const STAGE_NAME = '大学部';
 
-/** 大学阶段 201~206 */
+/**
+ * 大学部的学习阶段：201~206 = 一~六阶段，13 = 实训
+ *
+ * ★ 2026-10-16 按批注改版：原来这套是「大学预科 / 大学一年级 / … / 实习阶段」，
+ *   和学生档案那边的口径对不上。校长截图要求班级管理的「部门 → 阶段」跟学生档案一致：
+ *     部门=初高部 → 初中部1期 ~ 高中部3期
+ *     部门=大学部 → 实训 / 一阶段 ~ 六阶段
+ *   ⚠️ 这份表必须和 `student/repo.class.ts` 的同名表保持一致（两处都是本地常量，
+ *      改一处就得同步另一处），否则同一个学生在两个页面会显示成不同阶段。
+ *   ⚠️ 键写成数字字面量，`Object.entries` 会按数值升序排 → 13 排在最前（就是「实训」在最上），
+ *      201~206 依次是一~六阶段，下拉顺序与截图一致，不要手动调成插入顺序。
+ */
 const PHASE_NAME: Record<number, string> = {
-  201: '大学预科',
-  202: '大学一年级',
-  203: '大学二年级',
-  204: '大学三年级',
-  205: '大学四年级',
-  206: '实习阶段',
+  201: '一阶段',
+  202: '二阶段',
+  203: '三阶段',
+  204: '四阶段',
+  205: '五阶段',
+  206: '六阶段',
+  13: '实训',
 };
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
@@ -71,6 +83,10 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -116,15 +132,25 @@ function buildBase(q: ClassListQuery, user: any) {
   return qb;
 }
 
-/** 实时统计班里的学生（学生表上直接挂 class_id，没有独立花名册表） */
+/** 实时统计班里的学生（学生表上直接挂 class_id，没有独立花名册表）
+ *
+ *  ⚠️ 必须 `.groupBy('class_id')`：MySQL 8 默认开 ONLY_FULL_GROUP_BY，
+ *     少这个 group by 时 `select class_id, count(*)` 直接报 1140。
+ *     为什么一直没暴露？—— MySQL 会把「只有 1 个值的 IN 列表」优化成等值判断，
+ *     满足函数依赖检查，所以**一个学段只有 1 个班时侥幸能跑**；
+ *     某学段一旦有 ≥2 个班就必然 500，整个班级管理页打不开。 */
 async function countStudents(classIds: string[]): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (!classIds.length) return map;
   const rows = (await tbl(db, 'sms_class', STUDENT_T, STAGE)
     .whereIn('class_id', classIds)
     .where('is_deleted', false)
+    // ★ 2026-10-16 修：必须 groupBy，否则 only_full_group_by 模式下
+    //   「select class_id, count(*) 无 group by」直接报 1140 错误。
+    .groupBy('class_id')
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }
@@ -172,13 +198,22 @@ export const repo: ClassRepo = {
 
   async save(body, userId) {
     const now = new Date();
+    // ★ 2026-10-15 班级表单取消必填：班级名称留空时自动占位（表列 NOT NULL）
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const className =
+      String(body.className || '').trim() ||
+      `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const payload: Record<string, any> = { update_time: now, update_by: userId };
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('class_name', body.className);
+    set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
+    // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
+    set('scheme_id', body.schemeId);
+    set('scheme_stage_id', body.schemeStageId);
+    set('scheme_stage_name', body.schemeStageName);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
@@ -216,13 +251,14 @@ export const repo: ClassRepo = {
     // 同部门内名称不重复（与实训一致的口径；但**没有编号唯一性检查** —— 那张表没编号列）
     const deptCode = Number(body.deptCode ?? 2);
     const dupName = (await tbl(db, 'sms_class', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) throw new Error(`该部门下已有班级叫「${className}」`);
 
     const id = randomUUID();
     await tblIns(db, 'sms_class', T, STAGE, {
       id,
+      class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时必须给兜底值，
       //   否则 insert 直接报 ER_BAD_NULL_ERROR。取第一个可选阶段码更贴近业务。
@@ -323,8 +359,8 @@ export const repo: ClassRepo = {
 
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
-    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED, CLASS_STATUS.GRADUATING],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATING],
+    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATED]: [],
   };

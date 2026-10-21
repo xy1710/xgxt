@@ -29,19 +29,13 @@ export const useAuthStore = defineStore('portal-auth', () => {
   const firstModule = computed(() => visibleModules.value[0] || null);
 
   /**
-   * 建议落地 hash：如 '#/consult/student'
+   * 建议落地 hash
    *
-   * ★ 2026-10-05 合并：legacy 模块（就业/教务/班级）的路由不带模块前缀、
-   *   页面清单由角色权限算，这里拼不出正确路径 —— 跳过它们，只在新模块里找。
-   *   找不到就返回 '/'，交给路由守卫按「角色 → 页面权限」决定落地页。
+   * ★ 2026-10-16 用户指令：「将工作台放置首页，每个角色进来第一个页面就是工作台」
+   *   → 所有角色统一落到 '/'（工作台首页）。
+   *   原「第一个新模块的第一页」逻辑移除（服务端 landingPathOf 同步改为 '/'）。
    */
-  const landingHash = computed(() => {
-    const m = visibleModules.value.find((x) => !x.legacy);
-    if (!m) return '/';
-    const firstMenu = m.menus[0];
-    if (!firstMenu) return '/';
-    return `/${m.key}${firstMenu.path}`;
-  });
+  const landingHash = computed(() => '/');
 
   async function login(accountName: string, password: string) {
     loading.value = true;

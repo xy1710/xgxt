@@ -16,6 +16,21 @@ export function consultReceive(payload: ConsultReceivePayload) {
   return post<{ studentId: string; studentNo: string }>('/api/class/consult/receive', payload);
 }
 
+/**
+ * ★ 2026-10-20 接收弹窗的「学生状态」默认值
+ *
+ * 学生该落「试学中(3)」还是「正式在读(5)」由缴费情况决定（钱在咨询库），
+ * 打开弹窗前问一次，避免初高一进来就默认「正式在读」。
+ */
+export function consultReceivePlan(id: string) {
+  return get<{
+    studentStatus?: number | null;
+    studentStatusName?: string | null;
+    fullSettled?: boolean | null;
+    consultStateName?: string | null;
+  }>('/api/class/consult/receive-plan', { id });
+}
+
 /** 驳回：rejectReason 必填 */
 export function consultReject(payload: ConsultRejectPayload) {
   return post<{ id: string }>('/api/class/consult/reject', payload);

@@ -1,7 +1,7 @@
 /**
  * ⭐ 统一账号与模块注册表（全系统契约）
  *
- * ⚠️⚠️ 2026-10-02 新增：一个账号表管跨模块角色 + 目录树按模块展开
+ * ⚠️⚠️ 2026-10-02 新增：一个账号表管跨模块职位 + 目录树按模块展开
  *
  * 背景（用户指令）：
  *   「给财务也补录账号，然后系统管理员也能看到财务的模块，全部糅合到一个系统中，
@@ -42,7 +42,7 @@ export enum ModuleKey {
    * 【口径】（用户 2026-10-05 拍板，方案 A）
    *   把这 3 个模块也登记进 MODULES，登录门槛不变，语义统一。
    *   ⚠️ 它们的【页面清单不放在这里】—— 仍是 `config/menu.ts` +
-   *      「角色 → 页面权限」（pagePermissions.ts）在运行时算。
+   *      「职位 → 页面权限」（pagePermissions.ts）在运行时算。
    *      所以这 3 个模块的 `menus` 是空的，且带 `legacy: true` 标记：
    *        · 后端：只用来判断「能不能登录 / 第一个落地模块」
    *        · 前端：`App.vue` 会把 legacy 模块从门户分组里滤掉，
@@ -69,7 +69,7 @@ export const MODULE_NAME: Record<string, string> = {
 };
 
 /**
- * ★ 2026-10-05：合并前的老模块（路由不带模块前缀、页面清单由角色权限算）
+ * ★ 2026-10-05：合并前的老模块（路由不带模块前缀、页面清单由职位权限算）
  *
  * 前端门户分组要把它们滤掉（改由 config/menu.ts 渲染），
  * 后端落地页计算也要跳过它们（交给 /api/job/auth/my-pages）。
@@ -115,7 +115,7 @@ export interface ModuleDef {
   /** 该模块有哪些页面（顺序即菜单顺序） */
   menus: ModuleMenuItem[];
   /**
-   * 允许进入本模块的角色（**模块内角色**，不是全局岗位）
+   * 允许进入本模块的职位（**模块内职位**，不是全局岗位）
    * ⚠️ 留空数组 = 任何被授权访问本模块的账号都能进
    */
   allowedRoles?: string[];
@@ -124,7 +124,7 @@ export interface ModuleDef {
    *
    * `true` 表示：
    *   · 这是本系统原有的模块，路由【不带模块前缀】（/class、/edu/student …）
-   *   · 页面清单【不在这里】，由 `config/menu.ts` + 角色页面权限在运行时决定
+   *   · 页面清单【不在这里】，由 `config/menu.ts` + 职位页面权限在运行时决定
    *   · 前端门户分组要跳过它（否则会与 menu.ts 渲染的分组重复）
    */
   legacy?: boolean;
@@ -149,13 +149,13 @@ export const MODULES: ModuleDef[] = [
       { key: 'refund', title: '退费管理', path: '/refund' },
       { key: 'loss', title: '流失记录', path: '/loss' },
       // ⚠️⚠️ 2026-10-03 用户指令：
-      //   「账号管理和权限管理内的用户管理是同一个功能，权限管理内的用户管理是唯一的，
+      //   「账号管理和权限管理内的账号管理是同一个功能，权限管理内的账号管理是唯一的，
       //     账号管理删除，功能一致。」
       //   → 删掉这里的 { key: 'account', title: '账号管理', path: '/account' }。
       //     注意：这是门户侧栏真正读的那份注册表（渲染 sources），
       //     与 01-王寒逸-consult 的 MENU_ITEMS 是两处独立定义，必须【同步】改，
       //     否则门户会继续渲染出一个指向已删除页面的「账号管理」入口。
-      //     账号维护统一收敛到【权限管理模块 → 用户管理】。
+      //     账号维护统一收敛到【权限管理模块 → 账号管理】。
     ],
   },
   {
@@ -182,14 +182,14 @@ export const MODULES: ModuleDef[] = [
   {
     key: ModuleKey.PERM,
     title: '权限管理',
-    desc: '部门 · 角色 · 账号 · 授权 · 页面 · 日志',
+    desc: '部门 · 职位 · 账号 · 授权 · 页面 · 日志',
     entryUrl: 'http://127.0.0.1:5176',
     menus: [
       { key: 'overview', title: '权限总览', path: '/overview' },
       { key: 'dept', title: '部门管理', path: '/dept' },
-      { key: 'role', title: '角色管理', path: '/role' },
-      { key: 'user', title: '用户管理', path: '/user' },
-      { key: 'assign', title: '角色-权限分配', path: '/assign' },
+      { key: 'role', title: '职位管理', path: '/role' },
+      { key: 'user', title: '账号管理', path: '/user' },
+      { key: 'assign', title: '职位权限分配', path: '/assign' },
       /* ★ 2026-10-06 新增：页面管理（板块 → 页面 台账，勾选即生效）
        *   它是【权限管理板块自己的一个页面】，而它的数据又决定【所有板块有哪些页面】，
        *   所以 `sms_perm.t_perm_page` 里有一行 `page` 指向自己，且 locked=true 不可取消。 */
@@ -213,7 +213,7 @@ export const MODULES: ModuleDef[] = [
    *
    * ⚠️⚠️ 这 3 项是 **legacy 模块**，与上面 3 个新模块不同：
    *   · 它们的页面清单【不写在这里】—— 仍然是 `web-job/src/config/menu.ts`
-   *     配合「角色 → 页面权限」（后端 config/pagePermissions.ts）在运行时算出来的，
+   *     配合「职位 → 页面权限」（后端 config/pagePermissions.ts）在运行时算出来的，
    *     因为同一个模块里「班主任 / 校长 / 教务」看到的页面完全不同。
    *   · 前端 `App.vue` 会按 `legacy` 标记把它们从【门户分组】里滤掉，
    *     改由 `config/menu.ts` 渲染（带 hasPage() 过滤），避免菜单重复。

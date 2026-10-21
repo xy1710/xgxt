@@ -25,9 +25,15 @@ import { db, knexRaw } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { nextBillNoForPay } from '../utils/orderNo';
 import { getStandard, isVoucherReusable, expectedSourceOf } from './fee-standard.service';
+import { findArchiveStudent } from './student-archive';
 
 export const FEE_TABLE = 't_finance_fee';
 export const BILL_TABLE = 't_finance_bill';
+
+/** 分 → 元（字符串，保留两位小数） */
+function centToYuan(cent: number): string {
+  return ((Number(cent) || 0) / 100).toFixed(2);
+}
 
 /** 日期格式化 YYYY-MM-DD（knex 取出的 date 可能是 Date 对象） */
 export function toDateStr(v: any): string | undefined {
@@ -83,6 +89,20 @@ export function toFeeListItem(r: any) {
     hasVoucher: !!r.voucher_url,
     voucherNo: r.voucher_no ?? undefined,
     /**
+     * 默认值：一张凭证只覆盖本单（后续 list/detail 会用真实聚合结果覆盖）。
+     * ⚠️ 之所以给默认值而不是留空，是为了让「没查到 / 只有一单」的情况
+     *    前端也能直接按「共 1 笔 = 本单金额」渲染，不用写一堆判空。
+     */
+    voucherGroupCount: 1,
+    voucherGroupAmount: Number(r.amount),
+    /**
+     * ★ 2026-10-19 用户口径：「一张凭证 = 交的总金额，总金额下面列小项」
+     *    合计单（一次交多类费用）会把分项存在 item_detail，
+     *    列表用它显示「含 N 项」，详情用它渲染子表。
+     *    单项单没有明细 → 默认 1 项、金额即本单金额。
+     */
+    itemCount: parseItemDetail(r.item_detail).length || 1,
+    /**
      * 可核对 = 待核对(status=2) + 有凭证 + 未核对 + 未被打回。
      *
      * ⚠️ 为什么可以用 pay_status===PAID 判定？
@@ -98,10 +118,78 @@ export function toFeeListItem(r: any) {
   };
 }
 
+/**
+ * 解析「合计单包含的费用项」
+ *
+ * ⚠️ 兼容三种存法（历史数据不统一，读的时候尽量宽容）：
+ *    · null / ''            → []
+ *    · JSON 字符串数组       → 解析
+ *    · 已是数组（内存对象）  → 直接用
+ * 单条结构：{ feeType, feeTypeName, amount, standardAmount, discount }（单位：分）
+ */
+export function parseItemDetail(raw: any): Array<{
+  feeType: number;
+  feeTypeName: string;
+  amount: number;
+  amountYuan: string;
+  standardAmount: number;
+  standardAmountYuan: string;
+  discount: number;
+  discountYuan: string;
+}> {
+  if (!raw) return [];
+  let arr: any[] = [];
+  if (Array.isArray(raw)) arr = raw;
+  else if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) arr = parsed;
+    } catch {
+      return [];
+    }
+  }
+  return arr
+    .filter((i) => i && Number(i.feeType) > 0)
+    .map((i) => {
+      const amount = Number(i.amount) || 0;
+      const std = i.standardAmount != null ? Number(i.standardAmount) : amount;
+      const discount = i.discount != null ? Number(i.discount) : std - amount;
+      return {
+        feeType: Number(i.feeType),
+        feeTypeName: i.feeTypeName || FEE_TYPE_NAME[Number(i.feeType)] || '',
+        amount,
+        amountYuan: centToYuan(amount),
+        standardAmount: std,
+        standardAmountYuan: centToYuan(std),
+        discount,
+        discountYuan: centToYuan(discount),
+      };
+    });
+}
+
 /** 缴费行 → 详情格式（在列表项基础上追加详情字段） */
 export function toFeeDetail(r: any) {
+  const items = parseItemDetail(r.item_detail);
   return {
     ...toFeeListItem(r),
+    /**
+     * 合计单的费用项（总金额下面列的那个小列）。
+     * 单项单没有 item_detail → 用本单自身兜一个，前端可以无脑渲染。
+     */
+    items: items.length
+      ? items
+      : [
+          {
+            feeType: Number(r.fee_type),
+            feeTypeName: FEE_TYPE_NAME[r.fee_type] || '',
+            amount: Number(r.amount),
+            amountYuan: centToYuan(Number(r.amount)),
+            standardAmount: Number(r.amount),
+            standardAmountYuan: centToYuan(Number(r.amount)),
+            discount: 0,
+            discountYuan: centToYuan(0),
+          },
+        ],
     voucherUrl: r.voucher_url ?? undefined,
     voucherTime: toTimeStr(r.voucher_time),
     voucherBy: r.voucher_by ?? undefined,
@@ -120,12 +208,14 @@ export function toFeeDetail(r: any) {
 /**
  * 构造列表查询条件（列表和导出共用）
  *
- * ⚠️⚠️ 财务侧【硬约束】：只查「已上传凭证」的缴费单。
+ * ⚠️⚠️ 财务侧【硬约束】共两条：
+ *    ① 只查「已上传凭证」的缴费单
+ *    ② 排除「冻结」状态的单据（2026-10-15 用户指令）
  *
  * 为什么（2026-10-04 用户指令）：
  *    缴费管理是财务的【核对工作台】，不是全量缴费台账。
  *    财务的职责链是：学生交钱 → 上游传凭证 → 财务核对凭证 → 入账。
- *    所以「还没传凭证」的单子（待缴/逾期）对财务毫无意义 ——
+ *    所以「还没传凭证」的单子（待缴）对财务毫无意义 ——
  *    它们是上游（咨询/教务）该跟学生催缴的事，财务侧不该看到。
  *
  * 这个约束写死在 buildFeeQuery 里（而不是交给前端传参），
@@ -135,8 +225,19 @@ export function toFeeDetail(r: any) {
 export function buildFeeQuery(q: any): Knex.QueryBuilder {
   const query = db(FEE_TABLE).where('is_deleted', false);
 
-  // ---- 硬约束：必须有凭证 ----
+  // ---- 硬约束1：必须有凭证 ----
   query.whereNotNull('voucher_url').andWhereNot('voucher_url', '');
+
+  /**
+   * ---- 硬约束2：冻结中的单据不出现在缴费管理 ----
+   *
+   * ⭐ 2026-10-15 用户指令：「冻结的不会出现在缴费管理中」。
+   *    冻结单据（学生休学自动冻结的餐费/住宿费）属于学籍冻结范畴，
+   *    不是财务的核对对象，留在核对台只会干扰财务视线。
+   *
+   * ⚠️ 写在这里而不是前端过滤：这样列表 / 统计 / 导出三条路径自动一致。
+   */
+  query.whereNot('pay_status', PayStatus.FROZEN);
 
   if (q.studentNo) query.andWhere('student_no', 'like', `%${q.studentNo}%`);
   if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
@@ -357,8 +458,6 @@ export async function statsFee(q: any) {
       sum('verified', 'is_verified = 1'),
       // 已打回：等上游重传凭证
       sum('rejected', 'is_rejected = 1'),
-      // 逾期（有凭证但也可能被标记逾期）
-      sum('overdue', 'pay_status = ?', [PayStatus.OVERDUE]),
       sum('frozen', 'pay_status = ?', [PayStatus.FROZEN]),
     );
 
@@ -368,7 +467,6 @@ export async function statsFee(q: any) {
     waitVerify: n(row?.waitVerify),
     verified: n(row?.verified),
     rejected: n(row?.rejected),
-    overdue: n(row?.overdue),
     frozen: n(row?.frozen),
   };
 }
@@ -405,9 +503,6 @@ export async function verifyFee(
     }
     if (row.pay_status === PayStatus.UNPAID) {
       throw new BizError(BizCode.PARAM_ERROR, '该缴费单尚未缴费，无法核对');
-    }
-    if (row.pay_status === PayStatus.OVERDUE) {
-      throw new BizError(BizCode.PARAM_ERROR, '该缴费单已逾期，请先让班主任重新上传凭证');
     }
     if (!row.voucher_url) {
       throw new BizError(BizCode.PARAM_ERROR, '该缴费单未上传缴费凭证，无法核对');
@@ -537,7 +632,7 @@ export async function freezeFeeByStudent(
     const affected = await db(FEE_TABLE)
       .where({ student_id: studentId, is_deleted: false })
       .whereIn('fee_type', [FeeType.ACCOMMODATION, FeeType.MEAL])
-      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.PAID, PayStatus.OVERDUE])
+      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.PAID])
       .update({
         pay_status: PayStatus.FROZEN,
         update_time: now,
@@ -607,12 +702,24 @@ export function resolveSourceModule(
  * 实现：非可复用类型下，查同一 voucher_url 是否已被别的单据占用，
  *      占用就报错并告诉对方「被谁的什么费用占用了」，方便上游直接定位。
  *
+ * ★ 2026-10-15 用户口径补充（重要）：
+ *    正式学费改成「一次勾选六项」（学费/住宿费/押金/保险/餐费/校服）后，
+ *    家长通常【一笔转账】，自然也只有【一张截图】，
+ *    但这张图要挂到同一个学生的 6 张单据上 —— 若按「一人一张」拦，第二张起必失败。
+ *
+ *    所以规则细化为：「同一学生自己的多张单据允许共用一张凭证」，
+ *    「跨学生」（同一张图贴给张三又贴给李四）仍然严格禁止 ——
+ *    这才是「一人一张凭证」真正要防的事（防止多个学生共用一张费用截图一票多报）。
+ *
  * @param excludeId 编辑场景下要排除自己
+ * @param studentNo 当前单据所属学生的学号；传了则允许同一学生跨单据共用
  */
 export async function assertVoucherAvailable(
   feeType: number,
   voucherUrl: string | undefined | null,
   excludeId?: string,
+  studentNo?: string,
+  studentId?: string,
 ): Promise<void> {
   if (!voucherUrl) return;                    // 没传凭证，不用校验
   if (isVoucherReusable(feeType)) return;     // 餐费：允许共用
@@ -622,17 +729,28 @@ export async function assertVoucherAvailable(
   if (excludeId) q.whereNot('id', excludeId);
 
   const occupied = await q.first();
-  if (occupied) {
-    throw new BizError(
-      BizCode.VOUCHER_DUPLICATED,
-      `该凭证已被「${occupied.student_name}」的${FEE_TYPE_NAME[occupied.fee_type] || '费用'}占用` +
-        `（单据 ${occupied.id.slice(0, 8)}）。` +
-        `${FEE_TYPE_NAME[feeType] || '该费用'}要求一人一张凭证，请更换凭证或使用餐费类型。`,
-    );
+  if (!occupied) return;
+
+  // ★ 同一学生的多张单据共用一张转账截图：允许（2026-10-15 规则细化）
+  //   学号可能为空（咨询阶段学生还没正式学号），所以再用 student_id 兜一次底
+  if (studentNo && occupied.student_no && occupied.student_no === studentNo) {
+    return;
   }
+  if (studentId && occupied.student_id && occupied.student_id === studentId) {
+    return;
+  }
+
+  throw new BizError(
+    BizCode.VOUCHER_DUPLICATED,
+    `该凭证已被「${occupied.student_name}」的${FEE_TYPE_NAME[occupied.fee_type] || '费用'}占用` +
+      `（单据 ${occupied.id.slice(0, 8)}）。` +
+      `${FEE_TYPE_NAME[feeType] || '该费用'}不允许不同学生共用一张凭证，请更换凭证或联系被占用的学生处理。`,
+  );
 }
 
-/** 查询同一张凭证还被哪些单据共用（餐费场景下展示用） */
+/**
+ * 查询同一张凭证还被哪些单据共用（餐费场景下展示用）
+ */
 export async function findVoucherSharers(
   voucherUrl: string | undefined,
   excludeId?: string,
@@ -649,6 +767,59 @@ export async function findVoucherSharers(
   }));
 }
 
+/* ============================================================
+ * ★ 2026-10-19 凭证覆盖范围（一次转账 = 多张单据）
+ * ============================================================ */
+
+/**
+ * 批量统计「每张凭证覆盖了几笔单据、合计多少钱」
+ *
+ * 业务背景（用户反馈「缴费凭证和实缴金额对不上」）：
+ *   一次缴清多项费用时，家长只转一笔钱、只给一张截图，截图要挂到
+ *   学费/住宿费/押金/保险费/餐费/校服多张单据上。
+ *   每张单据的 amount 只是其中一项，凭证截图却是合计 ——
+ *   财务单看一行，就会觉得「凭证金额 ≠ 本单金额，数据错了」。
+ *
+ * 所以列表里一次性把这批凭证的「笔数 + 合计」查出来，
+ * 前端就能在凭证列显示「共 N 笔 · 合计 ¥X」，把一对多关系讲明白。
+ *
+ * @param voucherUrls 本页出现过的凭证地址（去重后传入，避免 N+1）
+ * @returns Map<凭证地址, { count: 单据笔数, amount: 合计金额（分） }>
+ *
+ * ⚠️ 口径说明：统计包含冻结单与已核对单 —— 它们同样是「这张凭证覆盖的钱」，
+ *    排除掉反而会让合计对不上截图。is_deleted 仍然排除（已删单不算）。
+ */
+export async function voucherGroupMap(
+  voucherUrls: Array<string | null | undefined>,
+): Promise<Map<string, { count: number; amount: number }>> {
+  const urls = [...new Set(voucherUrls.filter(Boolean) as string[])];
+  const map = new Map<string, { count: number; amount: number }>();
+  if (!urls.length) return map;
+
+  const rows = await db(FEE_TABLE)
+    .where({ is_deleted: false })
+    .whereIn('voucher_url', urls)
+    .select('voucher_url')
+    .select(knexRaw.raw('COUNT(*) as cnt'), knexRaw.raw('COALESCE(SUM(amount), 0) as total'))
+    .groupBy('voucher_url');
+
+  for (const r of rows as any[]) {
+    map.set(String(r.voucher_url), {
+      count: Number(r.cnt) || 0,
+      amount: Number(r.total) || 0,
+    });
+  }
+  return map;
+}
+
+/** 单张凭证的覆盖范围（详情页用；没有凭证时返回 0/0） */
+export async function voucherGroupOf(
+  voucherUrl: string | null | undefined,
+): Promise<{ count: number; amount: number }> {
+  const map = await voucherGroupMap([voucherUrl]);
+  return map.get(String(voucherUrl)) || { count: 0, amount: 0 };
+}
+
 /**
  * 新增缴费单
  *
@@ -657,12 +828,71 @@ export async function findVoucherSharers(
  *   ② sourceModule 校验（规则3-①）
  *   ③ voucherUrl 唯一性校验（规则3-②）
  */
+/* ============================================================
+ * ★ 2026-10-19 作废缴费单（上游发起错了 / 重复发起时撤销）
+ * ============================================================ */
+
+/**
+ * 作废一张还没入账的缴费单（软删）
+ *
+ * 背景：
+ *   上游模块（咨询）没有作废能力时，老师发现「多发起了一笔」只能再发起一次去覆盖，
+ *   结果同一学生同一费用项堆出好几张单 —— 账面看起来像交了好几次钱。
+ *   这里补上撤销通道：未核对入账的单可以作废，已入账的必须走退费。
+ *
+ * ⚠️ 只软删（is_deleted=1），保留流水痕迹；调用方（咨询）负责把本地单据一起作废。
+ */
+export async function cancelFee(
+  id: string,
+  reason: string,
+  operator: { userId: string; userName: string },
+): Promise<void> {
+  const row = await db(FEE_TABLE).where({ id, is_deleted: false }).first();
+  if (!row) {
+    throw new BizError(BizCode.PARAM_ERROR, '缴费单不存在或已被作废');
+  }
+  if (row.is_verified || row.is_in_bill) {
+    throw new BizError(
+      BizCode.INVALID_STATUS,
+      '该缴费单已核对入账，不能作废；如需撤销请走「退费」流程',
+    );
+  }
+
+  const note = reason?.trim() ? reason.trim() : '上游重复发起';
+  await db(FEE_TABLE).where({ id }).update({
+    is_deleted: true,
+    update_time: new Date(),
+    update_by: operator.userId,
+    remark: [row.remark, `作废：${note}（${operator.userName}）`].filter(Boolean).join(' | '),
+  });
+}
+
 export async function addFee(
   body: any,
   operator: { userId: string; userName: string },
 ): Promise<string> {
   const id = randomUUID();
   const now = new Date();
+
+  /**
+   * ★ 2026-10-20：学生属性以学生档案为准（档案里能查到这个人时）
+   *
+   * 用户口径：「学生档案有的字段按学生档案的数据走」。
+   * 上游（咨询/教务）传过来的学号/姓名/班级可能是建单那一刻的快照，
+   * 学生后来换班或改名就会脱节。只要档案里能对上（先按 id、再按学号），
+   * 落库一律用档案当前值，不信任调用方传的那几个字段。
+   *
+   * ⚠️ 档案里查不到时**保持原样**：报名前的咨询收费单，学生还没进学籍档案，
+   *    这是正常业务状态，不能因此拒绝建单。
+   */
+  const archived = await findArchiveStudent(body.studentId, body.studentNo);
+  if (archived) {
+    if (archived.no) body.studentNo = archived.no;
+    if (archived.name) body.studentName = archived.name;
+    if (archived.classId) body.classId = archived.classId;
+    if (archived.className) body.className = archived.className;
+    if (archived.deptCode != null) body.deptCode = archived.deptCode;
+  }
 
   /* ---------- 规则2：金额没传就取财务标准 ---------- */
   let amount: number = body.amount;
@@ -681,7 +911,8 @@ export async function addFee(
   const sourceModule = resolveSourceModule(body.feeType, body.sourceModule);
 
   /* ---------- 规则3-②：凭证唯一性校验 ---------- */
-  await assertVoucherAvailable(body.feeType, body.voucherUrl);
+  // ★ 传 body.studentNo：同一学生的多张单据可共用一张转账截图（2026-10-15）
+  await assertVoucherAvailable(body.feeType, body.voucherUrl, undefined, body.studentNo);
 
   /**
    * ⚠️ 状态与凭证一致性（2026-10-04 用户指令）
@@ -725,6 +956,18 @@ export async function addFee(
     is_rejected: false,
     is_in_bill: false,
     remark: body.remark ?? null,
+    /**
+     * ★ 2026-10-19 合计单的分项明细
+     *    上游（咨询）一次交多类费用时，只建一张「合计单」，
+     *    金额 = 各项之和，各项明细存在这里，供财务看到「这笔钱包含什么」。
+     *    单项单不传 → NULL。
+     */
+    item_detail:
+      body.itemDetail == null
+        ? null
+        : typeof body.itemDetail === 'string'
+          ? body.itemDetail
+          : JSON.stringify(body.itemDetail),
   });
 
   return id;
@@ -760,8 +1003,9 @@ export async function attachVoucher(
     throw new BizError(BizCode.FEE_NOT_FOUND, `缴费单 ${feeId} 不存在`);
   }
 
-  // 已核对/已入账单的不允许再改凭证，需财务先打回
-  if (row.is_verified) {
+  // 已核对/已入账单：已有凭证时不允许再改（账已核对，防止事后换图）；
+  // 但缺凭证的历史单允许补传，否则「缴费单后边的凭证都得能查看」永远补不齐。
+  if (row.is_verified && row.voucher_url) {
     throw new BizError(
       BizCode.INVALID_STATUS,
       '该缴费单已核对通过，如需修改凭证请先在财务侧「打回」',
@@ -769,7 +1013,8 @@ export async function attachVoucher(
   }
 
   // 规则3-②：重新校验凭证唯一性（换凭证时排除自己）
-  await assertVoucherAvailable(row.fee_type, voucherUrl, feeId);
+  // ★ 传 student_no + student_id：同一学生的多张单据可共用一张转账截图（2026-10-15）
+  await assertVoucherAvailable(row.fee_type, voucherUrl, feeId, row.student_no, row.student_id);
 
   await db(FEE_TABLE).where({ id: feeId }).update({
     voucher_url: voucherUrl,
@@ -779,10 +1024,7 @@ export async function attachVoucher(
     is_rejected: false,
     reject_reason: null,
     // 传了凭证 → 状态推到「待核对(PAID)」，等财务核对后才是「已缴(VERIFIED)」
-    // ⚠️ 只把「待缴/逾期」这类未收款状态往上推，不动已核对/已入账的单
-    pay_status:
-      row.pay_status === PayStatus.UNPAID || row.pay_status === PayStatus.OVERDUE
-        ? PayStatus.PAID
-        : row.pay_status,
+    // ⚠️ 只把「待缴」这类未收款状态往上推，不动已核对/已入账的单
+    pay_status: row.pay_status === PayStatus.UNPAID ? PayStatus.PAID : row.pay_status,
   });
 }

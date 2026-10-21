@@ -18,12 +18,35 @@
  */
 
 import path from 'path';
+import fs from 'fs';
 import sharp from 'sharp';
 import { createWorker, PSM, type Worker } from 'tesseract.js';
 import type { OcrResult } from 'shared-types/edu';
 
 /** 语言包目录：src/services → ../../tessdata（编译到 dist/services 后同样指向根目录） */
 const TESSDATA_DIR = path.resolve(__dirname, '../../tessdata');
+
+/** tesseract.js 默认的语言包 CDN（本地缺包时兜底用） */
+const TESSDATA_CDN = 'https://tessdata.projectnaptha.com/4.0.0';
+
+/**
+ * 本地语言包是否就绪
+ *
+ * ⚠️ 为什么需要这个判断（2026-10-15 修复）
+ *   `.gitignore` 里有 `/server-job/tessdata/*.traineddata.gz`（eng 11MB + chi_sim 20MB，
+ *   嫌大不入库），所以**新 clone 出来的仓库天生没有语言包** ——
+ *   OCR 必然失败，教务「上传缴费截图」第一步就断了
+ *   （用户反馈的「教务上传不了截图」正包含这一环）。
+ *
+ *   本地有包 → 走本地（离线、快）；本地没包 → 退回 CDN，让新同事能直接跑通。
+ */
+function hasLocalTessdata(): boolean {
+  try {
+    return fs.existsSync(path.join(TESSDATA_DIR, 'eng.traineddata.gz'));
+  } catch {
+    return false;
+  }
+}
 
 let workerPromise: Promise<Worker> | null = null;
 
@@ -37,9 +60,16 @@ let queue: Promise<unknown> = Promise.resolve();
 async function getWorker(): Promise<Worker> {
   if (!workerPromise) {
     workerPromise = (async () => {
+      const useLocal = hasLocalTessdata();
+      if (!useLocal) {
+        console.warn(
+          `[ocr] 本地语言包缺失（${TESSDATA_DIR}），本次改用在线语言包 ${TESSDATA_CDN}，` +
+            '首次识别会慢一些。想要离线可用，请把 eng.traineddata.gz 放到 server-job/tessdata/ 下。',
+        );
+      }
       const worker = await createWorker('eng', 1, {
-        langPath: TESSDATA_DIR,
-        gzip: true,
+        // 本地有包走本地（离线、快）；没有就交给 tesseract.js 用它自己的 CDN 默认值
+        ...(useLocal ? { langPath: TESSDATA_DIR, gzip: true } : {}),
         // ⚠️ 必须挂 errorHandler：识别不了的图片会让 wasm 直接 Aborted(-1)，
         //    没有兜底的话这个错误会以 unhandled 形式把整个 node 进程打挂
         errorHandler: (err: any) => {

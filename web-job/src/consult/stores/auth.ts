@@ -43,7 +43,7 @@ export const MENU_MAP: Record<string, { title: string; path: string }> = {
   approve: { title: '审批中心', path: '/consult/approve' },
   refund: { title: '退费管理', path: '/consult/refund' },
   loss: { title: '流失记录', path: '/consult/loss' },
-  // ⚠️ 2026-10-03：account（账号管理）已移除 —— 与权限模块「用户管理」是同一功能，
+  // ⚠️ 2026-10-03：account（账号管理）已移除 —— 与权限模块「账号管理」是同一功能，
   //    按用户指令保留权限侧、删除本侧。后端 MENU_ITEMS 同步删除该 key。
 };
 

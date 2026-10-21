@@ -3,19 +3,31 @@
  * 账号详情弹窗（可复用）
  *
  * 【为什么抽成组件】
- *   「账号详情」有三处入口，原先只有用户管理里是对的，另外两处都只是 router.push
+ *   「账号详情」有三处入口，原先只有账号管理里是对的，另外两处都只是 router.push
  *   跳回列表页、不打开详情：
- *     · 用户管理  · 列表 → 查看 / 点姓名
+ *     · 账号管理  · 列表 → 查看 / 点姓名
  *     · 部门管理  · 部门下账号弹窗 → 详情 / 编辑
- *     · 角色管理  · 查看角色下人员弹窗 → 账号详情
- *   抽出来之后三处共用同一个弹窗，内容一致（基本信息 + 所属角色 + 有效权限明细），
+ *     · 职位管理  · 查看职位下人员弹窗 → 账号详情
+ *   抽出来之后三处共用同一个弹窗，内容一致（基本信息 + 所属职位 + 有效权限明细），
  *   以后再改「详情里该显示什么」只改这一处。
  *
  * 【自取数据】调用方只要给 userId（可选再给一行列表数据做首屏秒开）：
- *   detail + 权限模块树 + 各角色权限映射 全在本组件内拉取。
+ *   detail + 权限模块树 + 各职位权限映射 全在本组件内拉取。
  *
- * ⚠️ 「查看权限 / 编辑权限」不再跳「角色-权限分配」页（跳过去还不知道要点哪个角色），
+ * ⚠️ 「查看权限 / 编辑权限」不再跳「职位权限分配」页（跳过去还不知道要点哪个职位），
  *    直接在本弹窗之上叠一层权限树弹窗（PermTreeDialog），就地看 / 就地改。
+ *
+ * ★ 2026-10-19 起：底部「去编辑」按钮已**彻底删除**（用户最终要求：不要这个按钮）。
+ *   删之前它是可关的，三处入口按三轮要求逐个关掉 ——
+ *     · 账号管理：列表行操作里本来就有独立的「编辑」，底部再来一个是重复入口；
+ *     · 职位管理：「职位下人员」弹窗也一并去掉；
+ *     · 部门管理：最后一处，用户第三轮要求删除。
+ *   三处都关了之后开关本身成了死代码，遂连同 prop / emit 一起删掉，
+ *   底部只剩「关闭」。
+ *
+ *   ⚠️ 想改账号，走各页列表行操作的「编辑」：
+ *     · 账号管理、部门管理（部门下账号弹窗）都有行级「编辑」；
+ *     · 职位管理的「职位下人员」弹窗没有行级编辑，要改得回「账号管理」。
  */
 import { computed, ref, watch } from 'vue';
 import type { PermModule, PermRoleListItem, PermUserListItem, RolePermMap } from 'shared-types/perm';
@@ -38,12 +50,10 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void;
-  /** 点「去编辑」时抛出，由调用方决定怎么编辑（多数页面是跳用户管理） */
-  (e: 'edit', userId: string): void;
 }>();
 
 /* ============================================================
- * 模块级缓存：角色清单 / 权限模块树 ── 同一会话内只拉一次
+ * 模块级缓存：职位清单 / 权限模块树 ── 同一会话内只拉一次
  * ============================================================ */
 
 let rolesCache: PermRoleListItem[] | null = null;
@@ -112,7 +122,7 @@ const permLoading = ref(false);
 const allRoles = ref<PermRoleListItem[]>([]);
 const modules = ref<PermModule[]>([]);
 
-/** 角色 id → 该角色权限映射（按需拉、拉过就缓存） */
+/** 职位 id → 该职位权限映射（按需拉、拉过就缓存） */
 const rolePerms = ref<Record<string, RolePermMap>>({});
 
 const detailTitle = computed(() => {
@@ -121,11 +131,10 @@ const detailTitle = computed(() => {
   return `账号详情 · <span class="em">${esc(d.userName)}</span> <span class="tag n">${esc(String(d.userStatus))}</span>`;
 });
 
-/** 所属角色：元数据优先取角色清单（含编码 / 权限数 / 状态） */
+/** 所属职位：元数据优先取职位清单（含权限数 / 状态） */
 interface DetailRole {
   id: string;
   roleName: string;
-  roleCode: string;
   permCount: number;
   roleStatus: string;
   icon: string;
@@ -140,7 +149,6 @@ const detailRoles = computed<DetailRole[]>(() => {
       return {
         id,
         roleName: r.roleName,
-        roleCode: r.roleCode,
         permCount: r.permCount,
         roleStatus: r.roleStatus,
         icon: roleIcon(r),
@@ -149,7 +157,6 @@ const detailRoles = computed<DetailRole[]>(() => {
     return {
       id,
       roleName: (d.roleNames || [])[i] || '—',
-      roleCode: '—',
       permCount: 0,
       roleStatus: '启用',
       icon: '👤',
@@ -157,7 +164,7 @@ const detailRoles = computed<DetailRole[]>(() => {
   });
 });
 
-/** 多角色权限并集 */
+/** 多职位权限并集 */
 function mergedMap(ids: string[]): RolePermMap {
   const out: RolePermMap = {};
   (ids || []).forEach((id) => {
@@ -208,7 +215,7 @@ const detailCards = computed<ModuleCard[]>(() =>
   detail.value ? moduleCards(mergedMap(detail.value.roleIds)) : [],
 );
 
-/** 确保这些角色的权限映射已在本地 */
+/** 确保这些职位的权限映射已在本地 */
 async function ensureRolePerms(ids: string[]): Promise<void> {
   const missing = (ids || []).filter((id) => !rolePerms.value[id]);
   if (!missing.length) return;
@@ -331,14 +338,13 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <div style="flex: 1">
           <div style="font-size: 16px; font-weight: 600">
             {{ detail.userName }}
-            <span class="tag n">{{ detail.gwNo }}</span>
             <span v-if="detail.userStatus === '正常'" class="tag g">正常</span>
             <span v-else-if="detail.userStatus === '已停用'" class="tag gy">已停用</span>
             <span v-else class="tag d">{{ detail.userStatus }}</span>
             <span v-if="detail.needChangePwd" class="tag w">需首次改密</span>
           </div>
           <div class="desc" style="margin-top: 3px">
-            {{ detail.deptName }} · {{ (detail.roleNames || []).join('、') || '无角色' }}
+            {{ detail.deptName }} · {{ (detail.roleNames || []).join('、') || '无职位' }}
           </div>
         </div>
         <div style="text-align: right; flex: 0 0 auto">
@@ -355,7 +361,6 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <div class="f"><label>姓名</label><div>{{ detail.userName }}</div></div>
         <div class="f"><label>性别</label><div>{{ detail.genderName || '—' }}</div></div>
         <div class="f"><label>年龄</label><div class="num">{{ detail.age || '—' }}</div></div>
-        <div class="f"><label>工号</label><div class="num">{{ detail.gwNo }}</div></div>
         <div class="f">
           <label>登录账号</label>
           <div>
@@ -374,16 +379,15 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         </div>
       </div>
 
-      <!-- 所属角色 -->
+      <!-- 所属职位 -->
       <div class="divider"></div>
       <div class="sec-t">
-        <span class="bar"></span>所属角色 <span class="desc">（可多角色，权限取并集；可就地查看 / 编辑该角色权限）</span>
+        <span class="bar"></span>所属职位 <span class="desc">（可多职位，权限取并集；可就地查看 / 编辑该职位权限）</span>
       </div>
       <table v-if="detailRoles.length" class="tb">
         <thead>
           <tr>
-            <th>角色</th>
-            <th>编码</th>
+            <th>职位</th>
             <th>权限数</th>
             <th>状态</th>
             <th>操作</th>
@@ -392,7 +396,6 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <tbody>
           <tr v-for="r in detailRoles" :key="r.id">
             <td><b>{{ r.icon }} {{ r.roleName }}</b></td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode }}</code></td>
             <td class="num">{{ r.permCount }} 项</td>
             <td>
               <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>
@@ -406,7 +409,7 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
           </tr>
         </tbody>
       </table>
-      <div v-else class="notice d">✕<div>该账号未分配任何角色，无法登录系统。</div></div>
+      <div v-else class="notice d">✕<div>该账号未分配任何职位，无法登录系统。</div></div>
 
       <!-- 有效权限明细 -->
       <div class="divider"></div>
@@ -447,12 +450,13 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
 
     <template #footer>
       <div class="lft">账号 ID：{{ detail?.id || '—' }}</div>
-      <button class="btn" type="button" @click="emit('edit', props.userId)">去编辑</button>
+      <!-- ★ 2026-10-19：底部「去编辑」按钮已彻底删除（三处入口全部要求去掉），
+           只剩「关闭」。改账号请走列表行操作里的「编辑」。 -->
       <button class="btn pri" type="button" @click="visible = false">关闭</button>
     </template>
   </ProtoDialog>
 
-  <!-- ★ 叠在详情之上：查看 / 编辑某个角色的权限，不跳页 -->
+  <!-- ★ 叠在详情之上：查看 / 编辑某个职位的权限，不跳页 -->
   <PermTreeDialog
     v-model="treeOpen"
     :title="treeTitle"

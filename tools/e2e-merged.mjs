@@ -163,7 +163,7 @@ const menuProbe = `(() => ({
   const gA = p.value?.groups || [];
   log('  ' + JSON.stringify(p.value));
   await shot('_e2e_02_admin_dashboard.png');
-  check('admin 登录后落地到模块页', /^#\//.test(p.value?.hash || '') && !p.value.hash.includes('login'), p.value?.hash);
+  check('admin 登录后落地到首页工作台', p.value?.hash === '#/', p.value?.hash);
   check('admin 看到 市场咨询/财务管理/权限管理', ['市场咨询', '财务管理', '权限管理'].every((x) => gA.includes(x)), JSON.stringify(gA));
   check('admin 看到 就业管理/教务管理/班级管理', ['就业管理', '教务管理', '班级管理'].every((x) => gA.includes(x)), JSON.stringify(gA));
   check('admin 看到 教学管理（初高）', gA.includes('教学管理（初高）'), JSON.stringify(gA));
@@ -219,7 +219,7 @@ const menuProbe = `(() => ({
   const gC = p.value?.groups || [];
   log('  ' + JSON.stringify(p.value));
   await shot('_e2e_04_edu_dashboard.png');
-  check('zhengym 登录后落地到模块页', /^#\//.test(p.value?.hash || '') && !p.value.hash.includes('login'), p.value?.hash);
+  check('zhengym 登录后落地到首页工作台', p.value?.hash === '#/', p.value?.hash);
   check('zhengym 看到「教务管理」组', gC.includes('教务管理'), JSON.stringify(gC));
   check('zhengym 看到「就业管理」组（催费入口所在）', gC.includes('就业管理'), JSON.stringify(gC));
   check(
@@ -252,7 +252,7 @@ const menuProbe = `(() => ({
   const gD = p.value?.groups || [];
   log('  ' + JSON.stringify(p.value));
   await shot('_e2e_06_jh_dashboard.png');
-  check('sunmin 登录后落地到模块页', /^#\//.test(p.value?.hash || '') && !p.value.hash.includes('login'), p.value?.hash);
+  check('sunmin 登录后落地到首页工作台', p.value?.hash === '#/', p.value?.hash);
   check('sunmin 看到「教学管理（初高）」组', gD.includes('教学管理（初高）'), JSON.stringify(gD));
   check('sunmin 看不到大学部「班级管理」组', !gD.includes('班级管理'), JSON.stringify(gD));
   check(
@@ -262,7 +262,7 @@ const menuProbe = `(() => ({
   );
   check('sunmin 顶栏显示姓名', p.value?.topUser === '孙敏', p.value?.topUser);
 
-  for (const r of ['/class-jh/dashboard', '/class-jh/student', '/class-jh/class']) {
+  for (const r of ['/class-jh/student', '/class-jh/class']) {
     await nav(r);
     const res = await ev(`(() => {
       const main=document.querySelector('.main'); const txt=main?main.innerText:'';
@@ -273,6 +273,17 @@ const menuProbe = `(() => ({
     log(`    ${r} → ${v.hash} chars=${v.chars} noPerm=${v.noPerm} | ${v.head}`);
     check(`sunmin 能打开 ${r}`, v.chars >= 60 && !v.noPerm && String(v.hash).includes(r), JSON.stringify(v));
   }
+  // ★ 2026-10-16 工作台迁到系统首页：旧工作台路由重定向到首页工作台（'/'）
+  await nav('/class-jh/dashboard');
+  const wb = await ev(`(() => {
+    const main=document.querySelector('.main'); const txt=main?main.innerText:'';
+    return { hash: location.hash, chars: txt.length,
+             hasTitle: txt.includes('工作台'), hasEntry: txt.includes('快捷入口') };
+  })()`);
+  log(`    /class-jh/dashboard（重定向） → ${JSON.stringify(wb.value)}`);
+  check('sunmin 直连旧工作台路由落到首页工作台',
+    wb.value?.hash === '#/' && Number(wb.value?.chars) >= 60 && !!wb.value?.hasTitle,
+    JSON.stringify(wb.value));
   await shot('_e2e_07_jh_student.png');
 
   // ---------- 场景 E：zhanght（大学部班主任）↔ 两套班级模块隔离 ----------

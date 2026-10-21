@@ -1,11 +1,17 @@
 <template>
   <div class="note-box brand">
-    咨询管理推送来的学员、<b>教学管理（初高）升学来的学员</b>、<b>成绩管理「末班」转来的重修学员</b>
-    以及<b>班级信息管理「换班」转来的学员</b>，都在这里<b>接收或驳回</b>。
-    接收后学员落入「班级信息管理」并归入<b>接受班级</b>；驳回需填写原因。
-    <br />
-    <b>接受班级由咨询 / 教学管理（初高）在推送时决定</b>，本页面不提供班级选择 ——
-    只有<b>该班的班主任</b>、<b>校长</b>和<b>学管</b>可以接收；驳回后由咨询侧重新分班。
+    <!-- ⚠️ 必须整段包在一个 span 里：本页容器是 flex（.el-main > div 有全局规则），
+         裸文本节点会被拆成一个个 flex item → 文字挤成竖条。 -->
+    <span>
+      咨询管理推送来的学员（<b>初高中 / 大学部</b>）、教学管理（初高）升学来的学员、
+      <b>成绩管理「末班」</b>转来的重修学员以及<b>班级信息管理「换班」</b>转来的学员，
+      都在这里<b>接收或驳回</b>。
+      接收后学员落入<b>对应学段的学员档案</b>（初高进初高档案，大学部进「班级信息管理」）；
+      驳回需填写原因。
+      <br />
+      <b>接收班级由咨询 / 教学管理（初高）在推送时决定</b>，本页面不提供班级选择 ——
+      只有<b>该班的班主任</b>、<b>校长</b>和<b>学管</b>可以接收；驳回后由咨询侧重新分班。
+    </span>
   </div>
 
   <!-- ============ KPI ============ -->
@@ -48,9 +54,10 @@
         <div v-if="c.isTransfer" class="cc-line">
           <span class="cc-k">换班原因</span>{{ c.transferReason || c.remark || '—' }}
         </div>
-        <div class="cc-line">
-          <span class="cc-k">意向阶段</span>{{ c.intendStageName || dict.label('stage', c.intendStage) }}
-        </div>
+        <!--
+          ★ 2026-10-19（用户拍板）：「意向阶段」整块删除 ——
+            接收后学生阶段一律取目标班级的阶段，不再由推送单决定。
+        -->
         <!--
           ★ 2026-10-06（用户拍板）：接受班级**由咨询 / 初高在推送时决定**，
             本页面【不提供】班级选择 —— 这里只做只读展示。
@@ -105,11 +112,8 @@
       </el-table-column>
       <el-table-column prop="phone" label="电话" width="120" />
       <el-table-column prop="parentPhone" label="家长电话" width="120" />
-      <el-table-column label="意向班级" width="120">
+      <el-table-column label="接收班级" width="120">
         <template #default="{ row }">{{ row.intendClassName || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="意向阶段" width="100">
-        <template #default="{ row }">{{ row.intendStageName || dict.label('stage', row.intendStage) }}</template>
       </el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
@@ -160,10 +164,9 @@
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="学习阶段">
-            <el-select v-model="receiveForm.stage" clearable style="width: 100%">
-              <el-option v-for="o in stageOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select>
+          <!-- ★ 2026-10-19：「学习阶段 / 意向阶段」已删除，阶段自动取接收班级的阶段 -->
+          <el-form-item label="年龄">
+            <el-input-number v-model="receiveForm.age" :min="5" :max="60" controls-position="right" style="width: 100%" />
           </el-form-item>
         </el-col>
       </el-row>
@@ -197,13 +200,9 @@
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :span="12">
-          <el-form-item label="年龄">
-            <el-input-number v-model="receiveForm.age" :min="5" :max="60" controls-position="right" style="width: 100%" />
-          </el-form-item>
-        </el-col>
       </el-row>
-      <el-form-item label="宿舍 / 床位">
+      <!-- 宿舍 / 床位只有大学部有；初高学生的宿舍在初高侧另行分配 -->
+      <el-form-item v-if="!activeConsult?.targetIsJh" label="宿舍 / 床位">
         <BedSelect v-model="dormPick" />
       </el-form-item>
       <el-form-item label="备注">
@@ -240,10 +239,9 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
-import { consultList, consultReceive, consultReject } from '@/class/api';
+import { consultList, consultReceive, consultReject, consultReceivePlan } from '@/class/api';
 import type { ConsultItem } from '@/class/api/types';
 import { useDictStore } from '@/class/stores/dict';
-import { useUserStore } from '@/class/stores/user';
 import BedSelect, { type BedPick } from '@/class/components/BedSelect.vue';
 
 /**
@@ -253,34 +251,20 @@ import BedSelect, { type BedPick } from '@/class/components/BedSelect.vue';
  * 接收把学员归入班级（同时可补学号 / 阶段 / 宿舍床位），驳回需填原因。
  */
 const dict = useDictStore();
-const user = useUserStore();
 
 /**
  * ★ 2026-10-06 用户拍板：谁能接收？
  *   「对应班级的班主任可以接收学员，校长和学管也可以」
  *
- * 所以判定改成「角色 + 班级归属」两个条件，而不是单纯的按钮权限码：
- *   · 校长 / 学管主任 / 系统管理员 → 任何推送单都能接收（全局）
- *   · 班主任（TEACH_HEAD）          → **只有**推送目标班级是自己带的班时才能接收
- *   · 其余角色（教务 / 就业 / 教员 / 助教）→ 不能接收
+ * ★ 2026-10-19 改为**以后端判定为准**：
+ *   接收权限已放宽到「初高中、大学」—— 初高的班也进了 `user.classIds`，
+ *   前端再自己比一遍容易漏（初高的班来自另一个库）。后端 `canHandlePush()`
+ *   用同一份数据算好 `canReceive` 下发，前端只看这个字段。
  *
- * 后端 /api/class/consult/receive 会按同样口径复判一次（前端只管按钮显隐）。
+ *   （口径不变：校长 / 学管 / 管理员全局可接收；班主任只能接收目标班是自己带的单子。）
  */
-const GLOBAL_RECEIVER_ROLES: string[] = ['RM_PRINCIPAL', 'TEACH_DEAN', 'SYS_ADMIN'];
-
-const isGlobalReceiver = computed(() =>
-  user.roles.some((r: string) => GLOBAL_RECEIVER_ROLES.includes(r)),
-);
-
-/** 我负责的班级 ID（后端 /api/class/me 下发） */
-const myClassIds = computed<string[]>(() => user.meInfo?.classIds ?? []);
-
-/** 某条推送单当前登录人能否接收 */
 function canReceiveCard(row: ConsultItem): boolean {
-  if (isGlobalReceiver.value) return true;
-  if (!user.roles.includes('TEACH_HEAD')) return false;
-  const target = row.intendClassId;
-  return !!target && myClassIds.value.includes(target);
+  return row.canReceive === true;
 }
 
 /** 是否具备「驳回」权限（与接收同口径：本班班主任 / 校长 / 学管） */
@@ -301,7 +285,6 @@ const tableSize = ref(10);
 const tableFilters = reactive<{ keyword: string; applyStatus: number | null }>({ keyword: '', applyStatus: null });
 
 const EDUCATIONS = ['初中', '高中', '中专', '大专', '本科在读', '本科', '硕士'];
-const stageOptions = computed(() => dict.options('stage'));
 
 async function loadKpi(): Promise<void> {
   const [p, r, j] = await Promise.all([
@@ -354,7 +337,6 @@ const dormPick = ref<BedPick>({ dormId: null, dormNo: null, bedNo: null });
 const receiveForm = reactive<{
   classId: string | null;
   studentNo: string;
-  stage: number | null;
   age: number | null;
   phone: string;
   parentPhone: string;
@@ -365,7 +347,6 @@ const receiveForm = reactive<{
 }>({
   classId: null,
   studentNo: '',
-  stage: null,
   age: null,
   phone: '',
   parentPhone: '',
@@ -383,16 +364,31 @@ function openReceive(row: ConsultItem): void {
   // 接受班级：**只能**取咨询 / 初高推送的意向班级，不接收任何人工改写
   receiveForm.classId = row.intendClassId ?? null;
   receiveForm.studentNo = '';
-  receiveForm.stage = row.intendStage ?? null;
   receiveForm.age = row.age;
   receiveForm.phone = row.phone || '';
   receiveForm.parentPhone = row.parentPhone || '';
   receiveForm.education = row.education;
   receiveForm.enrollDate = null;
+  /**
+   * ★ 2026-10-20：学生状态由「钱交到哪一步」决定，不再按学段猜。
+   *   先用「试学中」兜底，再问咨询侧真实缴费进度校正：
+   *     只交试学费 → 试学中(3)；学费等全款已到账 → 正式在读(5)
+   *   （后端接收时也会按同一份判断再校正一次，这里只是让弹窗默认值正确）
+   */
   receiveForm.studentStatus = 3;
   receiveForm.remark = row.remark || '';
   dormPick.value = { dormId: null, dormNo: null, bedNo: null };
   receiveVisible.value = true;
+
+  consultReceivePlan(row.id)
+    .then((p) => {
+      // 弹窗可能已切换/关闭，别把旧结果写进新弹窗
+      if (activeConsult.value?.id !== row.id) return;
+      if (p?.studentStatus) receiveForm.studentStatus = Number(p.studentStatus);
+    })
+    .catch(() => {
+      /* 咨询侧不可用：保持兜底值，不打断接收 */
+    });
 }
 
 async function submitReceive(): Promise<void> {
@@ -405,16 +401,16 @@ async function submitReceive(): Promise<void> {
       // 只读透传：后端仍以推送单上的意向班级为准，不信任前端传值
       classId: activeConsult.value.intendClassId ?? null,
       studentNo: receiveForm.studentNo.trim() || null,
-      stage: receiveForm.stage,
       age: receiveForm.age,
       phone: receiveForm.phone || null,
       parentPhone: receiveForm.parentPhone || null,
       education: receiveForm.education,
       enrollDate: receiveForm.enrollDate,
       studentStatus: receiveForm.studentStatus,
-      dormId: dormPick.value.dormId,
-      dormNo: dormPick.value.dormNo,
-      bedNo: dormPick.value.bedNo,
+      // 初高学生没有「大学部宿舍」这套床位，接收时不传（后端也不会用）
+      dormId: activeConsult.value.targetIsJh ? null : dormPick.value.dormId,
+      dormNo: activeConsult.value.targetIsJh ? null : dormPick.value.dormNo,
+      bedNo: activeConsult.value.targetIsJh ? null : dormPick.value.bedNo,
       remark: receiveForm.remark || null,
     });
     ElMessage.success('已接收，学员已落入学员档案');

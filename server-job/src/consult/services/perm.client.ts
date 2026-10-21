@@ -223,7 +223,7 @@ export async function fetchPermProfile(account: string): Promise<RemotePermResul
     return {
       profile: null,
       degraded: true,
-      degradeReason: `权限库中未找到账号「${account}」，请到「权限管理 → 用户管理」中补录`,
+      degradeReason: `权限库中未找到账号「${account}」，请到「权限管理 → 账号管理」中补录`,
     };
   }
 

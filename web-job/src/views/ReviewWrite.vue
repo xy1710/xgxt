@@ -6,7 +6,7 @@
  * 脑图 - 操作：新建 / 编辑 / 详情 / 搜索·筛选 / 上传录音
  *
  * ⚠️ 录音处理：前端把音频读成 base64 dataURL 提交，后端存文本字段。
- *    另外提供浏览器直接录音（MediaRecorder），不支持的浏览器自动隐藏按钮。
+ *    ★ 2026-10-16：按需求去掉「浏览器直接录音」按钮，只保留「上传录音」。
  */
 
 import { ref, reactive, onMounted, computed, watch } from 'vue';
@@ -18,7 +18,7 @@ import {
   type FormRules,
   type UploadRequestOptions,
 } from 'element-plus';
-import { Search, Refresh, Plus, Microphone, Upload } from '@element-plus/icons-vue';
+import { Search, Refresh, Plus, Upload } from '@element-plus/icons-vue';
 import {
   INTERVIEW_CONCLUSION_NAME,
   REVIEW_CONCLUSION_NAME,
@@ -31,14 +31,16 @@ import {
   addReview,
   updateReview,
   deleteReview,
-  removeReviewAudio,
+  // ★ 2026-10-16：走业务路由自己的 /classes（就业老师才有权限；班级管理页的接口会 403）
+  fetchReviewClassOptions,
 } from '@/api/review';
-import StudentSelect from '@/components/StudentSelect.vue';
+// ★ 2026-10-16：班级下拉选项的类型
+import type { JobClassOption } from 'shared-types';
 // ★ 2026-10-02：复盘结论选「已签约入职」时，联动把学生标记为「已就业」
 import { confirmEmployment } from '@/api/student';
 
-/** 录音单文件大小上限 */
-const AUDIO_MAX_SIZE = 8 * 1024 * 1024;
+/** 录音单文件大小上限（★ 2026-10-16：8MB → 50MB） */
+const AUDIO_MAX_SIZE = 50 * 1024 * 1024;
 
 function nowStr() {
   const d = new Date();
@@ -52,10 +54,22 @@ const loading = ref(false);
 const tableData = ref<any[]>([]);
 const total = ref(0);
 
+/** ★ 2026-10-16：班级下拉选项（筛选 + 列表列） */
+const classOptions = ref<JobClassOption[]>([]);
+
+async function loadClassOptions() {
+  try {
+    classOptions.value = await fetchReviewClassOptions();
+  } catch (e) {
+    // request.ts 已统一提示
+  }
+}
+
 const query = reactive<any>({
   page: 1,
   size: 20,
   studentName: '',
+  classId: '',
   position: '',
   interviewConclusion: undefined,
   reviewConclusion: undefined,
@@ -76,14 +90,25 @@ async function loadData() {
   }
 }
 
+/**
+ * ★ 2026-10-20：筛选条件只改 query，不自动查 —— 只有点「查询」才发请求。
+ *   （下拉 / 输入框都不再挂 @change/@input，避免选条件时列表乱跳）
+ */
 function handleSearch() {
   query.page = 1;
   loadData();
 }
 
+/**
+ * 重置 = 清空条件 + 回到第 1 页 + 重查。
+ * 之所以这里还 loadData()：条件已清空、页码已归 1，若不同步重查，
+ * 表里会留着上一次的筛选结果、和分页「第 1 页」对不上。
+ * （它不是"自动查"——是用户主动点按钮触发的）
+ */
 function handleReset() {
   query.page = 1;
   query.studentName = '';
+  query.classId = '';
   query.position = '';
   query.interviewConclusion = undefined;
   query.reviewConclusion = undefined;
@@ -134,7 +159,6 @@ const defaultForm = {
 };
 
 const form = reactive({ ...defaultForm });
-const studentLabel = ref('');
 
 /* ★ 2026-10-02（斌哥）：面试结论选「已发 offer」→ 复盘结论**只能**是「已签约入职」
  *
@@ -158,14 +182,14 @@ watch(
 );
 
 const rules: FormRules = {
-  studentId: [{ required: true, message: '请选择学生', trigger: 'change' }],
+  // ★ 2026-10-16：姓名改为可直接手填（原来是 el-select 从学生列表里选）
+  studentName: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   reviewTime: [{ required: true, message: '请选择复盘时间', trigger: 'change' }],
 };
 
 function handleAdd() {
   isEdit.value = false;
   Object.assign(form, defaultForm, { reviewTime: nowStr() });
-  studentLabel.value = '';
   dialogVisible.value = true;
 }
 
@@ -187,16 +211,10 @@ async function handleEdit(row: any) {
       audioData: data.audioData || '',
       detail: data.detail || '',
     });
-    studentLabel.value = data.studentName;
     dialogVisible.value = true;
   } catch (e) {
     console.error(e);
   }
-}
-
-function onStudentChange(id: string, name: string) {
-  form.studentId = id;
-  form.studentName = name;
 }
 
 /* ============ 录音：上传文件 ============ */
@@ -215,7 +233,7 @@ const audioUploading = ref(false);
 async function handleAudioUpload(options: UploadRequestOptions) {
   const file = options.file as File;
   if (file.size > AUDIO_MAX_SIZE) {
-    ElMessage.warning(`录音不能超过 8MB，当前 ${(file.size / 1024 / 1024).toFixed(2)}MB`);
+    ElMessage.warning(`录音不能超过 50MB，当前 ${(file.size / 1024 / 1024).toFixed(2)}MB`);
     return;
   }
   audioUploading.value = true;
@@ -235,54 +253,6 @@ function removeAudio() {
   form.audioData = '';
 }
 
-/* ============ 录音：浏览器直接录 ============ */
-
-const recording = ref(false);
-const recordSeconds = ref(0);
-let recorder: MediaRecorder | null = null;
-let chunks: BlobPart[] = [];
-let timer: number | undefined;
-
-/** 浏览器不支持录音就隐藏按钮，不要让功能点了没反应 */
-const canRecord = computed(
-  () => typeof window !== 'undefined' && !!window.MediaRecorder && !!navigator.mediaDevices,
-);
-
-async function toggleRecord() {
-  if (recording.value) {
-    recorder?.stop();
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    chunks = [];
-    recorder = new MediaRecorder(stream);
-    recorder.ondataavailable = (e) => chunks.push(e.data);
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: 'audio/webm' });
-      const reader = new FileReader();
-      reader.onload = () => {
-        form.audioData = reader.result as string;
-        form.audioName = `面谈录音_${nowStr().replace(/[-: ]/g, '')}.webm`;
-        ElMessage.success(`录音完成（${recordSeconds.value} 秒），点「确定」保存`);
-      };
-      reader.readAsDataURL(blob);
-      stream.getTracks().forEach((t) => t.stop());
-      recording.value = false;
-      window.clearInterval(timer);
-      recordSeconds.value = 0;
-    };
-    recorder.start();
-    recording.value = true;
-    recordSeconds.value = 0;
-    timer = window.setInterval(() => {
-      recordSeconds.value += 1;
-    }, 1000);
-  } catch (e) {
-    ElMessage.warning('无法访问麦克风，请检查浏览器权限后改用「上传录音」');
-  }
-}
-
 /* ============ 提交 ============ */
 
 async function handleSubmit() {
@@ -293,7 +263,9 @@ async function handleSubmit() {
   try {
     const payload = {
       id: form.id,
-      studentId: form.studentId,
+      // ★ 2026-10-16：姓名手填 → studentId 不再必传；后端会按姓名尝试匹配学生
+      studentId: form.studentId || undefined,
+      studentName: form.studentName.trim(),
       reviewTime: form.reviewTime,
       interviewTime: form.interviewTime || undefined,
       position: form.position || undefined,
@@ -395,25 +367,6 @@ async function handleDelete(row: any) {
   }
 }
 
-async function handleRemoveAudio(row: any) {
-  try {
-    await ElMessageBox.confirm('确定删除该复盘的录音吗？复盘正文会保留。', '删除录音', {
-      type: 'warning',
-      confirmButtonText: '确定删除',
-      cancelButtonText: '取消',
-    });
-  } catch {
-    return;
-  }
-  try {
-    await removeReviewAudio(row.id);
-    ElMessage.success('录音已删除');
-    loadData();
-  } catch (e) {
-    // 统一处理
-  }
-}
-
 /* ============ 展示辅助 ============ */
 
 function reviewTagType(v?: number) {
@@ -434,7 +387,10 @@ function money(v?: number) {
   return v ? `¥${Number(v).toLocaleString()}` : '—';
 }
 
-onMounted(loadData);
+onMounted(() => {
+  loadData();
+  loadClassOptions();
+});
 </script>
 
 <template>
@@ -444,6 +400,14 @@ onMounted(loadData);
       <el-form :model="query" inline>
         <el-form-item label="姓名">
           <el-input v-model="query.studentName" placeholder="请输入姓名" clearable style="width: 150px" @keyup.enter="handleSearch" />
+        </el-form-item>
+        <!-- ★ 2026-10-16：班级筛选下拉
+             ★ 2026-10-20：去掉 @change —— 选完班级不再自动查，
+               条件全部选好后点「查询」才生效（用户要求：必须点查询按钮才查询） -->
+        <el-form-item label="班级">
+          <el-select v-model="query.classId" clearable filterable placeholder="全部班级" style="width: 180px">
+            <el-option v-for="c in classOptions" :key="c.id" :label="c.className" :value="c.id" />
+          </el-select>
         </el-form-item>
         <el-form-item label="岗位">
           <el-input v-model="query.position" placeholder="请输入岗位" clearable style="width: 150px" @keyup.enter="handleSearch" />
@@ -492,6 +456,10 @@ onMounted(loadData);
         <el-table-column type="index" label="序号" width="60" align="center" />
         <el-table-column prop="studentName" label="姓名" width="100" />
         <el-table-column prop="studentNo" label="学号" width="130" />
+        <!-- ★ 2026-10-16：新增班级列 -->
+        <el-table-column prop="className" label="班级" width="120">
+          <template #default="{ row }">{{ row.className || '—' }}</template>
+        </el-table-column>
         <el-table-column prop="reviewTime" label="复盘时间" width="150" />
         <el-table-column prop="interviewTime" label="面试时间" width="150">
           <template #default="{ row }">{{ row.interviewTime || '—' }}</template>
@@ -523,12 +491,12 @@ onMounted(loadData);
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right" align="center">
+        <!-- ★ 2026-10-16：删掉「删录音」按钮后操作列只剩 3 个按钮，宽度收窄 -->
+        <el-table-column label="操作" width="160" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="handleDetail(row)">详情</el-button>
             <!-- ★ 2026-10-07 行内写按钮也走权限树：后端总闸把 update/delete/remove-audio 都归 review:edit -->
             <el-button v-if="canAct('job:review:edit', true)" link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-            <el-button v-if="canAct('job:review:edit', true)" link type="danger" size="small" @click="handleRemoveAudio(row)">删录音</el-button>
             <el-button v-if="canAct('job:review:edit', true)" link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -551,13 +519,11 @@ onMounted(loadData);
       <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="姓名" prop="studentId">
-              <StudentSelect
-                :model-value="form.studentId"
-                :initial-label="studentLabel"
-                @update:model-value="(v) => (form.studentId = v)"
-                @change="onStudentChange"
-              />
+            <el-form-item label="姓名" prop="studentName">
+              <el-input v-model="form.studentName" placeholder="请输入姓名" clearable maxlength="50" />
+              <div class="field-tip">
+                可直接手填；若姓名与学生库里某人完全一致，会自动关联其学号与班级
+              </div>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -632,19 +598,12 @@ onMounted(loadData);
                 <el-upload :http-request="handleAudioUpload" :show-file-list="false" accept="audio/*">
                   <el-button type="primary" :loading="audioUploading" :icon="Upload">上传录音</el-button>
                 </el-upload>
-                <el-button
-                  v-if="canRecord"
-                  :type="recording ? 'danger' : 'default'"
-                  :icon="Microphone"
-                  @click="toggleRecord"
-                >
-                  {{ recording ? `停止录音（${recordSeconds}s）` : '开始录音' }}
-                </el-button>
-                <span class="tip">支持 mp3 / wav / m4a，≤ 8MB</span>
+                <span class="tip">支持 mp3 / wav / m4a，≤ 50MB</span>
               </div>
               <div v-if="form.audioName" class="audio-file">
                 <span class="audio-file-name">{{ form.audioName }}</span>
-                <audio v-if="form.audioData" :src="form.audioData" controls style="flex: 1" />
+                <!-- ★ 2026-10-16：宽度交给 .audio-file audio 的样式控制（原来内联 flex:1 不够，会撑破弹窗） -->
+                <audio v-if="form.audioData" :src="form.audioData" controls />
                 <el-button link type="danger" size="small" @click="removeAudio">移除</el-button>
               </div>
             </el-form-item>
@@ -755,15 +714,33 @@ onMounted(loadData);
   align-items: center;
   gap: 10px;
   margin-top: 8px;
+  /* ★ 2026-10-16：占满一行、并允许子项压缩。
+     原样子项默认 min-width:auto，原生播放器不肯收缩，
+     结果整行被顶破弹窗右边（「移除」按钮被挤出可视区）。 */
+  width: 100%;
+  min-width: 0;
 }
 
 .audio-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 13px;
   color: #7A6C67;
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 原生 <audio> 默认 min-width:auto → 必须显式置 0，否则不肯收缩、会顶破容器 */
+.audio-file audio {
+  flex: 1 1 0%;
+  min-width: 0;
+}
+
+/* 「移除」按钮不参与压缩，保证始终可见 */
+.audio-file :deep(.el-button) {
+  flex: none;
 }
 
 .audio-name {

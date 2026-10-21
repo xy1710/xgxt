@@ -233,7 +233,7 @@ const NEED_REASON = [2, 5, 6, 7];
 
 async function submitEntry() {
   const stage = entryStage.value as TeachingStage;
-  if (!stage) return ElMessage.warning('请选择学段');
+  if (!stage) return ElMessage.warning('请选择部门');
   if (!entry.classId) return ElMessage.warning('请选择班级');
   if (!entry.attendanceDate) return ElMessage.warning('请选择日期');
 
@@ -268,7 +268,7 @@ async function submitEntry() {
 async function handleExport() {
   const list = await exportAttendance(baseParams());
   if (!list.length) return ElMessage.warning('没有可导出的数据');
-  const head = ['日期', '学段', '班级', '教员', '班主任', '应到', '实到', '未到', '出勤率(%)'];
+  const head = ['日期', '部门', '班级', '教员', '班主任', '应到', '实到', '未到', '出勤率(%)'];
   const lines = list.map((r) => [
     r.attendanceDate,
     r.stageName,
@@ -300,7 +300,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <!-- ===== 顶部：学段筛选 ===== -->
     <div class="ta-bar">
       <span class="ta-bar-title">出勤管理</span>
-      <span class="ta-bar-tag">统一入口 · 三学段合一</span>
+      <span class="ta-bar-tag">统一入口 · 三部门合一</span>
       <el-radio-group v-model="query.stage" size="small" class="ta-stage">
         <el-radio-button label="">全部</el-radio-button>
         <el-radio-button
@@ -362,7 +362,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <el-table v-loading="loading" :data="rows" size="small" border stripe>
       <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column prop="attendanceDate" label="日期" width="112" align="center" sortable />
-      <el-table-column prop="stageName" label="学段" width="70" align="center">
+      <el-table-column prop="stageName" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain" :type="row.stage === 'jh' ? 'warning' : row.stage === 'class' ? 'primary' : 'success'">
             {{ row.stageName }}
@@ -391,7 +391,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="没有出勤记录（换个学段或日期试试）" />
+        <el-empty description="没有出勤记录（换个部门或日期试试）" />
       </template>
     </el-table>
 
@@ -414,7 +414,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
       <div v-loading="detailLoading">
         <template v-if="detail">
           <el-descriptions :column="3" size="small" border>
-            <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+            <el-descriptions-item label="部门">{{ detail.record.stageName }}</el-descriptions-item>
             <el-descriptions-item label="班级">{{ detail.record.className }}</el-descriptions-item>
             <el-descriptions-item label="日期">{{ detail.record.attendanceDate }}</el-descriptions-item>
             <el-descriptions-item label="应到">{{ detail.record.shouldCount }}</el-descriptions-item>
@@ -451,8 +451,8 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <!-- ===== 录入弹窗 ===== -->
     <el-dialog v-model="entryVisible" title="录入 / 修改出勤" width="760px">
       <el-form :inline="true" size="small" class="ta-entry-form">
-        <el-form-item label="学段">
-          <el-select v-model="entry.stage" placeholder="选择学段" style="width: 110px">
+        <el-form-item label="部门">
+          <el-select v-model="entry.stage" placeholder="选择部门" style="width: 110px">
             <el-option v-for="s in availableStages" :key="s" :label="STAGE_NAME[s]" :value="s" />
           </el-select>
         </el-form-item>
@@ -506,7 +506,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-else description="请选择学段与班级" />
+          <el-empty v-else description="请选择部门与班级" />
         </div>
       </template>
 
