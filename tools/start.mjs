@@ -255,7 +255,14 @@ async function ensureMysql(env) {
     } catch { /* 目录不存在就跳过 */ }
     for (const d of dirs) {
       const exe = path.join(d, 'bin', 'mysqld.exe');
-      if (fs.existsSync(exe)) cands.push({ exe, ini: path.join(d, 'my.ini') });
+      if (!fs.existsSync(exe)) continue;
+      // my.ini 先找目录本身（安装版形如 ...\MySQL Server 8.0\my.ini），
+      // 再退到上一级（本机绿色版是 D:\mysql\server\bin\mysqld.exe + D:\mysql\my.ini）。
+      // ★ 2026-10-22 修复：此前只找 d\my.ini，本机的 my.ini 在上一级 D:\mysql\，
+      //   导致 mysqld 被无配置启动 → 找不到 datadir 秒退 → 启动器白等 60 秒超时。
+      const ini = [path.join(d, 'my.ini'), path.join(d, '..', 'my.ini')]
+        .find(p => fs.existsSync(p));
+      cands.push({ exe, ini: ini || null });
     }
   }
 
@@ -272,8 +279,12 @@ async function ensureMysql(env) {
     args.push(`--port=${port}`);
 
     console.log(`    启动 MySQL：${c.exe}`);
+    // stderr 落到文件，避免 mysqld 启动失败时错误被 'ignore' 吞掉、只剩干等超时
+    const errLogPath = path.join(path.dirname(path.dirname(c.exe)), 'mysql-error.log');
+    let errFd;
+    try { errFd = fs.openSync(errLogPath, 'a'); } catch { errFd = 'ignore'; }
     try {
-      spawn(c.exe, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      spawn(c.exe, args, { detached: true, stdio: ['ignore', 'ignore', errFd], windowsHide: true }).unref();
     } catch (e) {
       note(`启动失败：${e.message}`);
       continue;
@@ -282,7 +293,7 @@ async function ensureMysql(env) {
       ok(`MySQL 已启动（:${port}）`);
       return;
     }
-    warn('这一份 60 秒内没就绪，试下一个候选 ...');
+    warn(`这一份 60 秒内没就绪，试下一个候选 ...（mysqld 报错见 ${errLogPath}）`);
   }
 
   const baseDir = path.dirname(path.dirname(cands[0].exe));
