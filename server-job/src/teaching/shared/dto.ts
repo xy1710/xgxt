@@ -21,7 +21,7 @@ export const TEACHING_STAGES: TeachingStage[] = ['jh', 'class', 'job'];
 export const TEACHING_STAGE_NAME: Record<TeachingStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
 };
 
 export function isTeachingStage(x: unknown): x is TeachingStage {
@@ -45,7 +45,7 @@ export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   emp: '就业部',
 };
 
@@ -249,6 +249,8 @@ export interface ExamRow {
   classNames: string;
   contentTypes: number[];
   contentNames: string;
+  /** ★ 自定义类型名称（exam_type=5「其他」时填写）；空=用标准名 */
+  examTypeCustom?: string | null;
   /** 1 草稿 / 2 已提交 */
   status: number;
   statusName: string;
@@ -285,6 +287,8 @@ export interface ExamSaveBody {
   id?: string;
   examName: string;
   examType: number;
+  /** examType=5「其他」时自定义的类型名称 */
+  examTypeName?: string | null;
   examDate: string;
   /** 统一用数组；初高/大学只取第一个（它们是单班模型） */
   classIds: string[];
@@ -360,6 +364,8 @@ export interface ScoreEntry {
   className: string;
   /** 满分合计（初高按比例判定通过用） */
   fullTotal: number;
+  /** ★ 各分数项的本场满分（键：written/machine/interview/other），录入框上限用 */
+  contentFullScore?: Record<string, number>;
   /** 该学段是否算笔试均分（前端据此决定要不要显示那一列） */
   hasWrittenAvg: boolean;
   rows: ScoreEntryRow[];
@@ -880,35 +886,42 @@ export interface LeaveSummary {
  *   放进 `instructor` 专用区块原样透传，不强行拉平 —— 强行拉平就是"造字段"。
  */
 
-/** 学生档案的四个学段来源 */
-export type StudentStage = 'jh' | 'class' | 'job' | 'emp' | 'edu';
+/**
+ * 学生档案的学段来源
+ *
+ * ★ 2026-10-21 用户口径：「在学生档案界面将就业和教务删除，但是保留就业部」
+ *   · job（就业）删掉：它的数据与就业部是同一批人（sms_job 里 stage_key=job、
+ *     dept_code=3），保留只会让下拉出现两个入口指向同一批学生
+ *   · edu（教务）删掉：sms_edu.t_student_base 是教务宿舍模块的学生副本，档案里
+ *     再列一遍既重复又对不上号
+ *   · **数据库里两张表的数据一条没删**（教务宿舍、实训模块还在用）
+ *   · 就业部（emp）改为按 dept_code=3 取数 —— 那 5 个学生的 stage_key 是 'job'，
+ *     若仍按 stage_key='emp' 过滤，删掉 job 学段后他们在档案里就凭空消失了
+ */
+export type StudentStage = 'jh' | 'class' | 'emp';
 
-export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'emp', 'edu'];
+export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'emp'];
 
 export const STUDENT_STAGE_NAME: Record<StudentStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '就业',
-  /** ★ 2026-10-19 批注：就业部（与就业共用 sms_job，按 dept_code=3 隔离） */
   emp: '就业部',
-  edu: '教务',
 };
 
 export function isStudentStage(x: unknown): x is StudentStage {
-  return x === 'jh' || x === 'class' || x === 'job' || x === 'emp' || x === 'edu';
+  return x === 'jh' || x === 'class' || x === 'emp';
 }
 
 /**
  * ★ 学生档案「全部」视图的学段优先级（同学号去重时保留谁）
  *
  *   同一个人可能同时存在于多个库（影子表）：
- *   例如「大学 → 实训」升上来的人，class 库和 job 库各有一条。
- *   规则：以**阶段更靠后**的那条为准 —— job > class > jh > edu。
- *   （edu 放最后：它是教务的同步副本，最陈旧。）
+ *   例如「大学 → 就业部」的人，class 库和 sms_job 库各有一条。
+ *   规则：以**阶段更靠后**的那条为准 —— emp > class > jh。
  */
-export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['emp', 'job', 'class', 'jh', 'edu'];
+export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['emp', 'class', 'jh'];
 
-/** 学生档案 · 列表行（统一结构，四个学段共用） */
+/** 学生档案 · 列表行（统一结构，三个学段共用） */
 export interface StudentRow {
   stage: StudentStage;
   stageName: string;
@@ -925,6 +938,14 @@ export interface StudentRow {
   /** 学段内阶段码（DB 的 stage 列；各学段取值域不同） */
   phaseCode: number | null;
   phaseName: string;
+  /**
+   * ★ 2026-10-21：学生所在班级绑定的「阶段方案阶段」名称
+   *
+   * 学生表只存阶段码（int），方案阶段在班级上（scheme_stage_id）。
+   * 有值时段与详情优先显示这个，没有才退回 phaseName —— 否则筛选按「二阶段」、
+   * 列表却显示「102」，用户会以为筛错了。
+   */
+  schemeStageName: string | null;
   headTeacherId: string | null;
   headTeacherName: string | null;
   teacherId: string | null;
@@ -966,6 +987,14 @@ export interface StudentListQuery {
   studentStatus?: number;
   /** 学段内阶段码筛选 */
   phaseCode?: number;
+  /**
+   * ★ 2026-10-21：按「阶段方案阶段」筛选（值 = t_class_stage_scheme_stage.id）
+   *
+   * 学生表没有方案字段，只能按**所在班级**绑定的 scheme_stage_id 关联。
+   */
+  schemeStageId?: string;
+  /** 只看「班级没绑阶段方案」的学生（含没有班级的） */
+  noScheme?: boolean;
   keyword?: string;
   /** 只看还没分配宿舍的（宿舍分配页用） */
   unassigned?: boolean;
@@ -1112,6 +1141,49 @@ export interface StudentExtras {
   dormOwnerName: string | null;
   /** 所在宿舍的班级（宿舍管理同步，只有初高有） */
   dormClassName: string | null;
+  /**
+   * ★ 2026-10-21：缴费记录（只读，实时取自财务「账单明细」）
+   *
+   *   按学号归集 —— 学生在学段间流动（初高 → 大学 → 就业部）时 student_id 会变，
+   *   但学号不变，按 id 查会漏掉前一段缴的钱。
+   */
+  payments: StudentPayments;
+}
+
+/** 缴费记录 · 单笔 */
+export interface StudentPaymentRecord {
+  billNo: string;
+  feeTypeName: string;
+  /** 金额（分）。前端按分 → 元展示，与财务账单明细同一口径 */
+  amount: number;
+  date: string;
+  /**
+   * ⚠️ 财务账单表虽然有一列 pay_method，但缴费路径从来没写过（只有退费写），
+   *    全库 61 条缴费账单里没有一条带缴纳方式 —— 所以这里不造字段、前端不出这一列。
+   */
+  voucherNo: string | null;
+  operatorName: string | null;
+  remark: string | null;
+}
+
+/** 缴费记录 · 一类费用（学费 / 餐费 / 住宿费 / 保险费） */
+export interface StudentPaymentGroup {
+  key: string;
+  name: string;
+  count: number;
+  amount: number;
+  latestDate: string | null;
+  records: StudentPaymentRecord[];
+}
+
+/** 缴费记录 · 汇总 */
+export interface StudentPayments {
+  groups: StudentPaymentGroup[];
+  totalCount: number;
+  totalAmount: number;
+  latestDate: string | null;
+  /** 财务账单里查不到该生学号时给前端一个明确说明（不是"加载失败"） */
+  note: string | null;
 }
 
 /**
@@ -1141,10 +1213,36 @@ export interface StudentStageMeta {
   phaseOptions: Array<{ value: number; label: string }>;
   /** ★ 2026-10-16 阶段方案（前端「阶段方案」下拉的数据源） */
   planOptions?: StagePlanOption[];
+  /**
+   * ★ 2026-10-21：阶段筛选的选项 —— 直接来自「系统设置 · 阶段方案」，
+   *   不再用写死的阶段码。value 传回列表接口的 schemeStageId。
+   */
+  schemeStageOptions?: SchemeStageOption[];
   /** 该学段特有区块的键（前端据此决定显示哪些页签） */
   sections: string[];
   /** 是否支持「只看未分配宿舍」筛选 */
   supportUnassigned: boolean;
+}
+
+/**
+ * ★ 2026-10-21 阶段方案的阶段（筛选下拉用）
+ *
+ * 与 StagePlanOption（老的「阶段字典」）不是同一套表：
+ *   新方案 = t_class_stage_scheme + t_class_stage_scheme_stage
+ *   老字典 = t_class_stage_plan  + t_class_stage
+ * 「系统设置 · 阶段方案」页改的是新表，所以筛选必须读新表，否则改完方案筛不出来。
+ */
+export interface SchemeStageOption {
+  /** 阶段明细 ID（t_class_stage_scheme_stage.id） */
+  id: string;
+  /** 阶段名称，如一阶段 */
+  name: string;
+  schemeId: string;
+  schemeName: string;
+  /** 所属部门 1 初高部 / 2 大学部 / 3 就业部 */
+  deptCode: number;
+  studyMonths: number | null;
+  sortNo: number;
 }
 
 /* ============================================================

@@ -27,6 +27,10 @@ import { BizError } from '../middleware/errorHandler';
 import type { Operator } from '../utils/approval';
 import { graduateClass, previewGraduate, revokeGraduate } from '../utils/graduate';
 import { resolveActionWithOverlay } from '../utils/roleActionOverlay';
+// ★ P3 切读层：本文件 4 张表（t_job_class / t_job_class_student / t_student_base /
+//   t_job_attendance_summary）均已在 UNI_MAP 登记，全部走 tbl()/tblIns() 路由；
+//   开关关时与原实现等价。
+import { tbl, tblIns, phaseCodeCol, phaseCodeSelect, readPhaseCode } from '../teaching/shared/uniTable';
 
 export const classRouter = Router();
 
@@ -35,6 +39,10 @@ const TABLE = 't_job_class';
 const CS_TABLE = 't_job_class_student';       // 花名册
 const STUDENT_TABLE = 't_student_base';       // 学生主档
 const SUMMARY_TABLE = 't_job_attendance_summary'; // 出勤汇总（取今日出勤率）
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训 → sms_job） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 部门名映射（数据字典固定：1初高部 2大学部） */
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
@@ -187,7 +195,8 @@ function decorate(row: any): any {
     className: row.class_name,
     classCode: row.class_code,
     deptCode: row.dept_code,
-    stage: row.stage,
+    // ★ #23 方案B：阶段码一律走 readPhaseCode（统一表权威列是 stage_code）
+    stage: readPhaseCode(row),
     headTeacherId: row.head_teacher_id,
     headTeacherName: row.head_teacher_name,
     teacherId: row.teacher_id,
@@ -212,7 +221,7 @@ function decorate(row: any): any {
     createTime: row.create_time,
     updateTime: row.update_time,
     deptName: DEPT_NAME[row.dept_code] || '',
-    stageName: CLASS_STAGE_NAME[row.stage] || '',
+    stageName: CLASS_STAGE_NAME[readPhaseCode(row)] || '',
     classStatusName: CLASS_STATUS_NAME[row.class_status] || '',
   };
 }
@@ -224,7 +233,7 @@ function decorate(row: any): any {
 async function genClassCode(): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `SX${year}`;
-  const rows = await db(TABLE)
+  const rows = await tbl(db, DB, TABLE, STAGE)
     .where('class_code', 'like', `${prefix}%`)
     .orderBy('class_code', 'desc')
     .limit(1)
@@ -260,15 +269,16 @@ classRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.className) query.andWhere('class_name', 'like', `%${q.className}%`);
     if (q.classCode) query.andWhere('class_code', 'like', `%${q.classCode}%`);
     if (q.classStatus) query.andWhere('class_status', q.classStatus);
     if (q.deptCode) query.andWhere('dept_code', q.deptCode);
-    if (q.stage) query.andWhere('stage', q.stage);
+    if (q.stage) query.andWhere(phaseCodeCol(), q.stage);
     if (q.headTeacherId) query.andWhere('head_teacher_id', q.headTeacherId);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    // ★ tbl() 的聚合返回值需显式断言（与 exam.route.ts / repo.job.ts 同款写法）
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<Record<string, any>>;
 
     const rows = await query
       .clone()
@@ -282,7 +292,7 @@ classRouter.get(
     const ids = rows.map((r: any) => r.id);
     let rateMap: Record<string, number> = {};
     if (ids.length) {
-      const sums = await db(SUMMARY_TABLE)
+      const sums = await tbl(db, DB, SUMMARY_TABLE, STAGE)
         .whereIn('class_id', ids)
         .andWhere('attend_date', today())
         .andWhere('is_deleted', false)
@@ -341,12 +351,12 @@ classRouter.get(
   validate(z.object({ id: z.string().min(1) })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated;
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     const d = decorate(row);
     // 顺带带出今日出勤率
-    const sum = await db(SUMMARY_TABLE)
+    const sum = await tbl(db, DB, SUMMARY_TABLE, STAGE)
       .where({ class_id: id, attend_date: today(), is_deleted: false })
       .first();
     res.json(ok({ ...d, todayAttendanceRate: sum?.attendance_rate ?? null }));
@@ -370,7 +380,7 @@ classRouter.get(
   ),
   wrap(async (req, res) => {
     const q = (req as any).validated;
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     // ★ 2026-10-02（斌哥）：实训/就业阶段的班级**只有「封班」和「已结业」两种状态**，不再有"开放"。
     //   ⚠️ 这里原来按"开放(class_status=1)"过滤 —— 现在所有班都是封班，
     //      不改的话这个下拉会**一个班都出不来**。改成"排除已结业"。
@@ -383,7 +393,8 @@ classRouter.get(
         'class_name',
         'class_code',
         'dept_code',
-        'stage',
+        // ★ #23 方案B：显式列清单里必须换列名（别名保持 stage，下游 r.stage 不变）
+        phaseCodeSelect({ alias: 'stage' }),
         'class_status',
         'student_count',
         // ★ 2026-10-04：交接班下拉要显示「现在谁在管这个班」→ 必须带上 5 个岗位
@@ -474,13 +485,13 @@ async function checkUnique(
   deptCode: number,
   excludeId?: string,
 ) {
-  const codeQ = db(TABLE).where({ class_code: classCode, is_deleted: false });
+  const codeQ = tbl(db, DB, TABLE, STAGE).where({ class_code: classCode, is_deleted: false });
   if (excludeId) codeQ.andWhereNot('id', excludeId);
   if (await codeQ.first()) {
     throw new BizError(BizCode.CLASS_CODE_EXISTS, `班级编号「${classCode}」已存在`);
   }
 
-  const nameQ = db(TABLE).where({
+  const nameQ = tbl(db, DB, TABLE, STAGE).where({
     class_name: className,
     dept_code: deptCode,
     is_deleted: false,
@@ -501,7 +512,7 @@ classRouter.post(
     const id = randomUUID();
     const now = new Date();
 
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       create_time: now,
       create_by: req.user?.userId || null,
@@ -510,7 +521,7 @@ classRouter.post(
       class_name: body.className,
       class_code: body.classCode,
       dept_code: body.deptCode,
-      stage: body.stage,
+      [phaseCodeCol()]: body.stage,
       head_teacher_id: body.headTeacherId,
       head_teacher_name: body.headTeacherName || null,
       teacher_id: body.teacherId || null,
@@ -539,19 +550,19 @@ classRouter.put(
   validate(saveSchema.extend({ id: z.string().min(1) })),
   wrap(async (req, res) => {
     const body = (req as any).validated;
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     await checkUnique(body.classCode, body.className, body.deptCode, body.id);
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       update_time: new Date(),
       update_by: req.user?.userId || null,
 
       class_name: body.className,
       class_code: body.classCode,
       dept_code: body.deptCode,
-      stage: body.stage,
+      [phaseCodeCol()]: body.stage,
       head_teacher_id: body.headTeacherId,
       head_teacher_name: body.headTeacherName ?? row.head_teacher_name,
       teacher_id: body.teacherId || null,
@@ -587,12 +598,12 @@ classRouter.delete(
       throw new BizError(BizCode.NO_OPERATION_PERMISSION, '班主任无权删除班级');
     }
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
-    const [{ cnt }] = await db(CS_TABLE)
+    const [{ cnt }] = (await tbl(db, DB, CS_TABLE, STAGE)
       .where({ class_id: id, status: 1, is_deleted: false })
-      .count({ cnt: '*' });
+      .count({ cnt: '*' })) as Array<Record<string, any>>;
     if (Number(cnt) > 0) {
       throw new BizError(
         BizCode.CLASS_STATUS_NOT_ALLOW,
@@ -600,7 +611,7 @@ classRouter.delete(
       );
     }
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || null,
@@ -621,12 +632,12 @@ classRouter.post(
   '/seal/:id',
   wrap(async (req, res) => {
     const { id } = req.params;
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
     if (row.class_status === STATUS_GRADUATED) {
       throw new BizError(BizCode.CLASS_STATUS_NOT_ALLOW, '已结业的班级不能封班');
     }
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       class_status: STATUS_SEALED,
       update_time: new Date(),
       update_by: req.user?.userId || null,
@@ -642,12 +653,12 @@ classRouter.post(
   //   如果确认永远不需要，可以整个删掉。
   wrap(async (req, res) => {
     const { id } = req.params;
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
     if (row.class_status !== STATUS_SEALED) {
       throw new BizError(BizCode.CLASS_STATUS_NOT_ALLOW, '只有封班状态才能解封');
     }
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       class_status: STATUS_OPEN,
       update_time: new Date(),
       update_by: req.user?.userId || null,
@@ -684,7 +695,7 @@ classRouter.get(
     if (!canGraduateClass(roles)) {
       throw new BizError(BizCode.NO_OPERATION_PERMISSION, '您没有结业的权限');
     }
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
     assertMyClassIfTeacher(roles, operator.userId, row);
 
@@ -705,7 +716,7 @@ classRouter.post(
     if (!canGraduateClass(roles)) {
       throw new BizError(BizCode.NO_OPERATION_PERMISSION, '您没有结业的权限');
     }
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
     assertMyClassIfTeacher(roles, operator.userId, row);
 
@@ -734,7 +745,7 @@ classRouter.post(
     if (!canRevokeGraduate(operator.roles || [])) {
       throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有校长可以撤销结业');
     }
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     const data = await revokeGraduate(id, operator);

@@ -17,19 +17,21 @@
  *     `employmentLogRouter` / `reviewRouter` 下，沿用各自的页面权限
  *     （job:employmentLog:view / job:review:view）。
  *
- * ⚠️ 只 select `id, class_name` 两列：本环境的 `sms_job.t_job_class` 是精简表，
- *    没有 class_code / dept_code / stage / student_count 等列，多选会报 Unknown column。
+ * ⚠️ 数据源必须是统一表（P8 之后 `sms_job.t_job_class` 已 DROP）：
+ *    实训(job) 与就业部(emp) 都在 `t_uni_class` 里、靠 edu_stage 区分 ——
+ *    就业日志/复盘两边都要能选，所以按 edu_stage in ('job','emp') 取。
  */
 
-import { db } from '../../utils/db';
+import { uniDb } from '../../teaching/shared/uniTable';
 import { ok } from '../../utils/response';
 import { wrap } from '../../utils/wrap';
 
-const CLASS_TABLE = 't_job_class';
+const CLASS_TABLE = 't_uni_class';
 
 export const listJobClassOptions = wrap(async (_req, res) => {
-  const rows = (await db(CLASS_TABLE)
-    .where('is_deleted', 0)
+  const rows = (await uniDb(CLASS_TABLE)
+    .where({ is_deleted: 0 })
+    .whereIn('edu_stage', ['job', 'emp'])
     .select('id', 'class_name')
     .orderBy('class_name')) as Array<{ id: string; class_name: string }>;
 

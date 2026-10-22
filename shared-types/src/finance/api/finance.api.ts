@@ -710,15 +710,17 @@ export interface BillStudentRow {
   className?: string;
   deptCode?: DeptCode;
   deptName?: string;
-  /** 全部四类合计金额（单位：分） */
+  /** 全部五类合计金额（单位：分） */
   totalAmount: number;
-  /** 全部四类合计笔数 */
+  /** 全部五类合计笔数 */
   totalCount: number;
-  /** 四类分组 */
+  /** 五类分组（学费含正式/补费/试学费；杂费含押金/校服） */
   tuition: BillFeeGroup;
   meal: BillFeeGroup;
   dorm: BillFeeGroup;
   insurance: BillFeeGroup;
+  /** ★ 2026-10-22 新增：杂费（押金 + 校服）单独成组 */
+  other: BillFeeGroup;
 }
 
 export type BillStudentListResponse = PageResponse<BillStudentRow>;

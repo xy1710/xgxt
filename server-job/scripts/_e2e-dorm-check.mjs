@@ -248,7 +248,7 @@ function mkJobDorm(db, dbName, over = {}) {
     );
     check(
       '★ 每行都带学段名',
-      allList.every((x) => ['初高', '大学', '实训'].includes(x.stageName)),
+      allList.every((x) => ['初高部', '大学部', '实训', '就业部'].includes(x.stageName)),
     );
 
     /* ============ 2. ★★ 三学段房间状态一致（统一模型） ============ */
@@ -343,14 +343,17 @@ function mkJobDorm(db, dbName, over = {}) {
     // 大学现在可以新建房间了（原「只读」约束随三学段合并作废）
     const uniSave = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'class', buildingName: '自检栋', roomNo: '9' + Math.random().toString(36).slice(2, 4).toUpperCase(), bedCount: 4 },
+      // ★ 房号必须是 3~4 位数字（远端新增校验）
+      // ★ 远端新增：房号 3~4 位数字 + 类别（男寝/女寝）必填
+      body: { stage: 'class', buildingName: '自检栋', roomNo: '9' + String(Math.floor(Math.random() * 90) + 10), bedCount: 4, dormType: 1 },
       token: tQiansy,
     });
     check('★★★ 大学新建房间已放行（三学段一致）', isOk(uniSave), `code=${uniSave.json?.code} ${uniSave.json?.message || ''}`);
 
     /* ============ 6. 实训可写（保存房间） ============ */
     // ★ 用随机栋名/房号：软删记录仍占着 uk_dorm_no，固定名会撞上一轮的残留
-    const newTag = Math.random().toString(36).slice(2, 6).toUpperCase();
+    // ★ 房号必须是 3~4 位数字（远端新增校验），随机取 4 位数避免与历史房间重号
+    const newTag = String(1000 + Math.floor(Math.random() * 8999));
     const newBuilding = '自检栋' + newTag;
     const jobSave = await req(`${API}/save`, {
       method: 'POST',

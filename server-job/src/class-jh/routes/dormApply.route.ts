@@ -19,6 +19,13 @@ import { nameOf } from '../utils/enumName';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件五张表（t_class_dorm_apply / t_class_room / t_class_bed /
+//   t_class_dorm_resident / t_class_student）均已归一，全部走 tbl()/tblIns() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl, tblIns } from '../../teaching/shared/uniTable';
+
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 export const dormApplyRouter = Router();
 
@@ -57,8 +64,8 @@ function toApply(a: any) {
 }
 
 async function recalcRoom(roomId: string, now: Date): Promise<void> {
-  const rows = await db(RESIDENT_TABLE).where({ room_id: roomId, is_active: true, is_deleted: false }).select('id');
-  await db(ROOM_TABLE).where({ id: roomId }).update({ occupied_count: rows.length, update_time: now });
+  const rows = await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ room_id: roomId, is_active: true, is_deleted: false }).select('id');
+  await tbl(db, DB, ROOM_TABLE, STAGE).where({ id: roomId }).update({ occupied_count: rows.length, update_time: now });
 }
 
 /* ============================================================
@@ -80,7 +87,7 @@ dormApplyRouter.get(
   validate(listSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
-    const query = db(APPLY_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, APPLY_TABLE, STAGE).where('is_deleted', false);
     if (q.applyStatus) query.andWhere('apply_status', q.applyStatus);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.keyword) {
@@ -89,7 +96,7 @@ dormApplyRouter.get(
       });
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -101,12 +108,12 @@ dormApplyRouter.get(
 
     // 申请表只存 room_no / bed_id —— 这里批量补「楼栋名 + 床位号」，
     // 否则前端「原房间/床位」只能显示一串床位 UUID（看不懂）。
-    const roomIds = [...new Set(rows.flatMap((r: any) => [r.from_room_id, r.to_room_id]).filter(Boolean))];
-    const bedIds = [...new Set(rows.flatMap((r: any) => [r.from_bed_id, r.to_bed_id]).filter(Boolean))];
+    const roomIds = [...new Set<string>(rows.flatMap((r: any) => [r.from_room_id, r.to_room_id] as string[]).filter(Boolean))];
+    const bedIds = [...new Set<string>(rows.flatMap((r: any) => [r.from_bed_id, r.to_bed_id] as string[]).filter(Boolean))];
     const roomRows = roomIds.length
-      ? await db(ROOM_TABLE).whereIn('id', roomIds).select('id', 'building_name')
+      ? await tbl(db, DB, ROOM_TABLE, STAGE).whereIn('id', roomIds).select('id', 'building_name')
       : [];
-    const bedRows = bedIds.length ? await db(BED_TABLE).whereIn('id', bedIds).select('id', 'bed_no') : [];
+    const bedRows = bedIds.length ? await tbl(db, DB, BED_TABLE, STAGE).whereIn('id', bedIds).select('id', 'bed_no') : [];
     const roomMap = new Map(roomRows.map((r: any) => [r.id, r.building_name]));
     const bedMap = new Map(bedRows.map((b: any) => [b.id, b.bed_no]));
 
@@ -142,14 +149,14 @@ dormApplyRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
-    const fromRoom = await db(ROOM_TABLE).where({ id: body.fromRoomId, is_deleted: false }).first();
+    const fromRoom = await tbl(db, DB, ROOM_TABLE, STAGE).where({ id: body.fromRoomId, is_deleted: false }).first();
     if (!fromRoom) throw new BizError(BizCode.DORM_NOT_FOUND, '原房间不存在');
-    const toRoom = await db(ROOM_TABLE).where({ id: body.toRoomId, is_deleted: false }).first();
+    const toRoom = await tbl(db, DB, ROOM_TABLE, STAGE).where({ id: body.toRoomId, is_deleted: false }).first();
     if (!toRoom) throw new BizError(BizCode.DORM_NOT_FOUND, '目标房间不存在');
-    const toBed = await db(BED_TABLE).where({ id: body.toBedId, is_deleted: false }).first();
+    const toBed = await tbl(db, DB, BED_TABLE, STAGE).where({ id: body.toBedId, is_deleted: false }).first();
     if (!toBed) throw new BizError(BizCode.DORM_NOT_FOUND, '目标床位不存在');
     if (toBed.room_id !== toRoom.id) throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '目标床位不属于目标房间');
 
@@ -170,10 +177,10 @@ dormApplyRouter.post(
     let fromBedId = body.fromBedId;
     let fromBedNo: string | null = null;
     if (fromBedId) {
-      const fb = await db(BED_TABLE).where({ id: fromBedId, is_deleted: false }).first();
+      const fb = await tbl(db, DB, BED_TABLE, STAGE).where({ id: fromBedId, is_deleted: false }).first();
       fromBedNo = fb?.bed_no ?? null;
     } else {
-      const resident = await db(RESIDENT_TABLE).where({ student_id: stu.id, is_active: true, is_deleted: false }).first();
+      const resident = await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ student_id: stu.id, is_active: true, is_deleted: false }).first();
       if (resident) {
         fromBedId = resident.bed_id;
         fromBedNo = resident.bed_no;
@@ -182,7 +189,7 @@ dormApplyRouter.post(
 
     const id = randomUUID();
     const now = new Date();
-    await db(APPLY_TABLE).insert({
+    await tblIns(db, DB, APPLY_TABLE, STAGE, {
       id,
       student_id: stu.id,
       student_no: stu.student_no,
@@ -226,7 +233,7 @@ dormApplyRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof approveSchema>;
 
-    const apply = await db(APPLY_TABLE).where({ id: body.id, is_deleted: false }).first();
+    const apply = await tbl(db, DB, APPLY_TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!apply) throw new BizError(BizCode.DORM_NOT_FOUND, '调宿申请不存在');
     if (apply.apply_status !== ApplyStatus.PENDING) {
       throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '仅待审核的调宿申请可审批');
@@ -236,7 +243,7 @@ dormApplyRouter.post(
     }
 
     // 目标床位占用校验
-    const toBed = await db(BED_TABLE).where({ id: apply.to_bed_id, is_deleted: false }).first();
+    const toBed = await tbl(db, DB, BED_TABLE, STAGE).where({ id: apply.to_bed_id, is_deleted: false }).first();
     if (!toBed) throw new BizError(BizCode.DORM_NOT_FOUND, '目标床位不存在');
     if (toBed.student_id && toBed.student_id !== apply.student_id) {
       throw new BizError(BizCode.BED_OCCUPIED, `目标床位 ${toBed.bed_no} 已被占用`);
@@ -245,17 +252,17 @@ dormApplyRouter.post(
     const now = new Date();
 
     // 释放原床位（若有在住）
-    const resident = await db(RESIDENT_TABLE).where({ student_id: apply.student_id, is_active: true, is_deleted: false }).first();
+    const resident = await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ student_id: apply.student_id, is_active: true, is_deleted: false }).first();
     if (resident) {
-      await db(BED_TABLE).where({ id: resident.bed_id }).update({ bed_status: '空闲', student_id: null, update_time: now });
-      await db(RESIDENT_TABLE).where({ id: resident.id }).update({ is_active: false, update_time: now });
+      await tbl(db, DB, BED_TABLE, STAGE).where({ id: resident.bed_id }).update({ bed_status: '空闲', student_id: null, update_time: now });
+      await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ id: resident.id }).update({ is_active: false, update_time: now });
       await recalcRoom(resident.room_id, now);
     }
 
     // 占用目标床位 + 新建入住
-    const room = await db(ROOM_TABLE).where({ id: apply.to_room_id }).first();
-    await db(BED_TABLE).where({ id: toBed.id }).update({ bed_status: '已占用', student_id: apply.student_id, update_time: now });
-    await db(RESIDENT_TABLE).insert({
+    const room = await tbl(db, DB, ROOM_TABLE, STAGE).where({ id: apply.to_room_id }).first();
+    await tbl(db, DB, BED_TABLE, STAGE).where({ id: toBed.id }).update({ bed_status: '已占用', student_id: apply.student_id, update_time: now });
+    await tblIns(db, DB, RESIDENT_TABLE, STAGE, {
       id: randomUUID(),
       student_id: apply.student_id,
       student_no: apply.student_no,
@@ -278,7 +285,7 @@ dormApplyRouter.post(
     await recalcRoom(apply.to_room_id, now);
 
     // 回写学生宿舍字段
-    await db(STUDENT_TABLE).where({ id: apply.student_id }).update({
+    await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: apply.student_id }).update({
       dorm_id: apply.to_room_id,
       dorm_no: apply.to_room_no,
       bed_no: toBed.bed_no,
@@ -287,7 +294,7 @@ dormApplyRouter.post(
     });
 
     // 申请状态 → 已同意
-    await db(APPLY_TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, APPLY_TABLE, STAGE).where({ id: body.id }).update({
       apply_status: ApplyStatus.APPROVED,
       approve_user_id: req.user?.userId ?? null,
       approve_user_name: req.user?.userName ?? null,
@@ -329,13 +336,13 @@ dormApplyRouter.post(
   validate(rejectSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof rejectSchema>;
-    const apply = await db(APPLY_TABLE).where({ id: body.id, is_deleted: false }).first();
+    const apply = await tbl(db, DB, APPLY_TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!apply) throw new BizError(BizCode.DORM_NOT_FOUND, '调宿申请不存在');
     if (apply.apply_status !== ApplyStatus.PENDING) {
       throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '仅待审核的调宿申请可驳回');
     }
 
-    await db(APPLY_TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, APPLY_TABLE, STAGE).where({ id: body.id }).update({
       apply_status: ApplyStatus.REJECTED,
       approve_user_id: req.user?.userId ?? null,
       approve_user_name: req.user?.userName ?? null,

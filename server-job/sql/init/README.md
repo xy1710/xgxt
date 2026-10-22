@@ -12,6 +12,7 @@
 | `sms_perm.sql` | `sms_perm` | 权限管理：部门/角色/用户/页面/菜单/规则 | 该库为空时 |
 | `sms_consult.sql` | `sms_consult` | 市场咨询：学员、缴费、退费、消费明细 | 该库为空时 |
 | `sms_finance.sql` | `sms_finance` | 财务管理：账单、费用、冻结、退费 | 该库为空时 |
+| `legacy-teaching.sql` | `sms_class` / `sms_class_jh` / `sms_job` / `sms_common(仅 4 张 *_sync)` | **教学域历史表结构**（75 张，纯 DDL、无数据）。P8 之后这些表已 DROP，**只有演示数据脚本需要**：`seed-all-demo` / `seed-demo` / `reset-demo-data` 会临时建表 → 按老列写 → 同步进 `t_uni_*` → 再删掉 | **不要**在正常部署时导入；由 `scripts/_uni-recreate-legacy.mjs` 按需临时创建 |
 
 ## 为什么需要这些文件
 

@@ -39,7 +39,6 @@ import {
   tblIns,
   tblInsTrx,
   uniUpdCols,
-  USE_UNI_TABLE,
 } from '../../../teaching/shared/uniTable';
 
 /**
@@ -120,8 +119,8 @@ const LIVE_TRX = (trx: import('knex').Knex) => tblTrx(trx, SRC_LIVE, LIVE_T, STA
  *   这是第 1 批「三学段采用实训模型」的成果。
  *   只改一个不改另一个，会出现「按房间查住宿查不到」的假象。
  */
-const liveRoomIdCol = (): string => (USE_UNI_TABLE ? 'room_id' : 'dorm_id');
-const liveRoomNoCol = (): string => (USE_UNI_TABLE ? 'room_no' : 'dorm_no');
+const liveRoomIdCol = (): string => 'room_id';
+const liveRoomNoCol = (): string => 'room_no';
 /** 换宿/退宿申请单 */
 const APPLY = () => tbl(db, SRC, APPLY_T, STAGE);
 const APPLY_TRX = (trx: import('knex').Knex) => tblTrx(trx, SRC, APPLY_T, STAGE);

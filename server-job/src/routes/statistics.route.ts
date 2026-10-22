@@ -25,6 +25,10 @@ import { ok } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
+// ★ P3 切读层：本文件 4 张表（t_student_base / t_employment_log / t_review / t_kpi_target）
+//   均已在 UNI_MAP 登记，全部走 tbl()/tblIns() 路由；开关关时与原实现等价。
+//   ⚠️ db.raw(...) 里只有 CASE WHEN 表达式、不含表名，按规则保持不动。
+import { tbl, tblIns } from '../teaching/shared/uniTable';
 
 export const statisticsRouter = Router();
 
@@ -32,6 +36,10 @@ const STUDENT = 't_student_base';
 const LOG = 't_employment_log';
 const REVIEW = 't_review';
 const KPI = 't_kpi_target';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训 → sms_job） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 就业模块管辖的状态 */
 const JOB_SCOPE = [StudentStatus.WAIT_EMPLOY, StudentStatus.EMPLOYED, StudentStatus.SUSPENDED, StudentStatus.QUIT];
@@ -44,10 +52,10 @@ function round(v: number, digits = 2): number {
 
 /** 取 KPI 目标（没有就按默认值建一条） */
 async function getOrCreateTarget() {
-  let row = await db(KPI).where('is_deleted', false).first();
+  let row = await tbl(db, DB, KPI, STAGE).where('is_deleted', false).first();
   if (!row) {
     const id = randomUUID();
-    await db(KPI).insert({
+    await tblIns(db, DB, KPI, STAGE, {
       id,
       target_rate: 85,
       target_offer: 60,
@@ -55,7 +63,7 @@ async function getOrCreateTarget() {
       is_deleted: false,
       create_time: new Date(),
     });
-    row = await db(KPI).where({ id }).first();
+    row = await tbl(db, DB, KPI, STAGE).where({ id }).first();
   }
   return row;
 }
@@ -69,37 +77,37 @@ statisticsRouter.get(
   '/overview',
   wrap(async (_req, res) => {
     // ---- 就业人数 / 待就业人数 ----
-    const [{ employedCount }] = await db(STUDENT)
+    const [{ employedCount }] = (await tbl(db, DB, STUDENT, STAGE)
       .where({ is_deleted: false, student_status: StudentStatus.EMPLOYED })
-      .count({ employedCount: '*' });
+      .count({ employedCount: '*' })) as Array<Record<string, any>>;
 
-    const [{ waitingCount }] = await db(STUDENT)
+    const [{ waitingCount }] = (await tbl(db, DB, STUDENT, STAGE)
       .where({ is_deleted: false, student_status: StudentStatus.WAIT_EMPLOY })
-      .count({ waitingCount: '*' });
+      .count({ waitingCount: '*' })) as Array<Record<string, any>>;
 
     // ---- 获得 offer ----
-    const [{ offerCount }] = await db(REVIEW)
+    const [{ offerCount }] = (await tbl(db, DB, REVIEW, STAGE)
       .where({ is_deleted: false, interview_conclusion: InterviewConclusion.OFFER })
-      .count({ offerCount: '*' });
+      .count({ offerCount: '*' })) as Array<Record<string, any>>;
 
-    const offerRows = await db(REVIEW)
+    const offerRows = await tbl(db, DB, REVIEW, STAGE)
       .where({ is_deleted: false, interview_conclusion: InterviewConclusion.OFFER })
       .distinct('student_id')
       .select('student_id');
 
     // ---- 投递 / 面试累计 ----
-    const [{ totalResumeCount }] = await db(LOG)
+    const [{ totalResumeCount }] = (await tbl(db, DB, LOG, STAGE)
       .where('is_deleted', false)
-      .sum({ totalResumeCount: 'resume_count' });
-    const [{ totalInterviewCount }] = await db(LOG)
+      .sum({ totalResumeCount: 'resume_count' })) as Array<Record<string, any>>;
+    const [{ totalInterviewCount }] = (await tbl(db, DB, LOG, STAGE)
       .where('is_deleted', false)
-      .sum({ totalInterviewCount: 'interview_count' });
+      .sum({ totalInterviewCount: 'interview_count' })) as Array<Record<string, any>>;
 
     // 有投递记录的学生数（人均投递的分母）
-    const [{ resumeStudentCount }] = await db(LOG)
+    const [{ resumeStudentCount }] = (await tbl(db, DB, LOG, STAGE)
       .where('is_deleted', false)
       .where('resume_count', '>', 0)
-      .countDistinct({ resumeStudentCount: 'student_id' });
+      .countDistinct({ resumeStudentCount: 'student_id' })) as Array<Record<string, any>>;
 
     const employed = Number(employedCount);
     const waiting = Number(waitingCount);
@@ -172,21 +180,21 @@ statisticsRouter.get(
 
     const result = [];
     for (const month of list) {
-      const [{ employed }] = await db(REVIEW)
+      const [{ employed }] = (await tbl(db, DB, REVIEW, STAGE)
         .where('is_deleted', false)
         .where('review_conclusion', ReviewConclusion.SIGNED)
         .whereRaw("DATE_FORMAT(review_time, '%Y-%m') = ?", [month])
-        .count({ employed: '*' });
+        .count({ employed: '*' })) as Array<Record<string, any>>;
 
-      const [{ resume }] = await db(LOG)
+      const [{ resume }] = (await tbl(db, DB, LOG, STAGE)
         .where('is_deleted', false)
         .whereRaw("DATE_FORMAT(log_date, '%Y-%m') = ?", [month])
-        .sum({ resume: 'resume_count' });
+        .sum({ resume: 'resume_count' })) as Array<Record<string, any>>;
 
-      const [{ interview }] = await db(LOG)
+      const [{ interview }] = (await tbl(db, DB, LOG, STAGE)
         .where('is_deleted', false)
         .whereRaw("DATE_FORMAT(log_date, '%Y-%m') = ?", [month])
-        .sum({ interview: 'interview_count' });
+        .sum({ interview: 'interview_count' })) as Array<Record<string, any>>;
 
       result.push({
         month,
@@ -208,7 +216,7 @@ statisticsRouter.get(
 statisticsRouter.get(
   '/dept-distribution',
   wrap(async (_req, res) => {
-    const rows = await db(STUDENT)
+    const rows = await tbl(db, DB, STUDENT, STAGE)
       .where('is_deleted', false)
       .whereIn('student_status', JOB_SCOPE)
       .select('dept_code')
@@ -232,7 +240,7 @@ statisticsRouter.get(
 statisticsRouter.get(
   '/status-distribution',
   wrap(async (_req, res) => {
-    const rows = await db(STUDENT)
+    const rows = await tbl(db, DB, STUDENT, STAGE)
       .where('is_deleted', false)
       .whereIn('student_status', JOB_SCOPE)
       .select('student_status')
@@ -258,7 +266,7 @@ statisticsRouter.get(
   wrap(async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
 
-    const rows = await db(STUDENT)
+    const rows = await tbl(db, DB, STUDENT, STAGE)
       .where('is_deleted', false)
       .whereIn('student_status', JOB_SCOPE)
       .whereNotNull('class_name')
@@ -316,7 +324,7 @@ statisticsRouter.put(
 
     const row = await getOrCreateTarget();
 
-    await db(KPI).where({ id: row.id }).update({
+    await tbl(db, DB, KPI, STAGE).where({ id: row.id }).update({
       target_rate: body.targetRate,
       target_offer: body.targetOffer,
       target_resume: body.targetResume,

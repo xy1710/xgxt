@@ -101,7 +101,8 @@ function translateDbError(err: any): string | null {
     ER_ACCESS_DENIED_ERROR: '数据库账号或密码错误',
     ECONNREFUSED: '无法连接数据库，请检查数据库是否启动',
     ER_BAD_FIELD_ERROR: '数据库字段不存在（可能是迁移脚本没跑）',
-    ER_NO_SUCH_TABLE: '数据表不存在（请先执行 npm run migrate）',
+    ER_NO_SUCH_TABLE:
+      '数据表不存在 —— 教学域老表已 DROP，请检查是否有代码漏切读（应走 t_uni_*）',
     ER_DATA_TOO_LONG: '输入的内容太长了',
   };
 

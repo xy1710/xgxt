@@ -26,6 +26,10 @@
 
 import { db } from '../utils/db';
 import { classSync } from '../../utils/classSync';
+// ★ P3 切读层：推给初高的两张表（`sms_class_jh.t_class_student` / `t_class_fee`）
+//   都已归一 → 读走 tbl()、写走 tblIns()。本文件 `db` 连的是 sms_job，
+//   属于**跨库**调用，`tbl()` 会自动补库名前缀（与改造前的 `db('库.表')` 一致）。
+import { tbl, tblIns } from '../../teaching/shared/uniTable';
 
 /** 缴费单表（与 fee.service.ts 的 FEE_TABLE 一致，这里本地声明避免循环依赖） */
 const FEE_TABLE = 't_finance_fee';
@@ -111,16 +115,31 @@ export async function syncFeeToClass(feeId: string): Promise<void> {
  *        （查得到说明确实是初高的学生；查不到就不推）
  * ============================================================ */
 
-/** 初高缴费台账（兜底副本，跨库全限定名） */
-const JH_FEE_TABLE = 'sms_class_jh.t_class_fee';
-/** 初高学生表（按学号回查学生 ID 用） */
-const JH_STUDENT_TABLE = 'sms_class_jh.t_class_student';
+/** 初高缴费台账（兜底副本）—— ★ 已归一 → 写走 tblIns() */
+const JH_FEE_TABLE = 't_class_fee';
+/** 初高学生表（按学号回查学生 ID 用）—— ★ 已归一 → 读走 tbl() */
+const JH_STUDENT_TABLE = 't_class_student';
+/** 初高库（本文件的 `db` 连的是 sms_job → 这两个常量让切读层补库名前缀） */
+const JH_DB = 'sms_class_jh';
+/** 统一表 `edu_stage` 取值：初高 */
+const JH_STAGE = 'jh' as const;
+
+/**
+ * ★ 切读层连接的**纯类型**转换（不改任何运行时行为）
+ *
+ * `src/finance/utils/db.ts` 导出的是「带表名校验的函数 `db`」，它把
+ * `client` / `transaction` / `raw` 等静态成员挂在函数本身上（有意为之，见该文件注释）。
+ * 而 `tbl()` 的第一个参数声明成 `Knex` 实例，只用来「调用取 QueryBuilder」+
+ * 读 `client.config.connection.database` —— **这两件事 finance 的 `db` 都满足**。
+ * → 运行时 100% 兼容，仅类型层面需要一次断言。
+ */
+const CONN = db as unknown as Parameters<typeof tbl>[0];
 
 /** 按学号回查初高学生（查不到返回 null；跨库异常也返回 null，不抛） */
 async function findJhStudent(studentNo: string): Promise<Record<string, any> | null> {
   if (!studentNo) return null;
   try {
-    const row = (await db(JH_STUDENT_TABLE)
+    const row = (await tbl(CONN, JH_DB, JH_STUDENT_TABLE, JH_STAGE)
       .where({ student_no: studentNo, is_deleted: false })
       .first()) as Record<string, any> | undefined;
     return row || null;
@@ -175,10 +194,14 @@ export async function syncFeeToJh(feeId: string): Promise<void> {
     };
 
     // MySQL：ON DUPLICATE KEY UPDATE（幂等键 uk_fee_source = source_system + source_id）
-    await db(JH_FEE_TABLE)
-      .insert(payload)
-      .onConflict(['source_system', 'source_id'])
-      .merge(payload);
+    //
+    // ⚠️ 幂等性依赖 `uk_fee_source`：老表 `sms_class_jh.t_class_fee` 有这个唯一键，
+    //    而统一表 `t_uni_fee` **没有**（只有 PK(id) + idx_edu_stage）。
+    //    → 切读打开后靠 `payload.id`（= 财务单 id，确定性）命中主键来兜住幂等；
+    //      只有「不同来源但 id 相同」这种极端情况才会插成两行。
+    //    这不是 P3 引入的，属统一表的索引口径差异，已登记待 P5/P6 拍板。
+    const upsert = await tblIns(CONN, JH_DB, JH_FEE_TABLE, JH_STAGE, payload);
+    await upsert.onConflict(['source_system', 'source_id']).merge(payload);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn(`[finance→class-jh] 缴费单 ${feeId} 同步异常（不影响本次操作）：${(e as Error).message}`);

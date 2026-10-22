@@ -49,6 +49,18 @@ import { BizError } from '../middleware/errorHandler';
 import { fetchStudentFeeRecords, summarizeFees } from '../utils/financeFeeRef';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
 import { myTrainingClassIds } from '../utils/stageScope';
+/**
+ * ★ P3 切读层：本文件 11 张表全部在 sms_job、且都已在 UNI_MAP 登记 ——
+ *   t_student_base / t_job_class / t_job_fee_call / t_job_class_student /
+ *   t_job_exam_score / t_job_exam / t_job_dorm_bed / t_job_dorm / t_dorm /
+ *   t_employment_log / t_review
+ *   读走 `tbl()`；带别名的 from 侧走 `tblAs()`、被 join 侧走 `tblRef()`
+ *   （见 teaching/attendance/repo.job.ts 的既有约定）；事务内读写走 `tblTrx()`。
+ *   开关关时与原实现等价。
+ *   ⚠️ 文中提到的 sms_common.t_class_fee_sync 由 utils/financeFeeRef.ts 内部处理，
+ *      本文件没有对它的裸表访问，故不动。
+ */
+import { tbl, tblAs, tblRef, tblTrx, phaseCodeCol, phaseCodeSelect, readPhaseCode } from '../teaching/shared/uniTable';
 
 export const classInfoRouter = Router();
 
@@ -82,6 +94,10 @@ const EMP_DORM_TABLE = 't_dorm';
  */
 const EMPLOYMENT_LOG_TABLE = 't_employment_log';
 const REVIEW_TABLE = 't_review';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训 → sms_job） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 考试信息 Tab 只展示最近几次（与参考页一致） */
 const EXAM_RECENT_LIMIT = 3;
@@ -223,7 +239,7 @@ classInfoRouter.get(
 
     // ★ 2026-10-04 阶段隔离：班主任/教员/助教 → 看不到实训班（空列表）
     //   项目经理 → 只看自己带的实训班；学管/校长/管理员 → 全部
-    const query = db(CLASS_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, CLASS_TABLE, STAGE).where('is_deleted', false);
     const myIds = await myTrainingClassIds(operator);
     if (myIds) {
       if (myIds.length === 0) {
@@ -237,7 +253,7 @@ classInfoRouter.get(
 
     const rows = await query
       .select(
-        'id', 'class_name', 'class_code', 'dept_code', 'stage', 'class_status',
+        'id', 'class_name', 'class_code', 'dept_code', phaseCodeSelect({ alias: 'stage' }), 'class_status',
         'head_teacher_id', 'project_manager_id', 'employment_teacher_id',
       )
       .orderBy('class_name', 'asc');
@@ -300,7 +316,7 @@ classInfoRouter.get(
         // ids === null → 学管/校长/管理员，本就不限
         ownIds = ids === null ? null : ids;
       }
-      const mine = await db(CLASS_TABLE)
+      const mine = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ is_deleted: false })
         .modify((b: any) => {
           applyClassScope(b, operator, ownIds);
@@ -318,12 +334,12 @@ classInfoRouter.get(
       // ★ 2026-10-08：补上项目经理（按 project_manager_id 校验）
       const isPM = pmOwnClassOnlyOf(operator.roles);
       const mine = isPM
-        ? await db(CLASS_TABLE)
+        ? await tbl(db, DB, CLASS_TABLE, STAGE)
             .where({ id: classId, project_manager_id: operator.userId, is_deleted: false })
             // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
             // .whereNot('class_status', ClassStatus.GRADUATED)
             .first()
-        : await db(CLASS_TABLE)
+        : await tbl(db, DB, CLASS_TABLE, STAGE)
             .where({ id: classId, head_teacher_id: operator.userId, is_deleted: false })
             .first();
       if (!mine) {
@@ -339,7 +355,7 @@ classInfoRouter.get(
     //   在原班级里能看到他，状态显示「退学」，方便班主任回顾/对账。
     //   ⚠️ 前端对退学学生**只给「详情」按钮**（只读），不能改。
     //   ⚠️ 旧口径（2026-09-30）是"退学直接不查出来"，本次已去掉那行 whereNot。
-    const query = db(`${STUDENT_TABLE} as s`)
+    const query = tblAs(db, DB, STUDENT_TABLE, STAGE, 's')
       .where('s.is_deleted', false)
       .andWhere('s.class_id', classId);
 
@@ -369,7 +385,8 @@ classInfoRouter.get(
         's.education',
         's.student_status',
         's.repeat_count',
-        's.stage',
+        // ★ #23 方案B：join 侧也要换列名（别名保持 stage，下游 r.stage 不变）
+        phaseCodeSelect({ ref: 's', alias: 'stage' }),
         's.remark',
         's.class_id',
         's.class_name',
@@ -383,7 +400,7 @@ classInfoRouter.get(
     const ids = rows.map((r: any) => r.id);
     const unpaidSet = new Set<string>();
     if (ids.length) {
-      const fees = await db(FEE_CALL_TABLE)
+      const fees = await tbl(db, DB, FEE_CALL_TABLE, STAGE)
         .whereIn('student_id', ids)
         .andWhere('is_deleted', false)
         .andWhereNot('call_status', 3) // 3 = 已缴清
@@ -435,7 +452,7 @@ classInfoRouter.get(
 
     let classId = q.classId;
     if (!classId) {
-      const mine = await db(CLASS_TABLE)
+      const mine = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ is_deleted: false })
         .modify((b: any) => {
           // ★ 2026-10-08：统一口径（含项目经理）
@@ -456,7 +473,7 @@ classInfoRouter.get(
     }
 
     const base = () =>
-      db(`${STUDENT_TABLE} as s`).where('s.is_deleted', false).andWhere('s.class_id', classId);
+      tblAs(db, DB, STUDENT_TABLE, STAGE, 's').where('s.is_deleted', false).andWhere('s.class_id', classId);
 
     // ① 在读学员总数（含试学中）
     const [{ inSchool }] = await base().clone().whereIn('s.student_status', IN_SCHOOL_STATUS).count({ inSchool: 's.id' });
@@ -480,11 +497,11 @@ classInfoRouter.get(
     const sids = students.map((x: any) => x.id);
     let unpaid = 0;
     if (sids.length) {
-      const [row] = await db(FEE_CALL_TABLE)
+      const [row] = (await tbl(db, DB, FEE_CALL_TABLE, STAGE)
         .whereIn('student_id', sids)
         .andWhere('is_deleted', false)
         .andWhereNot('call_status', 3)
-        .countDistinct({ n: 'student_id' });
+        .countDistinct({ n: 'student_id' })) as Array<Record<string, any>>;
       unpaid = Number(row?.n || 0);
     }
 
@@ -521,7 +538,7 @@ classInfoRouter.get(
   wrap(async (req, res) => {
     const { studentId } = (req as any).validated;
 
-    const stu = await db(STUDENT_TABLE).where({ id: studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     const result = await fetchStudentFeeRecords(stu.student_no || '', { mirror: 'class' });
@@ -594,7 +611,7 @@ classInfoRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     // ★ 只读角色（教务老师）不得写 —— 本页教务只能看
@@ -615,10 +632,10 @@ classInfoRouter.post(
     let targetBed: any = null;
     let oldDormId: string | null = null;
     if (body.bedId) {
-      const bed = await db(DORM_BED_TABLE).where({ id: body.bedId, is_deleted: false }).first();
+      const bed = await tbl(db, DB, DORM_BED_TABLE, STAGE).where({ id: body.bedId, is_deleted: false }).first();
       if (!bed) throw new BizError(BizCode.DORM_BED_NOT_FOUND, '床位不存在');
 
-      const dm = await db(DORM_TABLE).where({ id: bed.dorm_id, is_deleted: false }).first();
+      const dm = await tbl(db, DB, DORM_TABLE, STAGE).where({ id: bed.dorm_id, is_deleted: false }).first();
       if (!dm) throw new BizError(BizCode.DORM_NOT_FOUND, '宿舍不存在');
       if (dm.dorm_status === DormStatus.DISABLED) {
         throw new BizError(BizCode.DORM_DISABLED, '该宿舍已停用，不能分派');
@@ -664,7 +681,7 @@ classInfoRouter.post(
     if (body.nativePlace !== undefined) patch.native_place = body.nativePlace || null;
     if (body.graduateSchool !== undefined) patch.graduate_school = body.graduateSchool || null;
     if (body.homeAddress !== undefined) patch.home_address = body.homeAddress || null;
-    if (body.stage !== undefined) patch.stage = body.stage;
+    if (body.stage !== undefined) patch[phaseCodeCol()] = body.stage;
     if (body.remark !== undefined) patch.remark = body.remark || null;
     // ★ 换宿舍：学生主档的宿舍字段也跟着改（床位表在下面的事务里同步）
     if (targetBed) {
@@ -675,9 +692,9 @@ classInfoRouter.post(
     // ⚠️ 改了姓名 → 花名册里的 student_name 是**冗余字段（便于显示）**，
     //    不跟着改会出现"同一个人两个名字"。同一事务里一起更新。
     await db.transaction(async (trx: any) => {
-      await trx(STUDENT_TABLE).where({ id: body.studentId }).update(patch);
+      await tblTrx(trx, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId }).update(patch);
       if (body.studentName !== undefined) {
-        await trx(CLASS_STUDENT_TABLE)
+        await tblTrx(trx, DB, CLASS_STUDENT_TABLE, STAGE)
           .where({ student_id: body.studentId, is_deleted: false })
           .update({ student_name: body.studentName || null, update_time: new Date() });
       }
@@ -685,7 +702,7 @@ classInfoRouter.post(
       /* ★ 2026-10-02：换宿舍 —— 释放旧床 → 占用新床 → 两端「已住人数」重算 */
       if (targetBed) {
         // ① 释放该生原来占的床位
-        await trx(DORM_BED_TABLE)
+        await tblTrx(trx, DB, DORM_BED_TABLE, STAGE)
           .where({ student_id: body.studentId, is_deleted: false })
           .update({
             bed_status: DormBedStatus.FREE,
@@ -699,7 +716,7 @@ classInfoRouter.post(
           });
 
         // ② 占用新床位
-        await trx(DORM_BED_TABLE).where({ id: targetBed.id }).update({
+        await tblTrx(trx, DB, DORM_BED_TABLE, STAGE).where({ id: targetBed.id }).update({
           bed_status: DormBedStatus.USED,
           student_id: body.studentId,
           student_no: stu.student_no || null,
@@ -756,12 +773,12 @@ async function assertSeeStudent(
     );
   }
   const mine = isPM
-    ? await db(CLASS_TABLE)
+    ? await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ id: stu.class_id, project_manager_id: operator.userId, is_deleted: false })
         // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
         // .whereNot('class_status', ClassStatus.GRADUATED)
         .first()
-    : await db(CLASS_TABLE)
+    : await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ id: stu.class_id, head_teacher_id: operator.userId, is_deleted: false })
         .first();
   if (!mine) {
@@ -849,10 +866,10 @@ function assertStudentEditable(stu: any): void {
  *    并发时会算出错的数字。
  */
 async function recalcDormUsed(trx: any, dormId: string): Promise<void> {
-  const [row] = await trx(DORM_BED_TABLE)
+  const [row] = await tblTrx(trx, DB, DORM_BED_TABLE, STAGE)
     .where({ dorm_id: dormId, is_deleted: false, bed_status: DormBedStatus.USED })
     .count({ n: 'id' });
-  await trx(DORM_TABLE)
+  await tblTrx(trx, DB, DORM_TABLE, STAGE)
     .where({ id: dormId })
     .update({ used_count: Number((row as any)?.n || 0) });
 }
@@ -893,7 +910,7 @@ classInfoRouter.get(
     const { studentId } = (req as any).validated;
     const operator = getOperator(req);
 
-    const stu = await db(STUDENT_TABLE).where({ id: studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     await assertSeeStudent(stu, operator);
 
@@ -918,8 +935,8 @@ classInfoRouter.get(
       homeAddress: stu.home_address || null,
       studentStatus: stu.student_status ?? null,
       studentStatusName: STUDENT_STATUS_NAME[stu.student_status] || '',
-      stage: stu.stage ?? null,
-      stageName: STAGE_NAME[stu.stage] || '',
+      stage: readPhaseCode(stu) ?? null,
+      stageName: STAGE_NAME[readPhaseCode(stu)] || '',
       // 「综合素质」已与「备注」合并 —— 不再单独建字段
       remark: stu.remark || null,
       // 照片：本期只做展示位，不接上传（文件存储方案未定 —— 斌哥 2026-09-30）
@@ -931,8 +948,8 @@ classInfoRouter.get(
     const market = getMarketInfo(stu);
 
     /* ---------- ③ 末班记录 ---------- */
-    const repeatRows = await db(`${EXAM_SCORE_TABLE} as e`)
-      .leftJoin(`${EXAM_TABLE} as x`, 'e.exam_id', 'x.id')
+    const repeatRows = await tblAs(db, DB, EXAM_SCORE_TABLE, STAGE, 'e')
+      .leftJoin(`${tblRef(DB, EXAM_TABLE)} as x`, 'e.exam_id', 'x.id')
       .where('e.is_deleted', false)
       .andWhere('e.student_id', studentId)
       .andWhere('e.exam_result', ExamResult.FAIL)
@@ -982,7 +999,7 @@ classInfoRouter.get(
      */
     let dorm: any = null;
     if (stu.dorm_id) {
-      const empDorm = await db(EMP_DORM_TABLE)
+      const empDorm = await tbl(db, DB, EMP_DORM_TABLE, STAGE)
         .where({ id: stu.dorm_id, is_deleted: false })
         .first();
 
@@ -1008,8 +1025,8 @@ classInfoRouter.get(
           dormSourceName: '就业基地宿舍',
         };
       } else {
-        const bed = await db(`${DORM_BED_TABLE} as b`)
-          .leftJoin(`${DORM_TABLE} as d`, 'b.dorm_id', 'd.id')
+        const bed = await tblAs(db, DB, DORM_BED_TABLE, STAGE, 'b')
+          .leftJoin(`${tblRef(DB, DORM_TABLE)} as d`, 'b.dorm_id', 'd.id')
           .where('b.is_deleted', false)
           .andWhere('b.student_id', studentId)
           .select(
@@ -1065,8 +1082,8 @@ classInfoRouter.get(
     }
 
     /* ---------- ⑤ 考试信息（最近 N 次） ---------- */
-    const examRows = await db(`${EXAM_SCORE_TABLE} as e`)
-      .leftJoin(`${EXAM_TABLE} as x`, 'e.exam_id', 'x.id')
+    const examRows = await tblAs(db, DB, EXAM_SCORE_TABLE, STAGE, 'e')
+      .leftJoin(`${tblRef(DB, EXAM_TABLE)} as x`, 'e.exam_id', 'x.id')
       .where('e.is_deleted', false)
       .andWhere('e.student_id', studentId)
       .select(
@@ -1118,20 +1135,20 @@ classInfoRouter.get(
 
     /* ---------- ⑥ 班级信息 ---------- */
     const cls = stu.class_id
-      ? await db(CLASS_TABLE).where({ id: stu.class_id, is_deleted: false }).first()
+      ? await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: stu.class_id, is_deleted: false }).first()
       : null;
 
     // 当前班级人数（本模块口径：学生主档里 class_id 指向该班且未删除）
     let studentCount = 0;
     if (cls) {
-      const [row] = await db(STUDENT_TABLE)
+      const [row] = await tbl(db, DB, STUDENT_TABLE, STAGE)
         .where({ class_id: cls.id, is_deleted: false })
         .count({ n: 'id' });
       studentCount = Number((row as any)?.n || 0);
     }
 
     // 历史流转（花名册里这个学生的所有进出记录）
-    const historyRows = await db(CLASS_STUDENT_TABLE)
+    const historyRows = await tbl(db, DB, CLASS_STUDENT_TABLE, STAGE)
       .where({ student_id: studentId, is_deleted: false })
       .orderBy('join_date', 'asc');
 
@@ -1141,8 +1158,8 @@ classInfoRouter.get(
       classCode: cls?.class_code ?? null,
       deptCode: cls?.dept_code ?? null,
       deptName: DEPT_NAME[cls?.dept_code] || null,
-      stage: cls?.stage ?? null,
-      stageName: STAGE_NAME[cls?.stage] || '',
+      stage: readPhaseCode(cls) ?? null,
+      stageName: STAGE_NAME[readPhaseCode(cls)] || '',
       classStatus: cls?.class_status ?? null,
       classStatusName: CLASS_STATUS_NAME[cls?.class_status] || '',
       classroom: cls?.classroom || null,
@@ -1177,10 +1194,10 @@ classInfoRouter.get(
 
     let employment: Record<string, unknown> | null = null;
     if (transferred) {
-      const logRows = await db(EMPLOYMENT_LOG_TABLE)
+      const logRows = await tbl(db, DB, EMPLOYMENT_LOG_TABLE, STAGE)
         .where({ student_id: studentId, is_deleted: false })
         .orderBy('log_date', 'desc');
-      const reviewRows = await db(REVIEW_TABLE)
+      const reviewRows = await tbl(db, DB, REVIEW_TABLE, STAGE)
         .where({ student_id: studentId, is_deleted: false })
         .orderBy('review_time', 'desc');
 

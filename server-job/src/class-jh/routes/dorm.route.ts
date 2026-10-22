@@ -20,6 +20,13 @@ import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 import { mobile } from '../utils/zodRules';
+// ★ P4 切读层：本文件六张表（t_class_building / t_class_room / t_class_bed /
+//   t_class_dorm_resident / t_class_checkout_apply / t_class_student）均已归一，
+//   全部走 tbl()/tblIns()/tblTrx()/tblInsTrx() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblIns, tblInsTrx, tblTrx } from '../../teaching/shared/uniTable';
+
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 export const dormRouter = Router();
 
@@ -32,7 +39,7 @@ const STUDENT_TABLE = 't_class_student';
 
 /** 楼栋行 → 实体（含派生统计） */
 async function buildingToVO(b: any) {
-  const rooms = await db(ROOM_TABLE).where({ building_id: b.id, is_deleted: false }).select('id', 'bed_count', 'occupied_count');
+  const rooms = await tbl(db, DB, ROOM_TABLE, STAGE).where({ building_id: b.id, is_deleted: false }).select('id', 'bed_count', 'occupied_count');
   const bedTotal = rooms.reduce((acc: number, r: any) => acc + (Number(r.bed_count) || 0), 0);
   const occupiedCount = rooms.reduce((acc: number, r: any) => acc + (Number(r.occupied_count) || 0), 0);
   return {
@@ -96,8 +103,8 @@ function residentToVO(v: any) {
 
 /** 重算房间已入住人数 */
 async function recalcRoom(roomId: string, now: Date): Promise<void> {
-  const rows = await db(RESIDENT_TABLE).where({ room_id: roomId, is_active: true, is_deleted: false }).select('id');
-  await db(ROOM_TABLE).where({ id: roomId }).update({ occupied_count: rows.length, update_time: now });
+  const rows = await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ room_id: roomId, is_active: true, is_deleted: false }).select('id');
+  await tbl(db, DB, ROOM_TABLE, STAGE).where({ id: roomId }).update({ occupied_count: rows.length, update_time: now });
 }
 
 /* ============================================================
@@ -117,10 +124,10 @@ dormRouter.get(
   ),
   wrap(async (req, res) => {
     const q = (req as any).validated as { page: number; size: number; keyword?: string };
-    const query = db(BUILDING_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, BUILDING_TABLE, STAGE).where('is_deleted', false);
     if (q.keyword) query.andWhere('building_name', 'like', `%${q.keyword}%`);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -157,7 +164,7 @@ dormRouter.post(
     const body = (req as any).validated as z.infer<typeof buildingSaveSchema>;
 
     // ⚠️ 唯一性预检按「物理范围」查（含已逻辑删除的行）：uk_building_name 是物理唯一索引。
-    const dup = await db(BUILDING_TABLE).where({ building_name: body.buildingName }).first();
+    const dup = await tbl(db, DB, BUILDING_TABLE, STAGE).where({ building_name: body.buildingName }).first();
     if (dup) {
       throw new BizError(
         BizCode.BUSINESS_RULE_VIOLATION,
@@ -169,7 +176,7 @@ dormRouter.post(
 
     const id = randomUUID();
     const now = new Date();
-    await db(BUILDING_TABLE).insert({
+    await tblIns(db, DB, BUILDING_TABLE, STAGE, {
       id,
       building_name: body.buildingName,
       campus_name: body.campusName ?? null,
@@ -210,16 +217,16 @@ dormRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof buildingSaveSchema> & { buildingId: string };
 
-    const exists = await db(BUILDING_TABLE).where({ id: body.buildingId, is_deleted: false }).first();
+    const exists = await tbl(db, DB, BUILDING_TABLE, STAGE).where({ id: body.buildingId, is_deleted: false }).first();
     if (!exists) throw new BizError(BizCode.DORM_NOT_FOUND, '楼栋不存在');
 
     if (body.buildingName !== exists.building_name) {
-      const dup = await db(BUILDING_TABLE).where({ building_name: body.buildingName }).whereNot('id', body.buildingId).first();
+      const dup = await tbl(db, DB, BUILDING_TABLE, STAGE).where({ building_name: body.buildingName }).whereNot('id', body.buildingId).first();
       if (dup) throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, `楼栋名称「${body.buildingName}」已被占用`);
     }
 
     const now = new Date();
-    await db(BUILDING_TABLE).where({ id: body.buildingId }).update({
+    await tbl(db, DB, BUILDING_TABLE, STAGE).where({ id: body.buildingId }).update({
       building_name: body.buildingName,
       campus_name: body.campusName ?? null,
       floor_count: body.floorCount ?? null,
@@ -233,7 +240,7 @@ dormRouter.put(
 
     // 楼栋名变更 → 同步房间的冗余楼栋名（床位表只存 building_id，无需同步）
     if (body.buildingName !== exists.building_name) {
-      await db(ROOM_TABLE).where({ building_id: body.buildingId, is_deleted: false }).update({ building_name: body.buildingName, update_time: now });
+      await tbl(db, DB, ROOM_TABLE, STAGE).where({ building_id: body.buildingId, is_deleted: false }).update({ building_name: body.buildingName, update_time: now });
     }
 
     await writeOpLog({
@@ -271,13 +278,13 @@ dormRouter.get(
   validate(roomListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof roomListSchema>;
-    const query = db(ROOM_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, ROOM_TABLE, STAGE).where('is_deleted', false);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.dormType) query.andWhere('dorm_type', q.dormType);
     if (q.roomStatus) query.andWhere('room_status', q.roomStatus);
     if (q.occupiedCountMin !== undefined) query.andWhere('occupied_count', '>=', q.occupiedCountMin);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -300,10 +307,10 @@ dormRouter.get(
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
-    const room = await db(ROOM_TABLE).where({ id, is_deleted: false }).first();
+    const room = await tbl(db, DB, ROOM_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!room) throw new BizError(BizCode.DORM_NOT_FOUND, '房间不存在');
 
-    const beds = await db(BED_TABLE).where({ room_id: id, is_deleted: false }).orderBy('bed_no', 'asc');
+    const beds = await tbl(db, DB, BED_TABLE, STAGE).where({ room_id: id, is_deleted: false }).orderBy('bed_no', 'asc');
     res.json(
       ok({
         ...roomToVO(room),
@@ -358,7 +365,7 @@ async function syncRoomBeds(
   userId: string,
 ): Promise<void> {
   // 含逻辑删除行
-  const existing: any[] = await client(BED_TABLE).where({ room_id: roomId });
+  const existing: any[] = await tblTrx(client, DB, BED_TABLE, STAGE).where({ room_id: roomId });
   const byIndex = new Map<number, any>();
   for (const b of existing) {
     const idx = parseInt(String(b.bed_no), 10);
@@ -374,7 +381,7 @@ async function syncRoomBeds(
         `床位「${b.bed_no}」已占用，无法把床位数减少到 ${bedCount}（请先退宿）`,
       );
     }
-    await client(BED_TABLE).where({ id: b.id }).update({ is_deleted: true, update_time: now, update_by: userId });
+    await tblTrx(client, DB, BED_TABLE, STAGE).where({ id: b.id }).update({ is_deleted: true, update_time: now, update_by: userId });
   }
 
   // 2) 保证 1..bedCount 号床位存在且字段同步
@@ -395,9 +402,9 @@ async function syncRoomBeds(
         patch.bed_status = '空闲';
         patch.student_id = null;
       }
-      await client(BED_TABLE).where({ id: found.id }).update(patch);
+      await tblTrx(client, DB, BED_TABLE, STAGE).where({ id: found.id }).update(patch);
     } else {
-      await client(BED_TABLE).insert({
+      await tblInsTrx(client, DB, BED_TABLE, STAGE, {
         id: randomUUID(),
         room_id: roomId,
         room_no: roomNo,
@@ -421,11 +428,11 @@ dormRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof roomSaveSchema>;
 
-    const bld = await db(BUILDING_TABLE).where({ id: body.buildingId, is_deleted: false }).first();
+    const bld = await tbl(db, DB, BUILDING_TABLE, STAGE).where({ id: body.buildingId, is_deleted: false }).first();
     if (!bld) throw new BizError(BizCode.DORM_NOT_FOUND, '楼栋不存在');
 
     // 房间号「楼栋内唯一」：uk_building_room_no=(building_id, room_no) 是物理索引 → 预检含逻辑删除行
-    const dup = await db(ROOM_TABLE).where({ building_id: bld.id, room_no: body.roomNo }).first();
+    const dup = await tbl(db, DB, ROOM_TABLE, STAGE).where({ building_id: bld.id, room_no: body.roomNo }).first();
     if (dup) {
       throw new BizError(
         BizCode.BUSINESS_RULE_VIOLATION,
@@ -440,7 +447,7 @@ dormRouter.post(
     const uid = req.user?.userId || 'system';
     // 房间行 + 床位生成放在同一事务，避免「房间建了、床位没建」的半截数据
     await db.transaction(async (trx) => {
-      await trx(ROOM_TABLE).insert({
+      await tblInsTrx(trx, DB, ROOM_TABLE, STAGE, {
         id,
         building_id: bld.id,
         building_name: bld.building_name,
@@ -489,15 +496,15 @@ dormRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof roomSaveSchema> & { roomId: string };
 
-    const exists = await db(ROOM_TABLE).where({ id: body.roomId, is_deleted: false }).first();
+    const exists = await tbl(db, DB, ROOM_TABLE, STAGE).where({ id: body.roomId, is_deleted: false }).first();
     if (!exists) throw new BizError(BizCode.DORM_NOT_FOUND, '房间不存在');
 
-    const bld = await db(BUILDING_TABLE).where({ id: body.buildingId, is_deleted: false }).first();
+    const bld = await tbl(db, DB, BUILDING_TABLE, STAGE).where({ id: body.buildingId, is_deleted: false }).first();
     if (!bld) throw new BizError(BizCode.DORM_NOT_FOUND, '楼栋不存在');
 
     // 房间号或所属楼栋变化 → 按「目标楼栋 + 目标房间号」做楼栋内唯一预检
     if (body.roomNo !== exists.room_no || body.buildingId !== exists.building_id) {
-      const dup = await db(ROOM_TABLE)
+      const dup = await tbl(db, DB, ROOM_TABLE, STAGE)
         .where({ building_id: bld.id, room_no: body.roomNo })
         .whereNot('id', body.roomId)
         .first();
@@ -518,7 +525,7 @@ dormRouter.put(
     // 房间行 + 床位同步 + 冗余回写放在同一事务：
     // 若因「要删掉已占用床位」被拒，整个事务回滚，房间字段不会半截写入。
     await db.transaction(async (trx) => {
-      await trx(ROOM_TABLE).where({ id: body.roomId }).update({
+      await tblTrx(trx, DB, ROOM_TABLE, STAGE).where({ id: body.roomId }).update({
         building_id: bld.id,
         building_name: bld.building_name,
         floor_no: body.floorNo ?? null,
@@ -538,8 +545,8 @@ dormRouter.put(
 
       // 房间号变更 → 同步在住学生的房间号/入住记录
       if (body.roomNo !== exists.room_no) {
-        await trx(RESIDENT_TABLE).where({ room_id: body.roomId, is_active: true, is_deleted: false }).update({ room_no: body.roomNo, update_time: now });
-        await trx(STUDENT_TABLE).where({ dorm_id: body.roomId, is_deleted: false }).update({ dorm_no: body.roomNo, update_time: now });
+        await tblTrx(trx, DB, RESIDENT_TABLE, STAGE).where({ room_id: body.roomId, is_active: true, is_deleted: false }).update({ room_no: body.roomNo, update_time: now });
+        await tblTrx(trx, DB, STUDENT_TABLE, STAGE).where({ dorm_id: body.roomId, is_deleted: false }).update({ dorm_no: body.roomNo, update_time: now });
       }
     });
 
@@ -577,7 +584,7 @@ dormRouter.get(
   validate(residentListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof residentListSchema>;
-    const query = db(RESIDENT_TABLE).where({ is_deleted: false, is_active: true });
+    const query = tbl(db, DB, RESIDENT_TABLE, STAGE).where({ is_deleted: false, is_active: true });
     if (q.roomId) query.andWhere('room_id', q.roomId);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.keyword) {
@@ -586,7 +593,7 @@ dormRouter.get(
       });
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -596,9 +603,9 @@ dormRouter.get(
 
     // 入住表只存 building_id，没有楼栋名 —— 这里批量补上楼栋号（A栋/B栋），
     // 否则前端「入住名单」只能显示一串 UUID。
-    const bIds: string[] = [...new Set(rows.map((r: any) => r.building_id as string).filter(Boolean))];
+    const bIds = [...new Set<string>(rows.map((r: any) => r.building_id as string).filter(Boolean))];
     const bRows = bIds.length
-      ? await db(BUILDING_TABLE).whereIn('id', bIds).select('id', 'building_name')
+      ? await tbl(db, DB, BUILDING_TABLE, STAGE).whereIn('id', bIds).select('id', 'building_name')
       : [];
     const bMap = new Map(bRows.map((b: any) => [b.id, b.building_name]));
 
@@ -631,13 +638,13 @@ dormRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof dispatchSchema>;
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
-    const room = await db(ROOM_TABLE).where({ id: body.roomId, is_deleted: false }).first();
+    const room = await tbl(db, DB, ROOM_TABLE, STAGE).where({ id: body.roomId, is_deleted: false }).first();
     if (!room) throw new BizError(BizCode.DORM_NOT_FOUND, '房间不存在');
 
-    const bed = await db(BED_TABLE).where({ id: body.bedId, is_deleted: false }).first();
+    const bed = await tbl(db, DB, BED_TABLE, STAGE).where({ id: body.bedId, is_deleted: false }).first();
     if (!bed) throw new BizError(BizCode.DORM_NOT_FOUND, '床位不存在');
     if (bed.room_id !== room.id) throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '床位不属于该房间');
 
@@ -662,15 +669,15 @@ dormRouter.post(
     const checkInDate = body.checkInDate || now.toISOString().slice(0, 10);
 
     // 若学生已在住其他床位 → 先释放旧床位
-    const oldResident = await db(RESIDENT_TABLE).where({ student_id: stu.id, is_active: true, is_deleted: false }).first();
+    const oldResident = await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ student_id: stu.id, is_active: true, is_deleted: false }).first();
     if (oldResident) {
-      await db(RESIDENT_TABLE).where({ id: oldResident.id }).update({ is_active: false, update_time: now });
-      await db(BED_TABLE).where({ id: oldResident.bed_id }).update({ bed_status: '空闲', student_id: null, update_time: now });
+      await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ id: oldResident.id }).update({ is_active: false, update_time: now });
+      await tbl(db, DB, BED_TABLE, STAGE).where({ id: oldResident.bed_id }).update({ bed_status: '空闲', student_id: null, update_time: now });
       await recalcRoom(oldResident.room_id, now);
     }
 
     const residentId = randomUUID();
-    await db(RESIDENT_TABLE).insert({
+    await tblIns(db, DB, RESIDENT_TABLE, STAGE, {
       id: residentId,
       student_id: stu.id,
       student_no: stu.student_no,
@@ -692,9 +699,9 @@ dormRouter.post(
     });
 
     // 占用床位 + 回写学生宿舍字段
-    await db(BED_TABLE).where({ id: bed.id }).update({ bed_status: '已占用', student_id: stu.id, update_time: now });
+    await tbl(db, DB, BED_TABLE, STAGE).where({ id: bed.id }).update({ bed_status: '已占用', student_id: stu.id, update_time: now });
     await recalcRoom(room.id, now);
-    await db(STUDENT_TABLE).where({ id: stu.id }).update({
+    await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: stu.id }).update({
       dorm_id: room.id,
       dorm_no: room.room_no,
       bed_no: bed.bed_no,
@@ -736,19 +743,19 @@ dormRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof checkoutSchema>;
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
-    const resident = await db(RESIDENT_TABLE).where({ student_id: stu.id, is_active: true, is_deleted: false }).first();
+    const resident = await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ student_id: stu.id, is_active: true, is_deleted: false }).first();
     if (!resident) throw new BizError(BizCode.DORM_NOT_FOUND, '该学生当前无在住床位');
 
     const now = new Date();
 
     // 释放床位 + 结束入住
-    await db(RESIDENT_TABLE).where({ id: resident.id }).update({ is_active: false, update_time: now });
-    await db(BED_TABLE).where({ id: resident.bed_id }).update({ bed_status: '空闲', student_id: null, update_time: now });
+    await tbl(db, DB, RESIDENT_TABLE, STAGE).where({ id: resident.id }).update({ is_active: false, update_time: now });
+    await tbl(db, DB, BED_TABLE, STAGE).where({ id: resident.bed_id }).update({ bed_status: '空闲', student_id: null, update_time: now });
     await recalcRoom(resident.room_id, now);
-    await db(STUDENT_TABLE).where({ id: stu.id }).update({
+    await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: stu.id }).update({
       dorm_id: null,
       dorm_no: null,
       bed_no: null,
@@ -757,7 +764,7 @@ dormRouter.post(
     });
 
     const checkoutId = randomUUID();
-    await db(CHECKOUT_TABLE).insert({
+    await tblIns(db, DB, CHECKOUT_TABLE, STAGE, {
       id: checkoutId,
       student_id: stu.id,
       student_no: stu.student_no,

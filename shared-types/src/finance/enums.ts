@@ -68,7 +68,7 @@ export enum FeeType {
   /** 校服（★ 2026-10-15 新增，与公共字典 enums.ts 同步） */
   UNIFORM = 7,       // 校服
   /** 补费（★ 2026-10-20 新增：试学转正尾款 / 差额补收，金额由老师自定义） */
-  SUPPLEMENT = 8,    // 补费
+  SUPPLEMENT = 8,    // 补学费（操作入口叫「补费」）
 }
 
 /** 缴费状态 */
@@ -260,7 +260,8 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
-  [FeeType.SUPPLEMENT]: '补费',
+  // ★ 2026-10-22 单据显示名改为「补学费」（操作按钮仍叫「补费」）
+  [FeeType.SUPPLEMENT]: '补学费',
   [FeeType.DEPOSIT]: '押金',
   [FeeType.UNIFORM]: '校服',
 };

@@ -19,19 +19,32 @@
  */
 
 import { db } from './db';
+// ★ P8 后 t_student_base 老表已 DROP，必须走 tbl() 切读到 t_uni_student
+import { tbl, uniDb } from '../teaching/shared/uniTable';
 
 const STUDENT = 't_student_base';
+const DB = 'sms_job';
+const STAGE = 'job' as const;
+
+/**
+ * ★ 2026-10-21：实训(job) 与就业部(emp) 共用 t_uni_student，只查 job 的话
+ *   就业部学员永远匹配不到（就业日志会退化成"只记姓名、不关联学生"）。
+ *   这里统一按 edu_stage in ('job','emp') 查。
+ */
+function students() {
+  return uniDb('t_uni_student').where({ is_deleted: false }).whereIn('edu_stage', ['job', 'emp']);
+}
 
 export async function resolveStudentByName(
   studentId?: string,
   studentName?: string,
 ): Promise<Record<string, any> | null> {
   if (studentId) {
-    const byId = await db(STUDENT).where({ id: studentId, is_deleted: false }).first();
+    const byId = await students().where({ id: studentId }).first();
     if (byId) return byId;
   }
   const name = (studentName || '').trim();
   if (!name) return null;
-  const hits = await db(STUDENT).where({ student_name: name, is_deleted: false }).limit(2);
+  const hits = (await students().where({ student_name: name }).limit(2)) as Array<Record<string, any>>;
   return hits.length === 1 ? hits[0] : null;
 }

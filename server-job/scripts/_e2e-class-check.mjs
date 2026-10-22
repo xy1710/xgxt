@@ -123,6 +123,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       class_code: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase(),
       stage: 2,
       dept_code: 2,
+      class_status: 2, // ★ 新建默认封班（远端口径：开放→已结业 走不通）
       classroom: '3号楼201',
       head_teacher_id: 'T-ZHOUJ',
       head_teacher_name: '周佳',
@@ -133,8 +134,8 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     }, 'job');
 
     // 各班挂 2 个学生（验人数实时统计）
-    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 1 }, 'jh');
-    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 1 }, 'jh');
+    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 5 }, 'jh');
+    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 5 }, 'jh');
     await mkStudent(dbCls, 'sms_class', 't_class_student', clsCls.id, { student_status: 5 }, 'class');
     await mkStudent(dbCls, 'sms_class', 't_class_student', clsCls.id, { student_status: 5 }, 'class');
 
@@ -267,25 +268,17 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 合法流转 开放→封班 成功', isOk(toSealed), `code=${toSealed.json?.code} ${toSealed.json?.message || ''}`);
 
+    // ★ 2026-10-19 远端口径：「待结业」状态已废弃（页面不再出现），
+    //   封班之后**直接**进「已结业」；3→已结业 仅保留给历史数据。
     const toGraduating = await req(`${API}/change-status`, {
       method: 'POST',
       body: { stage: 'jh', id: jhCls.id, classStatus: 3 },
       token: tQiansy,
     });
-    check('★ 合法流转 封班→待结业 成功', isOk(toGraduating));
-
-    // 非法：待结业 → 开放（流转表里没有这条）
-    const illegal = await req(`${API}/change-status`, {
-      method: 'POST',
-      body: { stage: 'jh', id: jhCls.id, classStatus: 1 },
-      token: tQiansy,
-    });
-    // ★★ 断言必须区分「被状态机拦」和「被学管只读闸拦」——
-    //   两者 code 都是 40302，光看 code 会把「闸拦对了」当成「状态机生效了」。
     check(
-      '★ 非法流转 待结业→开放 被状态机拦（不是被权限闸）',
-      isBlocked(illegal) && /不可从/.test(illegal.json?.message || ''),
-      `code=${illegal.json?.code} ${illegal.json?.message || ''}`,
+      '★ 新口径：封班→待结业 被状态机拦（待结业已废弃）',
+      isBlocked(toGraduating) && /不可从/.test(toGraduating.json?.message || ''),
+      `code=${toGraduating.json?.code} ${toGraduating.json?.message || ''}`,
     );
 
     const toGraduated = await req(`${API}/change-status`, {
@@ -293,14 +286,19 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       body: { stage: 'jh', id: jhCls.id, classStatus: 4 },
       token: tQiansy,
     });
-    check('★ 合法流转 待结业→已结业 成功', isOk(toGraduated));
-    // 终态：已结业 → 开放
+    check('★ 合法流转 封班→已结业 成功', isOk(toGraduated), `code=${toGraduated.json?.code} ${toGraduated.json?.message || ''}`);
+
+    // 终态：已结业 → 开放（非结业撤销专用动作，必须拦）
     const fromTerminal = await req(`${API}/change-status`, {
       method: 'POST',
       body: { stage: 'jh', id: jhCls.id, classStatus: 1 },
       token: tQiansy,
     });
-    check('★ 已结业是终态 → 不能再退回开放', isBlocked(fromTerminal), `code=${fromTerminal.json?.code}`);
+    check(
+      '★ 已结业是终态 → 不能再退回开放',
+      isBlocked(fromTerminal) && /不可从/.test(fromTerminal.json?.message || ''),
+      `code=${fromTerminal.json?.code} ${fromTerminal.json?.message || ''}`,
+    );
 
     const badStatus = await req(`${API}/change-status`, {
       method: 'POST',
@@ -309,22 +307,16 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 状态码 9（不存在）被拦', isBlocked(badStatus), `code=${badStatus.json?.code}`);
 
-    // 实训结业要自动写结业日期
+    // 实训结业同样「封班 → 已结业」，并自动写结业日期
     const jobGraduate = await req(`${API}/change-status`, {
-      method: 'POST',
-      body: { stage: 'job', id: jobCls.id, classStatus: 3 },
-      token: tQiansy,
-    });
-    check('★ 实训 封班→待结业 成功', isOk(jobGraduate), `code=${jobGraduate.json?.code}`);
-    const jobGraduate2 = await req(`${API}/change-status`, {
       method: 'POST',
       body: { stage: 'job', id: jobCls.id, classStatus: 4 },
       token: tQiansy,
     });
-    check('★ 实训 待结业→已结业 成功', isOk(jobGraduate2));
+    check('★ 实训 封班→已结业 成功', isOk(jobGraduate), `code=${jobGraduate.json?.code} ${jobGraduate.json?.message || ''}`);
     const jobRow = await probe(dbJob, 'sms_job', 't_job_class', 'job').where({ id: jobCls.id }).first();
     check('★ 实训结业自动写入 close_date', !!jobRow?.close_date, `close_date=${jobRow?.close_date}`);
-    check('★ 实训结业记录 prev_class_status（撤销结业用）', jobRow?.prev_class_status === 3, `prev=${jobRow?.prev_class_status}`);
+    check('★ 实训结业记录 prev_class_status（撤销结业用）', Number(jobRow?.prev_class_status) === 2, `prev=${jobRow?.prev_class_status}`);
 
     /* ============ 7. 保存（新增 / 修改）+ 唯一性 ============ */
     // 编辑不清阶段的测试对象（复用大学夹具班，测完统一清理）
@@ -340,12 +332,28 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     // 实训：编号唯一
     // ⚠️ 必填项（班主任 / 开班日期）要一起给全，否则会被「班主任必填」先拦下 →
     //    看着"被拦了"，其实压根没走到编号唯一性那一步（假通过）。
+    // ★ 班号新规：编号跨部门唯一。先建 A 拿到编号，再用同一编号建 B → 必须被拦
+    const dupTag = 'DC' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    const dupA = await req(`${API}/save`, {
+      method: 'POST',
+      body: {
+        stage: 'job',
+        className: '自检重复编号A-' + dupTag,
+        classCode: dupTag,
+        deptCode: 2,
+        headTeacherId: 'T-X',
+        headTeacherName: '某',
+        openDate: '2026-09-01',
+      },
+      token: tQiansy,
+    });
+    if (isOk(dupA)) reg('sms_common', 't_uni_class', dupA.json?.data?.id);
     const dupCode = await req(`${API}/save`, {
       method: 'POST',
       body: {
         stage: 'job',
-        className: '自检重复编号',
-        classCode: rowJob.classCode,
+        className: '自检重复编号B-' + dupTag,
+        classCode: dupTag,
         deptCode: 2,
         headTeacherId: 'T-X',
         headTeacherName: '某',
@@ -354,15 +362,16 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       token: tQiansy,
     });
     check(
-      '★ 实训新增：班级编号重复被拦（且必须确认是被"编号已存在"拦的）',
-      isBlocked(dupCode) && /已存在/.test(dupCode.json?.message || ''),
+      '★ 实训新增：班级编号重复被拦（跨部门唯一）',
+      isBlocked(dupCode) && /占用|已存在/.test(dupCode.json?.message || ''),
       `code=${dupCode.json?.code} ${dupCode.json?.message || ''}`,
     );
 
     // 同部门内班级名重复
     const dupName = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'class', className: clsCls.class_name, deptCode: 2, phaseCode: 202 },
+      // ★ 班级编号必填（2026-10-21 新口径），否则被「编号必填」先拦、走不到同名检查
+      body: { stage: 'class', className: clsCls.class_name, classCode: 'C' + Math.random().toString(36).slice(2, 6).toUpperCase(), deptCode: 2, phaseCode: 202 },
       token: tQiansy,
     });
     check(
@@ -371,13 +380,25 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       `code=${dupName.json?.code} ${dupName.json?.message || ''}`,
     );
 
-    // 初高：班主任必填（NOT NULL）
+    // ★ 2026-10-15 需求：初高「班主任 / 教员 / 助教」改为下拉选人、**允许不选**
+    //   （迁移 20261015_002_class_info_relax_required 已把这几列放宽为可空）
+    //   ⚠️ 这条以前是"缺班主任必须被拦"，长期靠残留的同名班撞「已有班级叫…」才
+    //      侥幸通过 —— 清掉夹具后就露馅了，所以改成按新口径断言。
     const jhNoTeacher = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'jh', className: '自检无班主任班', deptCode: 1 },
+      // 名字带随机后缀：这个用例以前会撞上一次运行留下的同名班
+      body: { stage: 'jh', className: '自检无班主任-' + Math.random().toString(36).slice(2, 6), classCode: 'J' + Math.random().toString(36).slice(2, 6).toUpperCase(), deptCode: 1 },
       token: tQiansy,
     });
-    check('★ 初高新增：缺班主任被拦（那张表里 NOT NULL）', isBlocked(jhNoTeacher), `code=${jhNoTeacher.json?.code} ${jhNoTeacher.json?.message || ''}`);
+    check(
+      '★ 初高新增：班主任/教员全留空也能建（2026-10-15 放宽）',
+      isOk(jhNoTeacher) && !!jhNoTeacher.json?.data?.id,
+      `code=${jhNoTeacher.json?.code} ${jhNoTeacher.json?.message || ''}`,
+    );
+    const jhNoTeacherId = jhNoTeacher.json?.data?.id;
+    if (jhNoTeacherId) {
+      await req(`${API}/delete?stage=jh&id=${jhNoTeacherId}`, { method: 'DELETE', token: tQiansy });
+    }
 
     // 班级名必填
     const noName = await req(`${API}/save`, {
@@ -387,40 +408,26 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 班级名必填被拦', isBlocked(noName), `code=${noName.json?.code}`);
 
-    /* ----★ NOT NULL 防御（三张表必填列各不相同，必须各自提前拦，
+    /* ----★ 必填列防御（各表不同，必须各自提前拦，
        否则会漏到 DB 层报 ER_BAD_NULL_ERROR，错误信息很难定位）---- */
-    // 实训：head_teacher_id + open_date 必填
-    const jobNoTeacher = await req(`${API}/save`, {
-      method: 'POST',
-      body: { stage: 'job', className: '自检实训缺班主任', classCode: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase() },
-      token: tQiansy,
-    });
-    check('★ 实训新增：缺班主任被拦（该表 head_teacher_id NOT NULL）', isBlocked(jobNoTeacher), `code=${jobNoTeacher.json?.code} ${jobNoTeacher.json?.message || ''}`);
+    // 实训：open_date 仍是必填（head_teacher 已放宽，不再要求）
     const jobNoDate = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'job', className: '自检实训缺日期', classCode: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase(), headTeacherId: 'T-X', headTeacherName: '某' },
+      body: {
+        stage: 'job',
+        className: '自检实训缺日期',
+        classCode: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+        headTeacherId: 'T-X',
+        headTeacherName: '某',
+      },
       token: tQiansy,
     });
-    check('★ 实训新增：缺开班日期被拦（该表 open_date NOT NULL）', isBlocked(jobNoDate), `code=${jobNoDate.json?.code} ${jobNoDate.json?.message || ''}`);
-
-    // 初高：head_teacher_name / teacher_id / teacher_name 也必填（实测！）
-    const jhNoTeacherName = await req(`${API}/save`, {
-      method: 'POST',
-      body: { stage: 'jh', className: '自检初高缺师称', deptCode: 1, headTeacherId: 'T-X' },
-      token: tQiansy,
-    });
-    check('★ 初高新增：缺班主任姓名被拦（该表 head_teacher_name NOT NULL）', isBlocked(jhNoTeacherName), `code=${jhNoTeacherName.json?.code} ${jhNoTeacherName.json?.message || ''}`);
-    const jhNoTeacherField = await req(`${API}/save`, {
-      method: 'POST',
-      body: { stage: 'jh', className: '自检初高缺教员', deptCode: 1, headTeacherId: 'T-X', headTeacherName: '某' },
-      token: tQiansy,
-    });
-    check('★ 初高新增：缺教员工号被拦（该表 teacher_id NOT NULL）', isBlocked(jhNoTeacherField), `code=${jhNoTeacherField.json?.code} ${jhNoTeacherField.json?.message || ''}`);
+    check('★ 实训新增：缺开班日期被拦（业务必填）', isBlocked(jobNoDate), `code=${jobNoDate.json?.code} ${jobNoDate.json?.message || ''}`);
 
     // 大学：class_name 之外只有 dept_code/stage 必填，缺阶段码要有兜底而不是炸库
     const clsNoPhase = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'class', className: '自检大学无阶段', deptCode: 2 },
+      body: { stage: 'class', className: '自检大学无阶段', classCode: 'U' + Math.random().toString(36).slice(2, 6).toUpperCase(), deptCode: 2 },
       token: tQiansy,
     });
     check('★ 大学新增：不传阶段码也能建（该表 stage NOT NULL → 后端兜底）', isOk(clsNoPhase), `code=${clsNoPhase.json?.code} ${clsNoPhase.json?.message || ''}`);
@@ -451,6 +458,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       body: {
         stage: 'class',
         className: '自检新建大学班',
+        classCode: 'UN' + Math.random().toString(36).slice(2, 5).toUpperCase(),
         deptCode: 2,
         phaseCode: 203,
         classroom: '新建教室A101',
@@ -463,7 +471,8 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     check('★ 大学新增班级成功', isOk(created) && !!created.json?.data?.id, `code=${created.json?.code} ${created.json?.message || ''}`);
     const newId = created.json?.data?.id;
     const newRow = newId ? await probe(dbCls, 'sms_class', 't_class_info', 'class').where({ id: newId }).first() : null;
-    check('★★ 大学新增：教室写进了 room 列', newRow?.room === '新建教室A101', `room=${newRow?.room}`);
+    // ★ 2026-10-19 远端新增教室规范化：'新建教室A101' → 'A-101'
+    check('★★ 大学新增：教室规范化后写进 room 列', newRow?.room === 'A-101', `room=${newRow?.room}`);
     reg('sms_class', 't_class_info', newId);
 
     // 修改
@@ -474,7 +483,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 修改班级成功', isOk(updated), `code=${updated.json?.code} ${updated.json?.message || ''}`);
     const reread = await probe(dbCls, 'sms_class', 't_class_info', 'class').where({ id: newId }).first();
-    check('★ 修改后教室更新', reread?.room === '改后教室B202' && reread?.class_name === '自检改名大学班');
+    check('★ 修改后教室更新', reread?.room === 'B-202' && reread?.class_name === '自检改名大学班', `room=${reread?.room}`);
 
     // 生成编号（只有实训有）
     const genJob = await req(`${API}/gen-code?stage=job`, { token: tQiansy });
@@ -485,12 +494,13 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     /* ============ 8. 元信息 ============ */
     const meta = await req(`${API}/meta`, { token: tQiansy });
     const metaList = meta.json?.data || [];
-    check('★ /meta 返回三学段特性', isOk(meta) && metaList.length === 3, `得到 ${metaList.length} 个`);
+    check('★ /meta 返回四学段特性（含就业部 emp）', isOk(meta) && metaList.length === 4, `得到 ${metaList.length} 个`);
     const mJob = metaList.find((m) => m.stage === 'job');
     const mJh = metaList.find((m) => m.stage === 'jh');
     const mCls = metaList.find((m) => m.stage === 'class');
     check('★ meta：实训 hasClassCode=true / hasCloseDate=true', mJob?.hasClassCode === true && mJob?.hasCloseDate === true);
-    check('★ meta：初高 hasClassCode=false / hasCloseDate=false', mJh?.hasClassCode === false && mJh?.hasCloseDate === false);
+    // ★ 班号新规：三部门都有班级编号字段（初高 meta 也返回 hasClassCode=true）
+    check('★ meta：初高 hasClassCode=true（班号新规）', mJh?.hasClassCode === true, `得到 ${mJh?.hasClassCode}`);
     check('★ meta：教室标签各学段不同', mJob?.classroomLabel !== mCls?.classroomLabel, `job=${mJob?.classroomLabel} class=${mCls?.classroomLabel}`);
     check('★ meta：阶段码选项按学段不同', (mJh?.phaseOptions?.length || 0) > 0 && (mJob?.phaseOptions?.length || 0) > 0);
 

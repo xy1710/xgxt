@@ -20,9 +20,16 @@
 
 import { randomUUID } from 'crypto';
 import { db } from './db';
+// ★ P4 切读层：`t_class_op_log`（sms_class_jh）**已归一** → 写入走 tblIns()。
+//   开关关时 `tblIns()` 退化为 `db('t_class_op_log').insert(剔掉统一表专有列后的 payload)`，
+//   与原实现等价（payload 里本来就没有 edu_stage 之类的列）。
+import { tblIns } from '../../teaching/shared/uniTable';
 
 /** 操作日志表名 */
 const OP_LOG_TABLE = 't_class_op_log';
+/** 初高库 + 学段取值 */
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /** 写入操作日志的入参 */
 export interface OpLogInput {
@@ -57,7 +64,7 @@ export interface OpLogInput {
  */
 export async function writeOpLog(input: OpLogInput): Promise<void> {
   try {
-    await db(OP_LOG_TABLE).insert({
+    await tblIns(db, DB, OP_LOG_TABLE, STAGE, {
       id: randomUUID(),
       module: input.module ?? null,
       biz_type: input.bizType,

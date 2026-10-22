@@ -23,6 +23,9 @@ import { BizError } from '../middleware/errorHandler';
 import { fmtDate } from '../utils/date';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
 import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
+// ★ P3 切读层：本文件两张表（t_employment_log / t_student_base）都已归一，
+//   全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblIns } from '../teaching/shared/uniTable';
 // ★ 2026-10-16：姓名可手填 → 复用「按姓名尽量匹配学生」的共用逻辑
 import { resolveStudentByName } from '../utils/studentResolve';
 // ★ 2026-10-16：班级下拉选项（只读，就业老师也有权限）
@@ -32,6 +35,10 @@ export const employmentLogRouter = Router();
 
 const TABLE = 't_employment_log';
 const STUDENT = 't_student_base';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /* ============================================================
  * 0. 班级下拉选项（只读）
@@ -89,13 +96,13 @@ employmentLogRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     // ★ t_employment_log 挂在「学生」身上，没有 class_id 列
     //   → via='student'：换成一串「我班上的学生 id」再过滤
     // ★ 2026-10-16 补 ownCreatedBy：姓名可手填 → 匹配不到学生的日志 student_id 为 NULL，
     //   若只按 student_id 过滤，建单人（就业老师/项目经理）自己反而看不到。
     //   → 额外放行「我自己创建的」记录。
-    await applyTrainingScope(query, req, { table: TABLE, via: 'student', ownCreatedBy: true });
+    await applyTrainingScope(query, req, { table: TABLE, dbName: DB, via: 'student', ownCreatedBy: true });
 
     if (q.studentId) query.andWhere('student_id', q.studentId);
     // ★ 2026-10-16：班级筛选 —— 日志表没有 class_id（只有 class_name 快照），
@@ -111,7 +118,7 @@ employmentLogRouter.get(
     if (q.startDate) query.andWhere('log_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('log_date', '<=', q.endDate);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -138,11 +145,11 @@ employmentLogRouter.get(
 
     // ★ 2026-10-16：详情也要过数据范围，否则拿到 id 就能绕过列表看别人的日志。
     //   不通过时统一抛「不存在」，避免暴露"这条记录存在但你没权限"。
-    const guard: any = db(TABLE).where({ id, is_deleted: false });
-    await applyTrainingScope(guard, req, { table: TABLE, via: 'student', ownCreatedBy: true });
+    const guard: any = tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false });
+    await applyTrainingScope(guard, req, { table: TABLE, dbName: DB, via: 'student', ownCreatedBy: true });
     if (!(await guard.first())) throw new BizError(BizCode.PARAM_ERROR, '就业日志不存在');
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '就业日志不存在');
 
     res.json(ok(toVo(row)));
@@ -184,7 +191,7 @@ employmentLogRouter.post(
     const student = await resolveStudentByName(body.studentId, body.studentName);
 
     const id = randomUUID();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       student_id: student ? student.id : null,
       student_no: student ? student.student_no : null,
@@ -221,13 +228,13 @@ employmentLogRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '就业日志不存在或已被删除');
 
     // ★ 同新增：姓名可直接手填，能唯一匹配到学生就重新关联
     const student = await resolveStudentByName(body.studentId, body.studentName);
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       student_id: student ? student.id : null,
       student_no: student ? student.student_no : null,
       student_name: body.studentName,
@@ -259,10 +266,10 @@ employmentLogRouter.delete(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '就业日志不存在或已被删除');
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',

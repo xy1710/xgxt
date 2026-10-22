@@ -1090,7 +1090,7 @@ onMounted(load);
             <!--
               ★ 2026-10-20 补费（用户口径）：
                 只对「已缴试学费」的行开放 —— 试学结束后补缴尾款 / 补差额，
-                金额老师自定义。补费单单独记「补费」，不占用学费额度。
+                金额老师自定义。补费单单独记「补学费」，不占用学费额度。
             -->
             <el-button v-if="canSupplement(row)" link type="success" @click="openSupplement(row)">
               补费
@@ -1367,7 +1367,7 @@ onMounted(load);
       <el-alert type="success" :closable="false" show-icon class="mb">
         <template #title>
           补费金额<strong>由老师自定义</strong>（按实际收到的钱填，可含优惠）。
-          补费单在列表里单独显示为「补费」，不占用学费额度；
+          补费单在列表里单独显示为「补学费」，不占用学费额度；
           财务确认到账后，试学中的学员会自动转为正式在读。
         </template>
       </el-alert>

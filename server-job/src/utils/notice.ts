@@ -25,6 +25,11 @@
 import { randomUUID } from 'crypto';
 import type { Knex } from 'knex';
 import { db } from '../utils/db';
+// ★ 切读层：通知表 t_job_notice 在 sms_job（学段固定 job）已归一 → 切读；开关关时与原实现等价
+import { tblIns, tblInsTrx } from '../teaching/shared/uniTable';
+
+const DB = 'sms_job';
+const STAGE = 'job' as const;
 
 /** 通知表名 */
 export const NOTICE_TABLE = 't_job_notice';
@@ -115,9 +120,9 @@ export async function sendNotice(
   };
 
   if (trxOpt) {
-    await trxOpt(NOTICE_TABLE).insert(row);
+    await tblInsTrx(trxOpt, DB, NOTICE_TABLE, STAGE, row);
   } else {
-    await db(NOTICE_TABLE).insert(row);
+    await tblIns(db, DB, NOTICE_TABLE, STAGE, row);
   }
 
   return id;
@@ -168,9 +173,9 @@ export async function sendNoticeBatch(
   for (let i = 0; i < rows.length; i += BATCH) {
     const chunk = rows.slice(i, i + BATCH);
     if (trxOpt) {
-      await trxOpt(NOTICE_TABLE).insert(chunk);
+      await tblInsTrx(trxOpt, DB, NOTICE_TABLE, STAGE, chunk);
     } else {
-      await db(NOTICE_TABLE).insert(chunk);
+      await tblIns(db, DB, NOTICE_TABLE, STAGE, chunk);
     }
   }
 

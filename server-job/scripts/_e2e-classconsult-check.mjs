@@ -104,9 +104,13 @@ async function makeClass(name) {
     class_status: 1,
     student_count: 0,
   });
+  // ★ 2026-10-21 班号新规：接收咨询学生时学号 = LZ + 班级编号 + 序号，
+  //   班级没有编号会直接被拦 → 统一表镜像里必须带编号。
+  //   ⚠️ 老表 t_class_info 没有 class_code 列（该列只在统一表），别写进老表 insert。
+  const classCode = 'CC' + Math.random().toString(36).slice(2, 6).toUpperCase();
   await db(CLS_T).insert(row);
   reg(SRC, CLS_T, id);
-  if (USE_UNI) await mirrorToUni(SRC, CLS_T, { ...row, id }, STAGE, reg);
+  if (USE_UNI) await mirrorToUni(SRC, CLS_T, { ...row, id, class_code: classCode }, STAGE, reg);
   return { id, ...row };
 }
 
@@ -139,9 +143,14 @@ async function cleanup() {
   for (const [dbName, table] of order) {
     for (const [fdb, ftable, id] of fixtures) {
       if (fdb !== dbName || ftable !== table) continue;
-      const c = conn(fdb);
+      /* ★ 2026-10-22：老表已 DROP，清理必须走统一表名 ——
+         原来拿老表名（t_class_consult_push 等）去查，查不到 → catch 吞掉 →
+         自检数据一直留在库里（今天累计攒了 133 条待接收单，
+         把后续套件的列表顶到分页上限，classdorm 因此挂了 3 条）。 */
+      const [tdb, ttable] = regTarget(fdb, ftable);
+      const c = conn(tdb);
       // 物理删（自检数据不进软删池，避免占唯一索引）
-      await c(ftable).where({ id }).del().catch(() => {});
+      await c(ttable).where({ id }).del().catch(() => {});
       await c.destroy();
     }
   }
@@ -259,7 +268,8 @@ async function main() {
   const stuRow = await probe(db, SRC, STU_T, STAGE).where({ id: newStuId }).first();
   check('★ 新建档 source_system=consult', String(stuRow?.source_system) === 'consult', stuRow?.source_system);
   check('★ 新建档 source_id=咨询单号（溯源）', String(stuRow?.source_id ?? '') === consultNo1, stuRow?.source_id);
-  check('★ 自动学号符合 S+年份+4位', /^S\d{8}$/.test(String(newStuNo)), String(newStuNo));
+  // ★ 2026-10-22 学号新规：LZ + 班级编号 + 3 位班内序号（夹具班编号 CCxxxx → LZCCxxxx001）
+  check('★ 自动学号符合 LZ+班级编号+序号（新规）', /^LZCC[A-Z0-9]{4}\d{3}$/.test(String(newStuNo)), String(newStuNo));
   check('★ 建档后班级回填正确', String(stuRow?.class_id ?? '') === String(clsB.id), stuRow?.class_id);
 
   const clsBCount = await probe(db, SRC, CLS_T, STAGE).where({ id: clsB.id }).first();
@@ -360,10 +370,16 @@ async function main() {
   if (USE_UNI) {
     const uc = conn('sms_common');
     // ③ bed_no 类型必须回到 int（迁移 003）
+    //    ★ P6 修正：display width（int(11)）被现代 MySQL 弃用，迁移 009 的 MODIFY 按
+    //      information_schema 的 COLUMN_TYPE 重建后显示为 int —— 两者语义相同，断言兼容两种。
     const bedCol = await uc('information_schema.COLUMNS')
       .where({ TABLE_SCHEMA: 'sms_common', TABLE_NAME: 't_uni_student', COLUMN_NAME: 'bed_no' })
       .first();
-    check('★ 切读：t_uni_student.bed_no 类型 = int(11)', String(bedCol?.COLUMN_TYPE) === 'int(11)', `实际=${bedCol?.COLUMN_TYPE}`);
+    check(
+      '★ 切读：t_uni_student.bed_no 类型 = int（int 或 int(11)）',
+      String(bedCol?.COLUMN_TYPE).replace(/\(\d+\)/, '') === 'int',
+      `实际=${bedCol?.COLUMN_TYPE}`,
+    );
 
     // ④ consult_no 上不得有唯一索引
     const stIdx = await uc('information_schema.STATISTICS')

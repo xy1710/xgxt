@@ -69,8 +69,16 @@ import {
 } from '../utils/approval';
 // ★ 2026-10-08：审批通过 → 推财务建退费单（修「财务那边没有记录」，见 pushRefundToFinance）
 import { applyRefundToFinance } from '../utils/financeClient';
+// ★ P3 切读层：本文件各表（t_job_refund / t_student_base / t_job_class / t_job_approval）
+//   都已归一，全部走 tbl()/tblAs()/tblRef()/tblTrx()/tblInsTrx() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl, tblAs, tblInsTrx, tblRef, tblTrx } from '../teaching/shared/uniTable';
 
 export const refundRouter = Router();
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 表名常量 */
 const TABLE = 't_job_refund';
@@ -238,12 +246,12 @@ refundRouter.get(
     // ⚠️ 必须【始终】leftJoin 审批表 ——
     //    因为列表要算 canApprove（要看审批单的 status / current_step），
     //    只在 onlyMine 时 join 会导致 select 引用不存在的别名，直接报 50002。
-    const query = db(`${TABLE} as r`)
-      .leftJoin(`${APPROVAL_TABLE} as a`, 'r.approval_id', 'a.id')
+    const query = tblAs(db, DB, TABLE, STAGE, 'r')
+      .leftJoin(`${tblRef(DB, APPROVAL_TABLE)} as a`, 'r.approval_id', 'a.id')
       .where('r.is_deleted', false);
 
     if (q.keyword) {
-      query.andWhere((b) => {
+      query.andWhere((b: import('knex').Knex.QueryBuilder) => {
         b.where('r.student_name', 'like', `%${q.keyword}%`)
           .orWhere('r.student_no', 'like', `%${q.keyword}%`);
       });
@@ -299,11 +307,11 @@ refundRouter.get(
       if (!_isAdmin && !_isDean && !_isPrincipal) {
         if (_isPM) {
           // 项目经理：只限自己带的实训班（含已结业）
-          const mine = await db('t_job_class')
+          const mine = await tbl(db, DB, CLASS_TABLE, STAGE)
             .where({ project_manager_id: operator.userId, is_deleted: false })
             .select('id');
           const ids = mine.map((c: any) => c.id);
-          query.andWhere((b) =>
+          query.andWhere((b: import('knex').Knex.QueryBuilder) =>
             b
               .where('r.head_teacher_id', operator.userId)
               .orWhereIn('r.class_id', ids.length ? ids : ['__none__']),
@@ -354,7 +362,7 @@ refundRouter.get(
     const q = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: q.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: q.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
 
     const appr = row.approval_id ? await getApproval(row.approval_id) : null;
@@ -442,12 +450,12 @@ refundRouter.post(
       throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有班主任 / 项目经理能发起退费申请');
     }
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     let cls: any = null;
     if (stu.class_id) {
-      cls = await db(CLASS_TABLE).where({ id: stu.class_id, is_deleted: false }).first();
+      cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: stu.class_id, is_deleted: false }).first();
     }
 
     const refundId = randomUUID();
@@ -457,7 +465,7 @@ refundRouter.post(
     await db.transaction(async (trx) => {
 
       // ③ 建退费单（先草稿）
-      await trx(TABLE).insert({
+      await tblInsTrx(trx, DB, TABLE, STAGE, {
         id: refundId,
         create_time: now,
         create_by: operator.userId,
@@ -513,12 +521,12 @@ refundRouter.post(
       );
 
       // ⑤ 关联
-      await trx(TABLE).where({ id: refundId }).update({ approval_id: approvalId });
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: refundId }).update({ approval_id: approvalId });
 
       // ④' 直接提交
       if (body.submit) {
         await submitApproval(approvalId, operator, trx);
-        await trx(TABLE).where({ id: refundId }).update({
+        await tblTrx(trx, DB, TABLE, STAGE).where({ id: refundId }).update({
           approval_status: ApprovalStatus.PENDING_MANAGER,
           update_time: now,
         });
@@ -563,7 +571,7 @@ refundRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
     if (row.approval_status !== ApprovalStatus.DRAFT) {
@@ -606,7 +614,7 @@ refundRouter.post(
 
     await db.transaction(async (trx) => {
       await submitApproval(row.approval_id, operator, trx);
-      await trx(TABLE).where({ id: row.id }).update(patch);
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update(patch);
     });
 
     res.json(ok(null));
@@ -673,7 +681,7 @@ async function pushRefundToFinance(
   const amount = Number(row.refund_amount) || 0;
   // 财务要求 refundAmount > 0，金额为 0 的单没有出款意义 → 跳过（留日志）
   if (amount <= 0) {
-    await db(TABLE)
+    await tbl(db, DB, TABLE, STAGE)
       .where({ id: row.id })
       .update({
         finance_remark: '退费金额为 0，无需出款（审批已通过）',
@@ -714,7 +722,7 @@ async function pushRefundToFinance(
       remark: `就业模块退费单 ${row.id}（${row.refund_type_name || ''}）`,
     });
 
-    await db(TABLE)
+    await tbl(db, DB, TABLE, STAGE)
       .where({ id: row.id })
       .update({
         finance_refund_id: res.id || null,
@@ -731,7 +739,7 @@ async function pushRefundToFinance(
      *    在 remark 里留痕，便于运营/财务对照排查。
      */
     const tip = `⚠️ 已推财务失败（${err?.message || '未知错误'}），请在财务模块人工补录`;
-    await db(TABLE)
+    await tbl(db, DB, TABLE, STAGE)
       .where({ id: row.id })
       .update({
         finance_remark: tip.slice(0, 500),
@@ -758,7 +766,7 @@ refundRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
 
@@ -770,7 +778,7 @@ refundRouter.post(
       finished = result.finished;
       nextStatus = result.status;
 
-      await trx(TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update({
         approval_status: nextStatus,
         update_time: new Date(),
         update_by: operator.userId,
@@ -826,13 +834,13 @@ refundRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
 
     await db.transaction(async (trx) => {
       await doReject(row.approval_id!, operator, body.reason, trx);
-      await trx(TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update({
         approval_status: ApprovalStatus.REJECTED,
         update_time: new Date(),
         update_by: operator.userId,
@@ -860,13 +868,13 @@ refundRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
 
     await db.transaction(async (trx) => {
       await doCancel(row.approval_id!, operator, body.reason, trx);
-      await trx(TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update({
         approval_status: ApprovalStatus.CANCELED,
         update_time: new Date(),
         update_by: operator.userId,
@@ -898,7 +906,7 @@ refundRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
 
     if (row.approval_status !== ApprovalStatus.APPROVED) {
@@ -909,7 +917,7 @@ refundRouter.post(
     }
 
     const now = new Date();
-    await db(TABLE).where({ id: row.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: row.id }).update({
       finance_remark: body.financeRemark || null,
       refund_time: body.refundTime ? new Date(body.refundTime) : now,
       update_time: now,
@@ -939,12 +947,12 @@ refundRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated;
 
-    const query = db(`${STUDENT_TABLE} as s`)
-      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
+    const query = tblAs(db, DB, STUDENT_TABLE, STAGE, 's')
+      .leftJoin(`${tblRef(DB, CLASS_TABLE)} as c`, 's.class_id', 'c.id')
       .where('s.is_deleted', false);
 
     if (q.keyword) {
-      query.andWhere((b) => {
+      query.andWhere((b: import('knex').Knex.QueryBuilder) => {
         b.where('s.student_name', 'like', `%${q.keyword}%`).orWhere(
           's.student_no',
           'like',
@@ -997,22 +1005,22 @@ refundRouter.get(
   wrap(async (req, res) => {
     const operator = getOperator(req);
 
-    const totalRow = await db(TABLE).where('is_deleted', false).count({ c: 'id' }).first();
+    const totalRow = await tbl(db, DB, TABLE, STAGE).where('is_deleted', false).count({ c: 'id' }).first();
 
-    const pendingMgr = await db(TABLE)
+    const pendingMgr = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, approval_status: ApprovalStatus.PENDING_MANAGER })
       .count({ c: 'id' })
       .first();
-    const pendingPrincipal = await db(TABLE)
+    const pendingPrincipal = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, approval_status: ApprovalStatus.PENDING_PRINCIPAL })
       .count({ c: 'id' })
       .first();
-    const approved = await db(TABLE)
+    const approved = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, approval_status: ApprovalStatus.APPROVED })
       .count({ c: 'id' })
       .first();
 
-    const amountRow = await db(TABLE)
+    const amountRow = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, approval_status: ApprovalStatus.APPROVED })
       .sum({ s: 'refund_amount' })
       .first();
@@ -1024,8 +1032,8 @@ refundRouter.get(
       if (canApprove(BIZ, s, operator.roles)) stepsIcanHandle.push(s);
     }
     if (stepsIcanHandle.length) {
-      const r = await db(`${TABLE} as r`)
-        .join(`${APPROVAL_TABLE} as a`, 'r.approval_id', 'a.id')
+      const r = await tblAs(db, DB, TABLE, STAGE, 'r')
+        .join(`${tblRef(DB, APPROVAL_TABLE)} as a`, 'r.approval_id', 'a.id')
         .where('r.is_deleted', false)
         .whereNotIn('a.status', [
           ApprovalStatus.DRAFT,

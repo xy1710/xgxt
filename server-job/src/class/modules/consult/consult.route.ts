@@ -6,7 +6,9 @@ import { TransferType } from 'shared-types';
 import { db } from '../../db';
 import { Errors, ok, pageData } from '../../http/response';
 import { pageQuerySchema, q, validate } from '../../lib/validate';
-import { baseInsert, baseUpdate, maxStudentNo, notDeleted, paginate } from '../../lib/repo';
+import { baseInsert, baseUpdate, notDeleted, paginate } from '../../lib/repo';
+// ★ 2026-10-22：学号统一按「LZ+班级编号+序号」生成（初高/大学两个接收入口共用）
+import { nextStudentNoForClass } from '../../../teaching/shared/studentNo';
 import { assertClassAccess } from '../../middleware/dataScope';
 import { requirePerm } from '../../lib/permGuard';
 import { isFullAccess } from '../../lib/authUser';
@@ -20,7 +22,9 @@ import {
   tblTrx,
   tblIns,
   tblInsTrx,
-  USE_UNI_TABLE,
+  phaseCodeCol,
+  readPhaseCode,
+  uniDb,
 } from '../../../teaching/shared/uniTable';
 // ★ 2026-10-19：初高也走「待接收」—— 接收初高的推送单要调初高的建档口
 import classSync from '../../../utils/classSync';
@@ -28,6 +32,8 @@ import classSync from '../../../utils/classSync';
 import { db as jhDb } from '../../../class-jh/utils/db';
 // ★ 2026-10-20：接收后要回写咨询侧状态（班主任 token 在咨询侧不认，走内部令牌通道）
 import { consultClient } from '../../lib/consultClient';
+// ★ 2026-10-22 方案A：建档生成学号后回填财务单据并重推缴费台账（同进程直调，非阻断）
+import { syncStudentNoFromTeaching } from '../../../finance/services/student-no-sync.service';
 
 /**
  * 咨询推送（需求 v1.2）
@@ -73,12 +79,43 @@ const REPEAT_T = 't_class_repeat';
 const GRADE_T = 't_class_grade';
 const XFER_T = 't_class_student_transfer';
 
+/**
+ * ★ 2026-10-22：待接收单不再只服务大学部。
+ *
+ *   教学域的「末班 / 升班」改成走待接收审批流后，四个学段都会往
+ *   `t_uni_consult_push` 写单（edu_stage = jh / class / job / emp）。
+ *   接收端必须**按单据自己的 edu_stage** 去找对应的班级表 / 学生表，
+ *   否则：
+ *     · 列表只查 edu_stage='class' → 初高与就业部的单据看不见
+ *     · 接收时按大学部表去查班 → 找不到「所选班级不存在」
+ *
+ *   统一表里这四张表都在 sms_common，用 uniDb 直查 + edu_stage 过滤即可
+ *   （tbl() 的 stage 参数只能给一个固定值，做不到「跟着单据走」）。
+ */
 const PUSH = () => tbl(db, SRC, PUSH_T, STAGE);
 const STU = () => tbl(db, SRC, STU_T, STAGE);
 const CLS = () => tbl(db, SRC, CLS_T, STAGE);
 const STU_TRX = (trx: import('knex').Knex.Transaction) => tblTrx(trx, SRC, STU_T, STAGE);
 const CLS_TRX = (trx: import('knex').Knex.Transaction) => tblTrx(trx, SRC, CLS_T, STAGE);
 const PUSH_TRX = (trx: import('knex').Knex.Transaction) => tblTrx(trx, SRC, PUSH_T, STAGE);
+
+/** 单据所在学段 → 统一表 edu_stage（空 = 沿用大学部，保持老数据兼容） */
+function stageOfPush(push: Record<string, unknown> | null | undefined): string {
+  const st = String(push?.edu_stage ?? '').trim();
+  return st || 'class';
+}
+/** 按学段取「学生表」查询（统一表 t_uni_student） */
+function stuOf(stage: string) {
+  return uniDb('t_uni_student').where({ edu_stage: stage });
+}
+/** 按学段取「班级表」查询（统一表 t_uni_class） */
+function clsOf(stage: string) {
+  return uniDb('t_uni_class').where({ edu_stage: stage });
+}
+/** 按学段取「待接收单」查询（统一表 t_uni_consult_push） */
+function pushOf(stage: string) {
+  return uniDb('t_uni_consult_push').where({ edu_stage: stage });
+}
 
 /* ============================================================
  * ★ 2026-10-06 用户拍板：待接收学员的「谁看得到 / 谁能接收」
@@ -151,6 +188,8 @@ const listSchema = z.object({
   ...pageQuerySchema.shape,
   applyStatus: z.coerce.number().int().optional(),
   keyword: z.string().optional(),
+  /** ★ 2026-10-22：按学段过滤（jh/class/job/emp）；不传 = 全部学段 */
+  stage: z.enum(['jh', 'class', 'job', 'emp']).optional(),
 });
 
 /**
@@ -173,8 +212,17 @@ consultRouter.get(
     const user = req.user!;
     const query = q<z.infer<typeof listSchema>>(req);
 
-    const base = PUSH();
-    notDeleted(base);
+    /**
+     * ★ 2026-10-22：列表按「学段」查。
+     *   教学域的末班/升班改成待接收流后，初高(jh)/大学(class)/就业(job,emp)
+     *   四套学段都会往 t_uni_consult_push 写单。
+     *   → 带 stage 参数时只看该学段；不带 = 四个学段都看（跨学段班主任
+     *     只能看到「意向班级是自己带的班」的那部分，范围不会放宽）。
+     */
+    const base = uniDb('t_uni_consult_push').where({ is_deleted: 0 });
+    const wantStage = String(query.stage ?? '').trim();
+    if (wantStage) base.where('edu_stage', wantStage);
+    else base.whereIn('edu_stage', ['jh', 'class', 'job', 'emp']);
     // ★ 2026-10-06：非校长/学管 → 只看「意向班级是自己带的班」的推送单
     //   （旧写法按旧角色码 ROLE_* 判断，那些码早已不存在 → 条件恒真，
     //    结果是任何人都能看到全部推送单。现在按新码 + 班级归属重新收敛。）
@@ -204,7 +252,8 @@ consultRouter.get(
   validate({ query: z.object({ id: z.string().min(1, '缺少ID') }) }),
   wrap(async (req, res) => {
     const { id } = q<{ id: string }>(req);
-    const row = (await notDeleted(PUSH()).where('id', id).first()) as
+    // ★ 2026-10-22：详情跨学段（四个学段的单据都要能看）
+    const row = (await uniDb('t_uni_consult_push').where({ id, is_deleted: 0 }).first()) as
       | Record<string, unknown>
       | undefined;
     if (!row) throw Errors.param('咨询推送单不存在');
@@ -406,8 +455,9 @@ consultRouter.get(
     const nos = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
     if (!nos.length) return ok(res, {}, '查询成功');
 
-    const rows = (await notDeleted(PUSH())
+    const rows = (await uniDb('t_uni_consult_push')
       .whereIn('consult_no', nos)
+      .where({ is_deleted: 0 })
       .select('consult_no', 'apply_status', 'intend_class_id', 'intend_class_name')) as Array<
       Record<string, unknown>
     >;
@@ -426,15 +476,8 @@ consultRouter.get(
 
 /* ------------------------------ 班主任接收并建档 ------------------------------ */
 
-function buildStudentNo(seq: number): string {
-  return `S${new Date().getFullYear()}${String(seq).padStart(4, '0')}`;
-}
-
-function seqOfStudentNo(no: string | null | undefined): number {
-  if (!no) return 0;
-  const m = /(\d{4})$/.exec(no);
-  return m ? Number(m[1]) : 0;
-}
+// ★ 2026-10-22：学号改由 teaching/shared/studentNo 统一生成（LZ+班级编号+序号），
+//   原来的 S+年份+4位流水（buildStudentNo/seqOfStudentNo）已停用并删除。
 
 const receiveSchema = z.object({
   id: z.string().min(1, '缺少咨询单ID'),
@@ -494,12 +537,20 @@ async function consultReceivePlan(consultNo: string): Promise<number | null> {
   return Number.isFinite(v) && v > 0 ? v : null;
 }
 
-/** 建档成功后回写咨询侧状态（幂等；失败只记日志——人已经入班了，不能因此回滚） */
+/**
+ * 建档成功后回写咨询侧状态（幂等；失败只记日志——人已经入班了，不能因此回滚）
+ *
+ * ★ 2026-10-22 增加 `studentNo`：把刚生成的学号一并回写咨询学生表。
+ *   不回写的话，咨询学生表永远没有学号，后续「补费」建单时会走
+ *   `stu.student_no || tempStudentNo(id)` 兜出 `ZX...` 临时号，
+ *   于是同一学生的补费单学号和已入班单据不一致，补费单还推不进教学侧台账。
+ */
 async function consultReceiveAck(
   consultNo: string,
   className: string | null,
   operatorName: string,
   operatorTitle = '班主任',
+  studentNo?: string,
 ): Promise<void> {
   if (!consultNo) return;
   const r = await consultClient.receiveAck({
@@ -507,6 +558,7 @@ async function consultReceiveAck(
     className,
     operatorName,
     operatorTitle,
+    studentNo: studentNo || undefined,
   });
   if (!r.ok) {
     console.warn(`[consult receive] 回写咨询状态失败（${consultNo}）：${r.message}`);
@@ -521,7 +573,9 @@ async function doReceive(
     const user = req.user!;
     const b = req.body as z.infer<typeof receiveSchema>;
 
-    const push = (await notDeleted(PUSH()).where('id', b.id).first()) as
+    // ★ 2026-10-22：单据可能在四个学段，先不带学段过滤地取出来，
+    //   再按它自己的 edu_stage 决定后续读写哪套表。
+    const push = (await uniDb('t_uni_consult_push').where({ id: b.id, is_deleted: 0 }).first()) as
       | Record<string, unknown>
       | undefined;
     if (!push) throw Errors.param('咨询推送单不存在');
@@ -531,6 +585,31 @@ async function doReceive(
     if (Number(push.apply_status) === ConsultStatus.REJECTED) {
       throw Errors.param('该咨询单已驳回，不能直接接收');
     }
+
+    /**
+     * ★ 2026-10-22 方案A：把刚生成的学号回填到财务单据（非阻断）
+     *
+     * 财务缴费单的 student_id 存的是「咨询学生 id」，与教学库学生 id 不是一套，
+     * 学号是两边唯一关联键。不回填会断两件事：
+     *   ① 缴费单/账单学号永远为空，按学号对不了账
+     *   ② 财务推缴费台账前要用学号回查教学学生，为空直接跳过 → 这张单永远进不了台账
+     *
+     * ⚠️ 失败只记日志：学籍建档不能因为财务侧问题回滚。
+     */
+    const syncFinanceStudentNo = async (no: string): Promise<void> => {
+      const consultNo = String(push.consult_no || '');
+      if (!consultNo || !no) return;
+      try {
+        const r = await syncStudentNoFromTeaching(consultNo, no);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[教学→财务] 学号 ${no}（咨询单 ${consultNo}）回填：缴费单 ${r.feeUpdated} 条 / 账单 ${r.billUpdated} 条 / 重推台账 ${r.pushed} 条`,
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[教学→财务] 学号回填失败（不影响建档）：${(e as Error).message}`);
+      }
+    };
 
     // ★ 2026-10-06：接收权限 = 本班班主任 / 校长 / 学管（用户拍板）
     // ★ 2026-10-20：分班即入班走内部入口时，操作人是咨询老师，不做班主任归属校验
@@ -570,10 +649,22 @@ async function doReceive(
      */
     const planStatus = await consultReceivePlan(String(push.consult_no || ''));
 
-    const jhCls = (await jhDb('t_class_info')
-      .where({ id: classId, is_deleted: 0 })
+    /* ★ 2026-10-22：老表 sms_class_jh.t_class_info 在 P8 后已 DROP，
+       这里改成切读统一表（t_uni_class，edu_stage='jh'），
+       否则接收初高单据直接报「数据表不存在」。 */
+    /**
+     * ★ 2026-10-22：末班 / 升班（教学域）推来的单据，学生**已经在档案里**，
+     *   要走下面的「转班」分支，不能走「建档」分支（建档会新起一份档案）。
+     *   → 先算出这个标记，建档分支据此让路。
+     */
+    const pushIsRepeatIn = Number(push.is_repeat_in) === 1;
+    const pushIsTransfer = push.source_system === 'transfer';
+    const isExistingStudentTransfer = Boolean(push.origin_student_id) && (pushIsRepeatIn || pushIsTransfer);
+
+    const jhCls = (await uniDb('t_uni_class')
+      .where({ id: classId, edu_stage: 'jh', is_deleted: 0 })
       .first()) as Record<string, unknown> | undefined;
-    if (jhCls) {
+    if (jhCls && !isExistingStudentTransfer) {
       // 学号 / 学历 / 入学日期 / 学生状态按接收弹窗填的带过去；
       // 宿舍床位是大学部宿舍表的 ID，初高用不上，这里不透传。
       const r = await classSync.consultCreateJh({
@@ -587,7 +678,6 @@ async function doReceive(
         address: push.home_address ?? null,
         classId,
         remark: b.remark ?? push.remark ?? null,
-        studentNo: b.studentNo ?? null,
         education: b.education ?? push.education ?? null,
         enrollDate: b.enrollDate ?? null,
         studentStatus: b.studentStatus ?? planStatus ?? null,
@@ -616,7 +706,11 @@ async function doReceive(
         (push.intend_class_name as string) ?? null,
         user.userName,
         opts.internal ? '系统' : '班主任',
+        String(sno),
       );
+
+      /* ★ 2026-10-22 方案A：学号已生成/已存在 → 回填财务单据并重推台账 */
+      await syncFinanceStudentNo(String(sno));
 
       return ok(
         res,
@@ -638,13 +732,22 @@ async function doReceive(
     /** 阶段一律取目标班级的（「意向阶段」已删除，不再由推送单带过来） */
     let stage: number | null = null;
 
+    /** ★ 2026-10-22：目标班按「单据学段」查（原来固定查大学部的表） */
+    const pushStage = stageOfPush(push);
     if (classId) {
-      const cls = (await notDeleted(CLS()).where('id', classId).first()) as
+      const cls = (await clsOf(pushStage).where({ id: classId, is_deleted: 0 }).first()) as
         | Record<string, unknown>
         | undefined;
       if (!cls) throw Errors.classNotFound('所选班级不存在');
-      // 封班规则：非末班 / 重修的咨询新生，封班班级不收
-      assertClassAcceptStudent(cls, !!b.repeatIn || Number(push.is_repeat_in) === 1);
+      /**
+       * 封班规则：封班班不收**新生**；
+       * 但「末班 / 重修 / 换班转入」是**已有档案的转班**，必须放行 ——
+       * 否则升班到封班班会报「已封班，不再接收新生」（2026-10-22 实测）。
+       */
+      assertClassAcceptStudent(
+        cls,
+        !!b.repeatIn || Number(push.is_repeat_in) === 1 || isExistingStudentTransfer,
+      );
       className = cls.class_name as string;
       deptCode = cls.dept_code as number;
       headTeacherId = (cls.head_teacher_id as string) ?? null;
@@ -660,11 +763,11 @@ async function doReceive(
     }
 
     /* ---------- 已建档学生转入（末班重修 / 换班）：不新建档案，只转班 ---------- */
-    const isRepeatIn = Number(push.is_repeat_in) === 1;
-    const isTransfer = push.source_system === 'transfer';
-    if (push.origin_student_id && (isRepeatIn || isTransfer)) {
+    const isRepeatIn = pushIsRepeatIn;
+    const isTransfer = pushIsTransfer;
+    if (isExistingStudentTransfer) {
       const sid = push.origin_student_id as string;
-      const stu = (await notDeleted(STU()).where('id', sid).first()) as
+      const stu = (await stuOf(pushStage).where({ id: sid, is_deleted: 0 }).first()) as
         | Record<string, unknown>
         | undefined;
       if (!stu) throw Errors.studentNotFound();
@@ -675,13 +778,18 @@ async function doReceive(
 
       // 末班记录需要带「成绩管理末班时的成绩」，接收时取该学员最近一次成绩快照
       const latestGrade = isRepeatIn
-        ? ((await notDeleted(tbl(db, SRC, GRADE_T, STAGE))
-            .where('student_id', sid)
+        ? ((await uniDb('t_uni_exam_score')
+            .where({ student_id: sid, edu_stage: pushStage, is_deleted: 0 })
             .orderBy('create_time', 'desc')
             .first()) as Record<string, unknown> | undefined)
         : undefined;
 
-      await db.transaction(async (trx) => {
+      /**
+       * ★ 2026-10-22：转班路径的事务必须开在**统一库（sms_common）**上 ——
+       *   改的是 t_uni_student / t_uni_repeat / t_uni_class_transfer / t_uni_class，
+       *   这些表都在 sms_common；用大学部的 db 事务会报「sms_class.t_uni_student 不存在」。
+       */
+      await uniDb.transaction(async (trx) => {
         const patch: Record<string, unknown> = {
           class_id: classId,
           class_name: className,
@@ -695,18 +803,48 @@ async function doReceive(
           ...baseUpdate(user),
         };
         if (isRepeatIn) patch.repeat_count = nextRepeat;
-        if (stage !== null && stage !== undefined) patch.stage = stage;
+        if (stage !== null && stage !== undefined) patch[phaseCodeCol()] = stage;
         if (b.studentStatus) patch.student_status = b.studentStatus;
         if (b.dormId) {
           patch.dorm_id = b.dormId;
           patch.dorm_no = b.dormNo ?? null;
           patch.bed_no = b.bedNo ?? null;
         }
-        await STU_TRX(trx).where({ id: sid }).update(patch);
+        // ★ 2026-10-22：按单据学段写学生主档（原来固定写大学部的表）
+        await trx('t_uni_student')
+          .where({ id: sid, edu_stage: pushStage })
+          .update(patch);
 
         if (isRepeatIn) {
+          /**
+           * ★ 2026-10-22：末班是「转班重修」—— 除了末班记录，**换班留痕也要写**
+           *   （老口径的教学域换班就是 repeat + transfer 两条都写，这里保持一致，
+           *    否则「学生换班记录」里查不到末班这批人）。
+           */
+          await trx('t_uni_class_transfer').insert({
+            id: uuid(),
+            edu_stage: pushStage,
+            student_id: sid,
+            student_no: stu.student_no as string,
+            student_name: stu.student_name as string,
+            from_class_id: fromClassId,
+            from_class_name: fromClassName,
+            to_class_id: classId,
+            to_class_name: className,
+            transfer_reason: (push.transfer_reason as string) || '成绩管理末班，班主任接收后回到班级重修',
+            consult_no: push.consult_no as string,
+            transfer_time: now(),
+            transfer_type: TransferType.STUDENT_CLASS_CHANGE,
+            transfer_date: (push.push_time as string ?? '').slice(0, 10) || now().slice(0, 10),
+            remark: `待接收单${String(push.consult_no ?? '')}接收转入（末班重修）`,
+            is_deleted: 0,
+            create_by: user.userId,
+            create_time: now(),
+          } as never);
+
           // 末班记录（成绩管理 → 末班 → 班主任接收后回班重修，带成绩快照）
-          await tblInsTrx(trx, SRC, REPEAT_T, STAGE, {
+          // ★ 2026-10-22：末班记录也按学段写（统一表 t_uni_repeat）
+          await trx('t_uni_repeat').insert({
             ...baseInsert(user),
             student_id: sid,
             student_no: stu.student_no as string,
@@ -722,6 +860,10 @@ async function doReceive(
             written_score: latestGrade?.written_score ?? null,
             interview_score: latestGrade?.interview_score ?? null,
             comp_score: latestGrade?.comp_score ?? null,
+            edu_stage: pushStage,
+            is_deleted: 0,
+            create_by: user.userId,
+            create_time: now(),
           } as never);
         } else {
           // 学生换班留痕
@@ -732,7 +874,8 @@ async function doReceive(
           //   from_class_name / to_class_name 装的就是班级名，语义天然一致，不翻译。
           //   （对比 `t_class_transfer` 登记了 from_user_name → from_class_name 改名，
           //     那条路径的 from_user_name 装的是**人名**，两者语义不同、不能混用。）
-          await tblInsTrx(trx, SRC, XFER_T, STAGE, {
+          // ★ 2026-10-22：换班留痕按学段写（统一表 t_uni_class_transfer）
+          await trx('t_uni_class_transfer').insert({
             ...baseInsert(user),
             student_id: sid,
             student_no: stu.student_no as string,
@@ -749,16 +892,20 @@ async function doReceive(
             transfer_type: TransferType.STUDENT_CLASS_CHANGE,
             transfer_date: (push.push_time as string ?? '').slice(0, 10) || now().slice(0, 10),
             remark: `咨询单${String(push.consult_no ?? '')}接收转入`,
+            edu_stage: pushStage,
+            is_deleted: 0,
+            create_by: user.userId,
+            create_time: now(),
           } as never);
         }
 
         // 班级人数：跨班时原班 -1、目标班 +1；同班不变
         if (fromClassId && fromClassId !== classId && classId) {
-          await CLS_TRX(trx).where({ id: fromClassId }).decrement('student_count', 1);
-          await CLS_TRX(trx).where({ id: classId }).increment('student_count', 1);
+          await trx('t_uni_class').where({ id: fromClassId, edu_stage: pushStage }).decrement('student_count', 1);
+          await trx('t_uni_class').where({ id: classId, edu_stage: pushStage }).increment('student_count', 1);
         }
 
-        await PUSH_TRX(trx).where({ id: b.id }).update({
+        await trx('t_uni_consult_push').where({ id: b.id, edu_stage: pushStage }).update({
           apply_status: ConsultStatus.RECEIVED,
           receiver_id: user.userId,
           receiver_name: user.userName,
@@ -783,18 +930,9 @@ async function doReceive(
       );
     }
 
-    // 学号
-    let studentNo = b.studentNo?.trim() || '';
-    if (!studentNo) {
-      // ★ 第 4 期第 3 批：`maxStudentNo` 签名改为收「已路由的 builder」，
-      //   原代码这里传的是写死的 `db('t_class_student')`（切读时会读老表 → 新建的学号
-      //   会和种子数据撞号）。第 6 批（咨询域）起改为传 `STU()`，跟着开关走。
-      const max = await maxStudentNo(STU(), `S${new Date().getFullYear()}%`);
-      studentNo = buildStudentNo(seqOfStudentNo(max) + 1);
-    } else {
-      const dup = await notDeleted(STU()).where('student_no', studentNo).first();
-      if (dup) throw Errors.studentNoExists(studentNo);
-    }
+    // 学号：★ 2026-10-22 一律按「LZ+班级编号+序号」生成，忽略接收弹窗手填的值
+    //   （初高 / 大学两个接收入口口径一致；生成后终身不变）
+    const studentNo = await nextStudentNoForClass('class', classId);
 
     // 床位占用校验
     if (b.dormId && b.bedNo) {
@@ -823,7 +961,7 @@ async function doReceive(
         age: (b.age as number) ?? ((push.age as number) ?? null),
         dept_code: deptCode,
         student_status: b.studentStatus ?? planStatus ?? StudentStatus.TRIAL,
-        stage,
+        [phaseCodeCol()]: stage,
         phone: b.phone ?? ((push.phone as string) ?? null),
         parent_phone: b.parentPhone ?? ((push.parent_phone as string) ?? null),
         education: b.education ?? ((push.education as string) ?? null),
@@ -867,7 +1005,11 @@ async function doReceive(
       className,
       user.userName,
       opts.internal ? '系统' : '班主任',
+      studentNo,
     );
+
+    /* ★ 2026-10-22 方案A：学号已生成 → 回填财务单据并重推台账 */
+    await syncFinanceStudentNo(studentNo);
 
     return ok(
       res,
@@ -913,7 +1055,7 @@ consultRouter.post(
       studentStatus?: number | null;
     };
 
-    const push = (await notDeleted(PUSH()).where('consult_no', consultNo).first()) as
+    const push = (await uniDb('t_uni_consult_push').where({ consult_no: consultNo, is_deleted: 0 }).first()) as
       | Record<string, unknown>
       | undefined;
     if (!push) throw Errors.param(`未找到咨询单「${consultNo}」的推送记录，请先分班`);
@@ -1004,7 +1146,8 @@ consultRouter.post(
   wrap(async (req, res) => {
     const user = req.user!;
     const b = req.body as z.infer<typeof rejectSchema>;
-    const push = (await notDeleted(PUSH()).where('id', b.id).first()) as
+    // ★ 2026-10-22：驳回同样可能来自四个学段的单据
+    const push = (await uniDb('t_uni_consult_push').where({ id: b.id, is_deleted: 0 }).first()) as
       | Record<string, unknown>
       | undefined;
     if (!push) throw Errors.param('咨询推送单不存在');
@@ -1017,7 +1160,9 @@ consultRouter.post(
     }
     // 驳回必填原因 → 40002（必填缺失），与 suspend / refund 的驳回保持一致
     if (!b.rejectReason || !b.rejectReason.trim()) throw Errors.required('驳回原因');
-    await PUSH().where({ id: b.id }).update({
+    await uniDb('t_uni_consult_push')
+      .where({ id: b.id, edu_stage: stageOfPush(push) })
+      .update({
       apply_status: ConsultStatus.REJECTED,
       receiver_id: user.userId,
       receiver_name: user.userName,

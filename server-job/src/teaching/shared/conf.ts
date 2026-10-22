@@ -65,7 +65,9 @@ export interface AttendanceScopeItem {
 
 export const DEFAULT_SCOPE: Record<TeachingStage, AttendanceScopeItem> = {
   jh: { shouldStatuses: [3, 4, 5], presentStatuses: [1, 3], targetRate: 90, manualInput: false },
-  class: { shouldStatuses: [], presentStatuses: [], targetRate: 90, manualInput: true },
+  /* ★ 2026-10-19：大学部改为逐人登记（与初高/就业一致），
+     应到 = 在班名册全部；实到 = 出勤类状态（出勤/迟到/早退）。 */
+  class: { shouldStatuses: 'all', presentStatuses: [1, 3, 4], targetRate: 90, manualInput: false },
   job: { shouldStatuses: 'all', presentStatuses: [1, 3, 4], targetRate: 90, manualInput: false },
 };
 

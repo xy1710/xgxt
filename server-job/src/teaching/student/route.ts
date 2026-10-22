@@ -2,14 +2,15 @@
  * 统一学生档案接口 · /api/teaching/student/*
  * ============================================================
  *
- * 取代合并前的 6 + 8 + 14 + 5 = 33 个学生接口（四个学段各一套，
- * 名字还不一样：/list vs /page、/add vs /create…）。
+ * 取代合并前的多学段入口（初高/大学/实训/就业各一套，名字还不一样）。
  *
- * 【四个学段的入口是同一个，靠 stage 区分】
- *   jh   初高 / class 大学 / job 就业 / edu 教务
+ * 【三个学段的入口是同一个，靠 stage 区分】
+ *   jh 初高 / class 大学 / emp 就业部
+ *   ★ 2026-10-21 用户口径：学生档案界面删除「就业」「教务」——
+ *     job 的数据与就业部是同一批人；edu 是教务宿舍模块的学生副本。
+ *     两张表的数据都保留，只是档案不再列这两个入口。
  *
  * 【「全部」的语义】不传 stage = 合并当前账号可见的学段并按学号去重。
- *   这正是原来「教务」页提供的「全校总台账」能力（见 repo.edu.ts 头部说明）。
  *
  * 老接口（/api/job/student、/api/class/student、/api/class-jh/student、
  * /api/edu/student）一个都没删，随时可回退。
@@ -55,14 +56,14 @@ function boolTrue(v: unknown): boolean {
 }
 function reqStage(v: unknown): StudentStage {
   if (!isStudentStage(v)) {
-    throw new BizError(BizCode.PARAM_ERROR, 'stage 必填（jh / class / job / emp / edu）');
+    throw new BizError(BizCode.PARAM_ERROR, 'stage 必填（jh / class / emp）');
   }
   return v;
 }
 function optStage(v: unknown): StudentStage | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   if (!isStudentStage(v)) {
-    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / job / emp / edu');
+    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / emp');
   }
   return v;
 }
@@ -85,6 +86,9 @@ teachingStudentRouter.get(
       deptCode: numOrUndef(req.query.deptCode),
       studentStatus: numOrUndef(req.query.studentStatus),
       phaseCode: numOrUndef(req.query.phaseCode),
+      // ★ 2026-10-21：阶段筛选走「阶段方案」（schemeStageId=阶段明细ID）
+      schemeStageId: str(req.query.schemeStageId),
+      noScheme: boolTrue(req.query.noScheme),
       keyword: str(req.query.keyword),
       unassigned: boolTrue(req.query.unassigned),
       page: int(req.query.page, 1),
@@ -199,6 +203,8 @@ teachingStudentRouter.get(
       deptCode: numOrUndef(req.query.deptCode),
       studentStatus: numOrUndef(req.query.studentStatus),
       phaseCode: numOrUndef(req.query.phaseCode),
+      schemeStageId: str(req.query.schemeStageId),
+      noScheme: boolTrue(req.query.noScheme),
       keyword: str(req.query.keyword),
       unassigned: boolTrue(req.query.unassigned),
       page: 1,

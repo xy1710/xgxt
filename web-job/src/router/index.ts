@@ -257,18 +257,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/Statistics.vue'),
     meta: { title: '数据统计', pageCode: 'job:statistics:view' },
   },
-  {
-    path: '/archive/basic-info',
-    name: 'EmpArchiveBasic',
-    component: () => import('@/views/archive/BasicInfo.vue'),
-    meta: { title: '基础信息', pageCode: 'job:empArchive:view' },
-  },
-  {
-    path: '/archive/dorm-assign',
-    name: 'EmpArchiveDorm',
-    component: () => import('@/views/archive/DormAssign.vue'),
-    meta: { title: '宿舍分配', pageCode: 'job:empDorm:view' },
-  },
+  /* ★ P7 下线（2026-10-19）：archive/BasicInfo 与 archive/DormAssign 已被
+     teaching 域 TeachingStudent / TeachingDorm 完全覆盖（数据同源 t_uni_student / t_uni_dorm_*），
+     页面文件与 api/empDorm.ts 已删除。复盘信息/就业记录（archive/ReviewInfo、EmploymentRecord）
+     无新对应，保留——见统一表归一-剩余任务清单.md §7.1。 */
   {
     path: '/archive/review-info',
     name: 'EmpArchiveReview',

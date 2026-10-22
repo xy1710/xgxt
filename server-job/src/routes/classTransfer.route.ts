@@ -42,6 +42,9 @@ import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 import { listTeachers, findTeacherName } from '../utils/teacherSource';
+// ★ P3 切读层：本文件四张表（t_job_class_transfer / t_job_class / t_job_class_student /
+//   t_job_attendance_summary）都已归一，读/写走 tbl()/tblTrx()/tblInsTrx()；开关关时与原实现等价。
+import { tbl, tblInsTrx, tblTrx, phaseCodeCol, readPhaseCode } from '../teaching/shared/uniTable';
 
 export const classTransferRouter = Router();
 
@@ -50,6 +53,10 @@ const TABLE = 't_job_class_transfer';
 const CLASS_TABLE = 't_job_class';
 const CS_TABLE = 't_job_class_student';
 const ATT_SUM_TABLE = 't_job_attendance_summary';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 花名册在班状态 */
 const CS_IN = 1;
@@ -99,8 +106,8 @@ async function decorate(row: any): Promise<any> {
     classCode: row.class_code,
     classStatus: row.class_status,
     classStatusName: CLASS_STATUS_NAME[row.class_status] || '',
-    stage: row.stage,
-    stageName: CLASS_STAGE_NAME[row.stage] || '',
+    stage: readPhaseCode(row),
+    stageName: CLASS_STAGE_NAME[readPhaseCode(row)] || '',
 
     oldHeadTeacherId: row.old_head_teacher_id,
     oldHeadTeacherName: oldHeadName,
@@ -157,7 +164,7 @@ async function decorateListItem(row: any): Promise<any> {
  * 没有出勤记录时返回 null
  */
 async function calcAccumulateRate(classId: string): Promise<number | null> {
-  const row = await db(ATT_SUM_TABLE)
+  const row = await tbl(db, DB, ATT_SUM_TABLE, STAGE)
     .where({ class_id: classId, is_deleted: false })
     .sum({ should: 'should_count', actual: 'actual_count' })
     .first();
@@ -170,7 +177,7 @@ async function calcAccumulateRate(classId: string): Promise<number | null> {
 
 /** 取班级在班学生名单（快照用） */
 async function getClassStudents(classId: string) {
-  const rows = await db(CS_TABLE)
+  const rows = await tbl(db, DB, CS_TABLE, STAGE)
     .where({ class_id: classId, status: CS_IN, is_deleted: false })
     .select('student_id', 'student_no', 'student_name')
     .orderBy('student_no', 'asc');
@@ -204,7 +211,7 @@ classTransferRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
 
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.transferType) query.andWhere('transfer_type', q.transferType);
@@ -213,7 +220,7 @@ classTransferRouter.get(
     if (q.startDate) query.andWhere('transfer_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('transfer_date', '<=', q.endDate);
 
-    const [{ total }] = await query.clone().count({ total: 'id' });
+    const [{ total }] = (await query.clone().count({ total: 'id' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -239,7 +246,7 @@ classTransferRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated;
 
-    const row = await db(TABLE).where({ id: q.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: q.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.TRANSFER_NOT_FOUND, '交接记录不存在');
 
     res.json(ok(await decorate(row)));
@@ -259,7 +266,7 @@ classTransferRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated;
 
-    const cls = await db(CLASS_TABLE).where({ id: q.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: q.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     const students = await getClassStudents(cls.id);
@@ -272,8 +279,8 @@ classTransferRouter.get(
         classCode: cls.class_code,
         classStatus: cls.class_status,
         classStatusName: CLASS_STATUS_NAME[cls.class_status] || '',
-        stage: cls.stage,
-        stageName: CLASS_STAGE_NAME[cls.stage] || '',
+        stage: readPhaseCode(cls),
+        stageName: CLASS_STAGE_NAME[readPhaseCode(cls)] || '',
 
         headTeacherId: cls.head_teacher_id,
         headTeacherName: cls.head_teacher_name,
@@ -343,7 +350,7 @@ classTransferRouter.post(
     const body = (req as any).validated as z.infer<typeof doSchema>;
 
     // ---- ① 班级 ----
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     // ⚠️ 已结业的班不能交接（斌哥 2026-09-30）——
@@ -383,7 +390,7 @@ classTransferRouter.post(
 
     await db.transaction(async (trx) => {
       // ④ 写交接记录
-      await trx(TABLE).insert({
+      await tblInsTrx(trx, DB, TABLE, STAGE, {
         id: transferId,
         create_time: now,
         create_by: req.user?.userId || null,
@@ -394,7 +401,7 @@ classTransferRouter.post(
         class_name: cls.class_name,
         class_code: cls.class_code,
         class_status: cls.class_status,
-        stage: cls.stage,
+        [phaseCodeCol()]: readPhaseCode(cls),
 
         old_head_teacher_id: cls.head_teacher_id,
         old_head_teacher_name: cls.head_teacher_name,
@@ -422,7 +429,7 @@ classTransferRouter.post(
       });
 
       // ⑤ 更新班级负责人 ← 真正生效
-      await trx(CLASS_TABLE)
+      await tblTrx(trx, DB, CLASS_TABLE, STAGE)
         .where({ id: cls.id })
         .update({
           head_teacher_id: body.newHeadTeacherId,
@@ -460,7 +467,7 @@ classTransferRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated;
 
-    const rows = await db(TABLE)
+    const rows = await tbl(db, DB, TABLE, STAGE)
       .where({ class_id: q.classId, is_deleted: false })
       .select('*')
       .orderBy('transfer_date', 'desc')
@@ -483,10 +490,10 @@ classTransferRouter.delete(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.TRANSFER_NOT_FOUND, '交接记录不存在');
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || null,

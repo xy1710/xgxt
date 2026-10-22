@@ -326,7 +326,11 @@ export const UNI_MAP = {
   'sms_class_jh.t_class_flow': 't_uni_approval',
   'sms_job.t_job_student_leave': 't_uni_approval',
   'sms_class.t_class_approval_log': 't_uni_approval_log',
-  'sms_class_jh.t_class_approval_log': 't_uni_approval_log',
+  // ⚠️ 这里曾经还有一条 `'sms_class_jh.t_class_approval_log'`，P4 收尾时删除：
+  //    初高**没有**这张老表（它的审批流水表是 `t_class_flow_log`，已登记）。
+  //    详见 src/teaching/shared/uniTable.ts 同位置的注释。
+  //    注意 `readBackendUniMap()` 只比对两份副本的 key 是否一致，
+  //    **查不出「key 指向的老表不存在」** —— 所以错映射必须靠人工/DB 核对删掉。
   // ★ 第4期第2批（`class/modules/approval` 老审批接口）：三类单据各一张统一表
   //   审批链本体按**单据类型分表**，而不是全塞进 t_uni_approval：
   //   休学管学籍状态、退费管钱和明细项、升学管班级和成绩快照 —— 字段完全不同。
@@ -366,11 +370,48 @@ export const UNI_MAP = {
   'sms_class.t_class_dorm_change_log': 't_uni_dorm_change_log',
   // —— 第 10 批（出勤/通知/催费/费用 四域收尾）——
   'sms_class.t_class_attendance_absent': 't_uni_attendance_detail',
+  // —— ★ P2（2026-10-16 出勤明细/汇总归一）——
+  //    ⚠️ 这三条**必须与后端 `src/teaching/shared/uniTable.ts` 同步**，
+  //       否则切读模式下 `probe()` / `mirrorRow()` 会回退到老表：
+  //         夹具写老表、产品写统一表 → 断言读到的永远是老表那份没被动过的数据
+  //         → 现象是「明明产品写对了，断言却说落库值没变」（本轮实际踩到）。
+  //       `assertUniMapConsistent()` 就是为抓这种不一致而存在的，别绕过它。
+  'sms_class_jh.t_class_attendance_detail': 't_uni_attendance_detail',
+  'sms_job.t_job_attendance': 't_uni_attendance',
+  'sms_job.t_job_attendance_summary': 't_uni_attendance_summary',
   'sms_class.t_class_urge_log': 't_uni_urge_log',
   'sms_common.t_class_urge_sync': 't_uni_urge',
   'sms_common.t_class_fee_sync': 't_uni_fee',
   // —— 第 11 批（实训侧退费）——
   'sms_job.t_job_refund': 't_uni_refund',
+  // —— 第 12 批（2026-10-16 · 补「孤儿统一表」11 条；须与后端 uniTable.ts 同步）——
+  'sms_job.t_job_approval': 't_uni_approval_main',
+  'sms_class_jh.t_class_checkout_apply': 't_uni_checkout_apply',
+  'sms_class_jh.t_class_term': 't_uni_class_term',
+  'sms_class_jh.t_class_op_log': 't_uni_op_log',
+  'sms_class_jh.t_class_refund_log': 't_uni_refund_log',
+  'sms_class_jh.t_class_setting': 't_uni_setting',
+  'sms_class_jh.t_class_stage': 't_uni_stage_def',
+  'sms_class_jh.t_student_base': 't_uni_student_base_jh',
+  'sms_job.t_employment_log': 't_uni_employment_log',
+  'sms_job.t_review': 't_uni_review',
+  'sms_job.t_kpi_target': 't_uni_kpi_target',
+  /* ★ 第 13 批（2026-10-16 · P3 前置）补 5 条实训映射，
+     与 src/teaching/shared/uniTable.ts 严格保持一致（assertUniMapConsistent 会校验）。 */
+  'sms_job.t_job_exam_score': 't_uni_exam_score',
+  'sms_job.t_job_fee_call': 't_uni_fee',
+  'sms_job.t_job_class_transfer': 't_uni_class_transfer',
+  'sms_job.t_job_training_handoff': 't_uni_handover',
+  'sms_job.t_job_notice': 't_uni_notify',
+  /* ★ 第 14 批（2026-10-16 · P4 前置）补 7 条初高映射，同样与 uniTable.ts 保持一致。 */
+  'sms_class_jh.t_class_fee': 't_uni_fee',
+  'sms_class_jh.t_class_refund': 't_uni_refund',
+  'sms_class_jh.t_class_fee_notify': 't_uni_notify',
+  'sms_class_jh.t_class_handover': 't_uni_handover',
+  'sms_class_jh.t_class_exam_score': 't_uni_exam_score',
+  'sms_class_jh.t_class_flow_log': 't_uni_approval_log',
+  'sms_class_jh.t_class_building': 't_uni_dorm_building',
+  'sms_job.t_job_approval_log': 't_uni_approval_log',
 };
 
 /**
@@ -503,14 +544,9 @@ export async function shapeForUni(uniDb, dbName, table, row, stage, uniTable) {
     edu_stage: stage,
     ...(phaseCode === undefined || Number.isNaN(phaseCode) ? {} : { stage_code: phaseCode }),
   };
-  // ★ 第 4 批新增：统一表**同时有** stage 和 stage_code 两列（如t_uni_class）
-  //   业务代码读的是 `stage`（老表列名），只写 stage_code 会让 stage 走 buildRow 兜底
-  //   → 被填成 **0** → `stageNameOf(0)`='未知'、`nextStageOf(0)`=null
-  //   → 症状是「阶段推进报『已处于最后一个阶段（未知）』」。
-  //   → 两个都写：stage 给业务代码读，stage_code 给按阶段码检索的列。
-  if (phaseCode !== undefined && !Number.isNaN(phaseCode) && (await uniColumnsOf(uniDb, uniTable)).has('stage')) {
-    shaped.stage = phaseCode;
-  }
+  // ★ #23 方案 B（2026-10-16 拍板）：统一表 `stage` 列**废弃**，阶段码一律 `stage_code`。
+  //   不再双写 stage（原「两个都写」的逻辑已删）——业务代码全部走 phaseCodeCol()/readPhaseCode()，
+  //   搬迁（P5）同样跳过该列；P7/P8 时列本身随 DROP 处理。
   // ★ 兜底：老表有的列里，凡是新表没有的，一律不写
   const cols = await uniColumnsOf(uniDb, uniTable);
   for (const k of Object.keys(shaped)) {

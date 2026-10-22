@@ -274,14 +274,11 @@
               <el-input v-model="form.className" maxlength="50" placeholder="留空自动生成占位名" />
             </el-form-item>
           </el-col>
-          <!-- ★ 只有实训有班级编号（而且必填 + 唯一） -->
-          <el-col v-if="curMeta?.hasClassCode" :span="8">
-            <el-form-item label="班级编号" required>
-              <el-input v-model="form.classCode" maxlength="32" placeholder="如 SX20260001">
-                <template #append>
-                  <el-link type="primary" @click="doGenCode">生成</el-link>
-                </template>
-              </el-input>
+          <!-- ★ 2026-10-21 用户口径：班级编号三部门统一（初高部/大学部/就业部），必填 -->
+          <!-- ★ 2026-10-22 用户口径：去掉「生成」按钮，一律由相关人员手工填写 -->
+          <el-col :span="8">
+            <el-form-item label="班级编号" prop="classCode">
+              <el-input v-model="form.classCode" maxlength="32" placeholder="Q17/J101/T101" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -697,7 +694,6 @@ import {
   getClassMeta,
   getClassSummary,
   getSchemeOptions,
-  genClassCode,
   listClassHandovers,
   doClassHandover,
   upgradeClassToTraining,
@@ -726,10 +722,12 @@ import {
 } from '@/teaching/classroom';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
+// ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
+//   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
 const STAGE_LABEL: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   // ★ 2026-10-19 批注：就业部（独立学段）
   emp: '就业部',
 };
@@ -868,6 +866,17 @@ const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE)
  *   规则写成 computed，切换阶段后红星与校验会立刻跟着变。
  */
 const rules = computed<FormRules>(() => ({
+  // ★ 2026-10-21：班级编号三部门统一必填（历史班级留空，首次编辑时补）
+  classCode: [
+    { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (String(value ?? '').trim()) callback();
+        else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
+      },
+      trigger: 'submit',
+    },
+  ],
   projectManagerName: isTrainPhase.value
     ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
     : [],
@@ -1130,12 +1139,6 @@ async function openEdit(row: ClassRow) {
 function onFormStageChange() {
   const keep = { id: form.id, className: form.className };
   Object.assign(form, emptyForm(form.stage), keep);
-}
-
-async function doGenCode() {
-  const r = await genClassCode(form.stage);
-  if (r?.classCode) form.classCode = r.classCode;
-  else ElMessage.info('该部门没有班级编号（只有实训有）');
 }
 
 async function doSave() {

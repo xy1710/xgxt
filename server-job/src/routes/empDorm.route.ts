@@ -29,17 +29,24 @@ import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
 import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
+// ★ P3 切读层：本文件 2 张老表（t_dorm / t_student_base）都已归一，
+//   读写全部走 tbl()/tblIns()；开关关时与原实现等价。
+import { tbl, tblIns } from '../teaching/shared/uniTable';
 
 export const empDormRouter = Router();
 
 const TABLE = 't_dorm';
 const STUDENT = 't_student_base';
 
+/** ★ 统一表 edu_stage 取值 / 老表所在库（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
+
 /** 统计某宿舍已住人数 */
 async function countUsed(dormId: string): Promise<number> {
-  const [{ total }] = await db(STUDENT)
+  const [{ total }] = (await tbl(db, DB, STUDENT, STAGE)
     .where({ dorm_id: dormId, is_deleted: false })
-    .count({ total: '*' });
+    .count({ total: '*' })) as Array<{ total: number }>;
   return Number(total);
 }
 
@@ -73,10 +80,10 @@ empDormRouter.get(
       onlyAvailable?: boolean;
     };
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     // ★ t_dorm 是「房间台账」，既没有 class_id 也不存 student_id
     //   → via='dorm'：用「我班学生住过的房间 id」反查
-    await applyTrainingScope(query, req, { table: TABLE, via: 'dorm' });
+    await applyTrainingScope(query, req, { table: TABLE, dbName: DB, via: 'dorm' });
 
     if (q.dormNo) query.andWhere('dorm_no', 'like', `%${q.dormNo}%`);
     if (q.building) query.andWhere('building', 'like', `%${q.building}%`);
@@ -122,7 +129,7 @@ empDormRouter.get(
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '宿舍不存在');
 
     res.json(ok({
@@ -150,10 +157,10 @@ empDormRouter.get(
   wrap(async (req, res) => {
     const { dormId } = (req as any).validated as { dormId: string };
 
-    const query = db(STUDENT)
+    const query = tbl(db, DB, STUDENT, STAGE)
       .where({ dorm_id: dormId, is_deleted: false });
     // ★ 成员名单也是「我班的学生」才给看（t_student_base 有 class_id，直接按列过滤）
-    await applyTrainingScope(query, req, { table: STUDENT });
+    await applyTrainingScope(query, req, { table: STUDENT, dbName: DB });
 
     const rows = await query
       .select('id', 'student_no', 'student_name', 'gender', 'class_name', 'phone', 'student_status')
@@ -198,7 +205,7 @@ empDormRouter.get(
 
     // 只认「待就业 / 已就业」的在读学生 —— 休学、退学的学生本来就不占床位，
     // 放进待分配列表里会给老师造成误导
-    const query = db(STUDENT)
+    const query = tbl(db, DB, STUDENT, STAGE)
       .where('is_deleted', false)
       .whereIn('student_status', [...JOB_STUDENT_STATUS_LIST])
       .whereNotIn('student_status', [StudentStatus.SUSPENDED, StudentStatus.QUIT])
@@ -206,12 +213,12 @@ empDormRouter.get(
         this.whereNull('dorm_id').orWhere('dorm_no', '');
       });
     // ★ 别把别班的学生列进来让我分配
-    await applyTrainingScope(query, req, { table: STUDENT });
+    await applyTrainingScope(query, req, { table: STUDENT, dbName: DB });
 
     if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
     if (q.gender) query.andWhere('gender', q.gender);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -254,13 +261,13 @@ empDormRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof saveSchema>;
 
-    const exists = await db(TABLE).where({ dorm_no: body.dormNo, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ dorm_no: body.dormNo, is_deleted: false }).first();
     if (exists) {
       throw new BizError(BizCode.PARAM_ERROR, `宿舍号 ${body.dormNo} 已存在`);
     }
 
     const id = randomUUID();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       dorm_no: body.dormNo,
       building: body.building,
@@ -290,10 +297,10 @@ empDormRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '宿舍不存在');
 
-    const dup = await db(TABLE)
+    const dup = await tbl(db, DB, TABLE, STAGE)
       .where({ dorm_no: body.dormNo, is_deleted: false })
       .whereNot('id', body.id)
       .first();
@@ -310,7 +317,7 @@ empDormRouter.put(
       );
     }
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       dorm_no: body.dormNo,
       building: body.building,
       floor: body.floor,
@@ -323,7 +330,7 @@ empDormRouter.put(
 
     // 宿舍号改了，要同步到已住学生身上
     if (row.dorm_no !== body.dormNo) {
-      await db(STUDENT).where({ dorm_id: body.id }).update({ dorm_no: body.dormNo });
+      await tbl(db, DB, STUDENT, STAGE).where({ dorm_id: body.id }).update({ dorm_no: body.dormNo });
     }
 
     res.json(ok(null, '修改成功'));
@@ -340,7 +347,7 @@ empDormRouter.delete(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '宿舍不存在或已被删除');
 
     const used = await countUsed(id);
@@ -348,7 +355,7 @@ empDormRouter.delete(
       throw new BizError(BizCode.PARAM_ERROR, `该宿舍还有 ${used} 人居住，请先办理退宿再删除`);
     }
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -374,10 +381,10 @@ empDormRouter.post(
   wrap(async (req, res) => {
     const { studentId, dormId } = (req as any).validated as z.infer<typeof assignSchema>;
 
-    const student = await db(STUDENT).where({ id: studentId, is_deleted: false }).first();
+    const student = await tbl(db, DB, STUDENT, STAGE).where({ id: studentId, is_deleted: false }).first();
     if (!student) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
-    const dorm = await db(TABLE).where({ id: dormId, is_deleted: false }).first();
+    const dorm = await tbl(db, DB, TABLE, STAGE).where({ id: dormId, is_deleted: false }).first();
     if (!dorm) throw new BizError(BizCode.PARAM_ERROR, '宿舍不存在');
 
     // ---- 校验 1：性别必须对得上 ----
@@ -397,7 +404,7 @@ empDormRouter.post(
 
     const isTransfer = !!student.dorm_id && student.dorm_id !== dormId;
 
-    await db(STUDENT).where({ id: studentId }).update({
+    await tbl(db, DB, STUDENT, STAGE).where({ id: studentId }).update({
       dorm_id: dormId,
       dorm_no: dorm.dorm_no,
       update_time: new Date(),
@@ -419,11 +426,11 @@ empDormRouter.post(
   wrap(async (req, res) => {
     const { studentId } = (req as any).validated as { studentId: string };
 
-    const student = await db(STUDENT).where({ id: studentId, is_deleted: false }).first();
+    const student = await tbl(db, DB, STUDENT, STAGE).where({ id: studentId, is_deleted: false }).first();
     if (!student) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     if (!student.dorm_id) throw new BizError(BizCode.PARAM_ERROR, '该学生当前没有住宿');
 
-    await db(STUDENT).where({ id: studentId }).update({
+    await tbl(db, DB, STUDENT, STAGE).where({ id: studentId }).update({
       dorm_id: null,
       dorm_no: null,
       update_time: new Date(),

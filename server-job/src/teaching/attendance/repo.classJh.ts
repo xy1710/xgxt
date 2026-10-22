@@ -23,7 +23,8 @@ import type {
   AttendanceSaveBody,
 } from '../shared/dto';
 import { NEED_REASON_STATUSES, UnifiedAttendanceStatus, UNIFIED_STATUS_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
 
 const T = 't_class_attendance';
 const D = 't_class_attendance_detail';
@@ -53,11 +54,12 @@ async function mapRow(r: Record<string, any>): Promise<AttendanceRow> {
   };
 }
 
-export async function list(q: AttendanceListQuery): Promise<AttendanceRow[]> {
+export async function list(q: AttendanceListQuery, user?: any): Promise<AttendanceRow[]> {
   const qb = tbl(db, 'sms_class_jh', T, STAGE).where('is_deleted', 0);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.startDate) qb.andWhere('attendance_date', '>=', q.startDate);
   if (q.endDate) qb.andWhere('attendance_date', '<=', q.endDate);
+  if (user && !(await applyClassScope(qb, 'class_id', STAGE, user))) return [];
   const rows = (await qb.orderBy('attendance_date', 'desc')) as Array<Record<string, any>>;
   return Promise.all(rows.map(mapRow));
 }
@@ -65,14 +67,45 @@ export async function list(q: AttendanceListQuery): Promise<AttendanceRow[]> {
 export async function detail(id: string): Promise<AttendanceDetail | null> {
   const rec = (await tbl(db, 'sms_class_jh', T, STAGE).where({ id, is_deleted: 0 }).first()) as Record<string, any> | undefined;
   if (!rec) return null;
-  const raw = (await db(D).where({ attendance_id: id, is_deleted: 0 }).orderBy('student_no')) as Array<
+  const raw = (await tbl(db, 'sms_class_jh', D, STAGE).where({ attendance_id: id, is_deleted: 0 }).orderBy('student_no')) as Array<
     Record<string, any>
   >;
+  const map = new Map(raw.map((d) => [String(d.student_id), d]));
+
+  /* ★ 2026-10-19：详情要能看到「该班全部学生」——
+     按在班名册铺一遍，缺明细的按「出勤」显示；名册外的历史明细追加在末尾。 */
+  const scope = (await getScope()).jh;
+  const shouldStatuses = Array.isArray(scope.shouldStatuses) ? scope.shouldStatuses : [3, 4, 5];
+  const roster = (await tbl(db, 'sms_class_jh', S, STAGE)
+    .where({ class_id: rec.class_id, is_deleted: 0 })
+    .whereIn('student_status', shouldStatuses)
+    .orderBy('student_no')) as Array<Record<string, any>>;
+
   const details: AttendanceDetailRow[] = [];
+  const seen = new Set<string>();
+  for (const s of roster) {
+    const sid = String(s.id);
+    seen.add(sid);
+    const d = map.get(sid);
+    const status = d
+      ? ((await toUnifiedStatus(STAGE, Number(d.attendance_status))) ?? 0)
+      : UnifiedAttendanceStatus.PRESENT;
+    details.push({
+      studentId: sid,
+      studentNo: ((d?.student_no ?? s.student_no) as string) ?? null,
+      studentName: ((d?.student_name ?? s.student_name) as string) ?? null,
+      status,
+      statusName: UNIFIED_STATUS_NAME[status] ?? '未知',
+      reason: (d?.absent_reason as string) ?? null,
+      phone: ((d?.phone ?? s.phone) as string) ?? null,
+    });
+  }
   for (const d of raw) {
+    const sid = String(d.student_id ?? '');
+    if (seen.has(sid)) continue;
     const status = (await toUnifiedStatus(STAGE, Number(d.attendance_status))) ?? 0;
     details.push({
-      studentId: String(d.student_id ?? ''),
+      studentId: sid,
       studentNo: (d.student_no as string) ?? null,
       studentName: (d.student_name as string) ?? null,
       status,
@@ -123,7 +156,7 @@ export async function save(body: AttendanceSaveBody, userId: string) {
   const now = new Date();
 
   const attendanceId = await db.transaction(async (trx) => {
-    const existing = (await trx(T)
+    const existing = (await tblTrx(trx, 'sms_class_jh', T, STAGE)
       .where({ class_id: body.classId, attendance_date: body.attendanceDate, is_deleted: 0 })
       .first()) as Record<string, any> | undefined;
 
@@ -144,12 +177,11 @@ export async function save(body: AttendanceSaveBody, userId: string) {
     };
 
     if (existing) {
-      await trx(T).where({ id: attId }).update({ ...payload, update_time: now, update_by: userId });
-      await trx(D)
-        .where({ attendance_id: attId, is_deleted: 0 })
-        .update({ is_deleted: 1, update_time: now });
+      await tblTrx(trx, 'sms_class_jh', T, STAGE)
+        .where({ id: attId })
+        .update({ ...payload, update_time: now, update_by: userId });
     } else {
-      await trx(T).insert({
+      await tblInsTrx(trx, 'sms_class_jh', T, STAGE, {
         id: attId,
         ...payload,
         is_deleted: 0,
@@ -158,10 +190,49 @@ export async function save(body: AttendanceSaveBody, userId: string) {
       });
     }
 
+    /**
+     * ★★ 明细「整体替换」= **按学生 upsert**（P2 修正）
+     *
+     * 【为什么不能「先整体软删、再插入」】
+     *   统一表 `t_uni_attendance_detail` 上有唯一键
+     *     `uk_attendance_detail (attendance_id, student_id, edu_stage)`
+     *   —— 这是**刻意的业务约束**：一次考勤里一个学生只应有一条明细。
+     *   而软删只是把 `is_deleted` 置 1，**行还在、唯一键仍被占住**
+     *   → 紧接着的 insert 必报
+     *     `Duplicate entry '...' for key 't_uni_attendance_detail.uk_attendance_detail'`
+     *   （第 4 期已记录过同款坑：软删 + 唯一索引 = 删了再也建不回来）
+     *
+     * 【为什么老表模式一直"看起来正常"】
+     *   老表 `t_class_attendance_detail` 的 `attendance_id` / `student_id` 都是
+     *   **普通索引**，没有唯一约束 → 软删 + 重插能过，只是悄悄堆历史行。
+     *   → 属于「老表宽松掩盖了代码缺陷」，切读统一表才炸出来。
+     *
+     * 【改法】按（本次考勤 + 学生）做 upsert：
+     *   已存在 → 原地 update（顺带把软删的复活 `is_deleted: 0`）
+     *   不存在 → insert
+     *   本次未提交的旧明细 → 逻辑删除（保留审计，不物理删）
+     *   ⚠️ 全仓没有任何地方读 `is_deleted = 1` 的出勤明细（已 grep 确认），
+     *     所以不再"每条保存追加一行历史"不存在信息丢失。
+     */
+    const prevDetails = (await tblTrx(trx, 'sms_class_jh', D, STAGE)
+      .where({ attendance_id: attId })
+      .select('id', 'student_id')) as Array<Record<string, any>>;
+    const prevMap = new Map(prevDetails.map((d) => [String(d.student_id), String(d.id)]));
+    const submittedIds = new Set(input.map((r) => String(r.studentId)));
+
+    const staleDetails = prevDetails.filter((d) => !submittedIds.has(String(d.student_id)));
+    if (staleDetails.length) {
+      await tblTrx(trx, 'sms_class_jh', D, STAGE)
+        .whereIn(
+          'id',
+          staleDetails.map((d) => String(d.id)),
+        )
+        .update({ is_deleted: 1, update_time: now, update_by: userId });
+    }
+
     for (const r of input) {
       const stu = stuMap.get(r.studentId)!;
-      await trx(D).insert({
-        id: randomUUID(),
+      const detailPayload = {
         attendance_id: attId,
         class_id: cls.id,
         attendance_date: body.attendanceDate,
@@ -172,18 +243,34 @@ export async function save(body: AttendanceSaveBody, userId: string) {
         parent_phone: stu.parent_phone ?? null,
         // ★ 统一码 → 初高原码，落回老表
         attendance_status: await toRawStatus(STAGE, r.status),
-        absent_reason: r.reason ?? null,
-        is_deleted: 0,
-        create_time: now,
-        create_by: userId,
-      });
+        // ⚠️ 用 '' 而不是 null：统一表 `t_uni_attendance_detail.absent_reason`
+        //    是 `NOT NULL DEFAULT ''`，显式传 null 会 `Column 'absent_reason' cannot be null`。
+        //    （大学仓储本来就是 `?? ''`，这里与它对齐；老表侧 '' 与 NULL 语义无差别）
+        absent_reason: r.reason ?? '',
+      };
+      const prevId = prevMap.get(String(r.studentId));
+      if (prevId) {
+        await tblTrx(trx, 'sms_class_jh', D, STAGE)
+          .where({ id: prevId })
+          .update({ ...detailPayload, is_deleted: 0, update_time: now, update_by: userId });
+      } else {
+        await tblInsTrx(trx, 'sms_class_jh', D, STAGE, {
+          id: randomUUID(),
+          ...detailPayload,
+          is_deleted: 0,
+          create_time: now,
+          create_by: userId,
+        });
+      }
     }
 
-    await trx(S)
+    await tblTrx(trx, 'sms_class_jh', S, STAGE)
       .where({ class_id: cls.id, is_deleted: 0 })
       .whereIn('student_status', shouldStatuses)
       .update({ attendance_rate: attendanceRate, update_time: now });
-    await trx(C).where({ id: cls.id }).update({ today_attendance_rate: attendanceRate, update_time: now });
+    await tblTrx(trx, 'sms_class_jh', C, STAGE)
+      .where({ id: cls.id })
+      .update({ today_attendance_rate: attendanceRate, update_time: now });
 
     return attId;
   });
@@ -209,7 +296,9 @@ export async function board(classId: string, date: string): Promise<AttendanceBo
     .where({ class_id: classId, attendance_date: date, is_deleted: 0 })
     .first()) as Record<string, any> | undefined;
   const details = att
-    ? ((await db(D).where({ attendance_id: att.id, is_deleted: 0 })) as Array<Record<string, any>>)
+    ? ((await tbl(db, 'sms_class_jh', D, STAGE).where({ attendance_id: att.id, is_deleted: 0 })) as Array<
+        Record<string, any>
+      >)
     : [];
   const map = new Map(details.map((d) => [String(d.student_id), d]));
 

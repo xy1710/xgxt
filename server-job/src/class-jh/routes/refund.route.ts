@@ -25,12 +25,17 @@ import { getNumberSetting } from '../utils/setting';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件各表均已归一，裸 db() 全部走 tbl()/tblIns()；开关关时逐字节等价。
+import { tbl, tblIns } from '../../teaching/shared/uniTable';
 
 export const refundRouter = Router();
 
 const TABLE = 't_class_refund';
 const LOG_TABLE = 't_class_refund_log';
 const STUDENT_TABLE = 't_class_student';
+
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /** 各状态当前处理人（推导） */
 const HANDLER_NAME: Record<number, string> = {
@@ -84,7 +89,7 @@ async function writeRefundLog(
   rejectReason?: string,
 ): Promise<void> {
   const now = new Date();
-  await db(LOG_TABLE).insert({
+  await tblIns(db, DB, LOG_TABLE, STAGE, {
     id: randomUUID(),
     refund_id: refundId,
     node_status: nodeStatus,
@@ -129,7 +134,7 @@ export async function createQuitRefund(stu: any, input: QuitRefundInput): Promis
   if (!input.refundAmount || input.refundAmount <= 0) return null;
 
   // 幂等：同一学生已有「未驳回」的退费单则不再重复生成
-  const existing = await db(TABLE)
+  const existing = await tbl(db, DB, TABLE, STAGE)
     .where({ student_id: stu.id, is_deleted: false })
     .whereNot('refund_status', RefundStatus.REJECTED)
     .first();
@@ -140,7 +145,7 @@ export async function createQuitRefund(stu: any, input: QuitRefundInput): Promis
   const now = new Date();
   const applyDate = input.applyDate || now.toISOString().slice(0, 10);
 
-  await db(TABLE).insert({
+  await tblIns(db, DB, TABLE, STAGE, {
     id,
     student_id: stu.id,
     student_no: stu.student_no,
@@ -190,7 +195,7 @@ refundRouter.get(
   validate(z.object({ keyword: z.string().optional() })),
   wrap(async (req, res) => {
     const q = (req as any).validated as { keyword?: string };
-    const query = db(STUDENT_TABLE).where({ student_status: StudentStatus.QUIT, is_deleted: false });
+    const query = tbl(db, DB, STUDENT_TABLE, STAGE).where({ student_status: StudentStatus.QUIT, is_deleted: false });
     if (q.keyword) {
       query.andWhere((qb) => {
         qb.where('student_no', 'like', `%${q.keyword}%`).orWhere('student_name', 'like', `%${q.keyword}%`);
@@ -199,7 +204,7 @@ refundRouter.get(
     const students = await query.select('id', 'student_no', 'student_name', 'class_name');
 
     // 过滤「费用已用完」（存在 is_fee_used_up=true 的退费单）
-    const usedUp = await db(TABLE)
+    const usedUp = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, is_fee_used_up: true })
       .select('student_id');
     const usedUpSet = new Set<string>(usedUp.map((r: any) => r.student_id));
@@ -239,7 +244,7 @@ refundRouter.get(
   validate(listSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.refundStatus) query.andWhere('refund_status', q.refundStatus);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.feeType) query.andWhere('fee_type', q.feeType);
@@ -251,7 +256,7 @@ refundRouter.get(
       });
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -274,10 +279,10 @@ refundRouter.get(
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
-    const refund = await db(TABLE).where({ id, is_deleted: false }).first();
+    const refund = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!refund) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
 
-    const logs = await db(LOG_TABLE).where({ refund_id: id, is_deleted: false }).orderBy('approve_time', 'asc');
+    const logs = await tbl(db, DB, LOG_TABLE, STAGE).where({ refund_id: id, is_deleted: false }).orderBy('approve_time', 'asc');
     res.json(
       ok({
         ...toRefund(refund),
@@ -319,7 +324,7 @@ refundRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof saveSchema>;
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     if (stu.student_status !== StudentStatus.QUIT) {
       throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '仅「退学」状态的学生可申请退费');
@@ -331,7 +336,7 @@ refundRouter.post(
     const threshold = await getNumberSetting('refundThresholdAmount');
     const id = randomUUID();
     const now = new Date();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       student_id: stu.id,
       student_no: stu.student_no,
@@ -383,7 +388,7 @@ refundRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof saveSchema> & { id: string };
 
-    const refund = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const refund = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!refund) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
     if (refund.refund_status !== RefundStatus.DRAFT) {
       throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '仅「待提交」状态可修改');
@@ -392,7 +397,7 @@ refundRouter.put(
       throw new BizError(BizCode.FEE_USED_UP, '该学生费用已用完，不可退费');
     }
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       fee_type: body.feeType,
       refund_amount: body.refundAmount,
       refund_reason: body.refundReason,
@@ -417,13 +422,13 @@ refundRouter.post(
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
-    const refund = await db(TABLE).where({ id, is_deleted: false }).first();
+    const refund = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!refund) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
     if (refund.refund_status !== RefundStatus.DRAFT) {
       throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '仅「待提交」状态可提交');
     }
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       refund_status: RefundStatus.PENDING_MANAGER,
       current_handler_name: HANDLER_NAME[RefundStatus.PENDING_MANAGER],
       update_time: new Date(),
@@ -447,7 +452,7 @@ refundRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as { id: string; remark?: string };
 
-    const refund = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const refund = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!refund) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
 
     const cur = refund.refund_status as RefundStatus;
@@ -483,7 +488,7 @@ refundRouter.post(
         );
     }
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       refund_status: next,
       current_handler_name: HANDLER_NAME[next],
       approve_user_id: req.user?.userId ?? null,
@@ -524,14 +529,14 @@ refundRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as { id: string; rejectReason: string };
 
-    const refund = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const refund = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!refund) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
     if ([RefundStatus.REFUNDED, RefundStatus.REJECTED].includes(refund.refund_status)) {
       throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '该退费单已终态，不可驳回');
     }
 
     const now = new Date();
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       refund_status: RefundStatus.REJECTED,
       current_handler_name: HANDLER_NAME[RefundStatus.REJECTED],
       approve_user_id: req.user?.userId ?? null,
@@ -571,7 +576,7 @@ refundRouter.get(
   validate(listSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.refundStatus) query.andWhere('refund_status', q.refundStatus);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.feeType) query.andWhere('fee_type', q.feeType);

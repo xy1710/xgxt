@@ -54,73 +54,27 @@
  *   改完回查类型与索引 Non_unique（铁律：ADD INDEX ≠ ADD UNIQUE）。
  */
 
-/**
- * 取当前连接的真实库名
- *
- * ★ 2026-10-15：原来这里是写死的 `const DB = 'sms_common'`。
- *   换成别的库名部署时会查错库，故改为从 knex 连接动态取。
- */
-const dbOf = (knex) => knex.client.config.connection.database || 'sms_common';
-
-/**
- * ⚠️ 2026-10-15 修复：information_schema 的列名必须【大小写不敏感】地读。
- *
- * 【原来的 bug —— 会让整条 npm run migrate 链断掉】
- *   原代码直接读 `r.index_name` / `r.non_unique`。
- *   但 MySQL/MariaDB 从 information_schema 返回的列名一律是 **大写**
- *   （实测 keys = ["INDEX_NAME","NON_UNIQUE","COLUMN_NAME","SEQ_IN_INDEX"]），
- *   于是 `r.index_name` 恒为 undefined → hasIndex() 恒返回 false
- *   → 明明索引在，也去执行 `ALTER TABLE ... ADD INDEX` →
- *     报 `Duplicate key name 'idx_exam_class_date'` → 本迁移失败。
- *
- *   而 package.json 的 migrate 是 `... && --env class-common && --env class-jh`，
- *   前一步失败 → **`--env class-jh` 永远不会执行** →
- *   sms_class_jh 库里一张表都没有（31 个迁移全 pending）→
- *   初高/学生档案（合并页）查 t_student_base 报 ER_NO_SUCH_TABLE
- *   → 前端显示「数据表不存在（请先执行 npm run migrate）」（极具误导）。
- */
-function lowerKeys(row) {
-  if (!row) return row;
-  const out = {};
-  for (const [k, v] of Object.entries(row)) out[k.toLowerCase()] = v;
-  return out;
-}
+const DB = 'sms_common';
 
 async function columnType(knex, table, column) {
   const r = await knex('information_schema.COLUMNS')
-    .where({ TABLE_SCHEMA: dbOf(knex), TABLE_NAME: table, COLUMN_NAME: column })
+    .where({ TABLE_SCHEMA: DB, TABLE_NAME: table, COLUMN_NAME: column })
     .first();
-  return r ? String(lowerKeys(r).column_type) : null;
+  return r ? String(r.COLUMN_TYPE) : null;
 }
 
-/**
- * 查表的索引信息
- *
- * ★★★ 2026-10-15 修：`select()` 里的小写列名，在 **MySQL 8.0 上会被强制转成大写 key**
- *   （information_schema 是内部表，列名不随查询书写的大小写变化）。
- *   而 MariaDB 会保留查询书写的小写 → 于是同一份代码：
- *     · 本机 MariaDB  → 返回 `{index_name}` → 判断正常
- *     · 虚拟机 MySQL 8.0 → 返回 `{INDEX_NAME}` → `r.index_name` 是 undefined
- *       → `hasIndex()` 恒为 false → 去 ADD INDEX → 报 `Duplicate key name`
- *
- *   **修法：显式加 `as` 别名**，强制把 key 统一成小写。
- *   这样底层返回大写还是小写都无所谓，代码这边永远拿到 `index_name`。
- *   （MySQL 8.0 / MariaDB 实测均通过。）
- */
 async function indexRows(knex, table) {
   return await knex('information_schema.STATISTICS')
-    .where({ TABLE_SCHEMA: dbOf(knex), TABLE_NAME: table })
-    .select(
-      'INDEX_NAME as index_name',
-      'NON_UNIQUE as non_unique',
-      'COLUMN_NAME as column_name',
-      'SEQ_IN_INDEX as seq_in_index',
-    );
+    .where({ TABLE_SCHEMA: DB, TABLE_NAME: table })
+    .select('index_name', 'non_unique', 'column_name', 'seq_in_index');
 }
 
 async function hasIndex(knex, table, indexName) {
   const rows = await indexRows(knex, table);
-  return rows.some((r) => r.index_name === indexName);
+  // ★ 大小写兼容：MySQL 8 的 information_schema 列名返回大写（INDEX_NAME），
+  //   MariaDB 返回查询里写的小写（index_name）—— 两种都要认，否则 hasIndex
+  //   永远 false，重复跑必撞 Duplicate key name。
+  return rows.some((r) => (r.INDEX_NAME ?? r.index_name) === indexName);
 }
 
 exports.up = async function up(knex) {
@@ -129,16 +83,16 @@ exports.up = async function up(knex) {
     console.log('· t_uni_exam.idx_exam_class_date 已存在，跳过');
   } else {
     const cols = (await indexRows(knex, 't_uni_exam'))
-      .filter((r) => r.index_name === 'idx_exam_class_date')
+      .filter((r) => (r.INDEX_NAME ?? r.index_name) === 'idx_exam_class_date')
       .length;
     if (cols === 0) {
       await knex.raw(
         'ALTER TABLE `t_uni_exam` ADD INDEX `idx_exam_class_date` (`edu_stage`, `class_id`, `exam_date`)',
       );
       const check = (await indexRows(knex, 't_uni_exam')).filter(
-        (r) => r.index_name === 'idx_exam_class_date',
+        (r) => (r.INDEX_NAME ?? r.index_name) === 'idx_exam_class_date',
       );
-      const nonUniq = check.length ? Number(check[0].non_unique) : -1;
+      const nonUniq = check.length ? Number(check[0].NON_UNIQUE ?? check[0].non_unique) : -1;
       console.log(
         `  ✔ t_uni_exam 新增 idx_exam_class_date(edu_stage, class_id, exam_date)，Non_unique=${nonUniq}` +
           (nonUniq === 1 ? '' : '  ⚠️ 期望 1'),

@@ -30,13 +30,17 @@ import {
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
+// ★ P3 切读层：本文件「教务自己的」两张表在 `sms_edu`（**未归一** → 保持裸访问）；
+//   跨域只读的 3 张（JOB_STUDENT / CLASS_STUDENT / FEE_CALL_TABLE）**已归一**
+//   → 一律走 `tbl(db, 库, 表, 学段)`。
+import { tbl, readPhaseCode } from '../teaching/shared/uniTable';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 
 export const studentRouter = Router();
 
-/** 表名常量 —— 改这里就够 */
+/** 表名常量 —— 改这里就够（sms_edu 域，**未归一**，保持裸访问） */
 const TABLE = 'sms_edu.t_student_base';
 
 /**
@@ -49,6 +53,9 @@ const TABLE = 'sms_edu.t_student_base';
  *
  * ⚠️ 教务缴费表**没有 student_id**，只能按 student_no 关联
  *    （见 migrations-edu/20261002_001_add_payment_student_no.js）
+ *
+ * ★ P3 切读层：`EDU_PAYMENT_TABLE` 在 sms_edu（未归一）→ 裸访问；
+ *   `FEE_CALL_TABLE`（sms_job.t_job_fee_call）**已归一** → 走 tbl()。
  */
 const EDU_PAYMENT_TABLE = 'sms_edu.t_edu_payment';
 const FEE_CALL_TABLE = 't_job_fee_call';
@@ -92,8 +99,10 @@ const listSchema = z.object({
  *   这样不会出现"两份数据互相对不上"的问题。
  * ============================================================ */
 
-/** 就业库的学生表（实训 / 就业学生在这里，走主连接 = sms_job） */
+/** 就业库的学生表（实训 / 就业学生在这里，走主连接 = sms_job；★ 已归一 → t_uni_student） */
 const JOB_STUDENT = 't_student_base';
+/** ★ 统一表 `edu_stage` 取值：实训 */
+const JOB_STAGE = 'job' as const;
 /**
  * 并进教务档案的实训侧学生状态
  *   实训中(8) / 待就业(9) / 已就业(10) / **休学(6)**
@@ -115,8 +124,17 @@ const JOB_STAGE_STATUS = [6, 7, 8, 9, 10];
 /**
  * 大学部（班级库）的学生表 —— ★ 2026-10-04 斌哥：大学学生也要在教务档案里看到
  * 数据只存一份（在 sms_class），教务这边「看在眼里」只读，与实训学生同一套做法。
+ *
+ * ★ P3 切读层：老写法是「库.表」全限定字符串，`tbl()` 要把「库名 + 表名」分开传，
+ *   所以拆成 CLASS_DB / CLASS_STUDENT 两个常量（与 `src/routes/dorm.route.ts` 同款）。
  */
-const CLASS_STUDENT = 'sms_class.t_class_student';
+const CLASS_STUDENT = 't_class_student';
+const CLASS_DB = 'sms_class';
+/** ★ 统一表 `edu_stage` 取值：大学 */
+const CLASS_STAGE = 'class' as const;
+
+/** 就业库（本路由主连接所在库） */
+const JOB_DB = 'sms_job';
 
 /**
  * 大学部班级库的 stage（201~206）→ 教务阶段体系（7~12）
@@ -267,7 +285,7 @@ studentRouter.get(
     let jobRows: any[] = [];
     if (!q.stage || q.stage === Stage.TRAINING) {
       jobRows = await applyListFilters(
-        db(JOB_STUDENT).where('is_deleted', false).whereIn('student_status', JOB_STAGE_STATUS),
+        tbl(db, JOB_DB, JOB_STUDENT, JOB_STAGE).where('is_deleted', false).whereIn('student_status', JOB_STAGE_STATUS),
         q,
         { skipStage: true },
       ).select('*');
@@ -279,12 +297,16 @@ studentRouter.get(
     let classRows: any[] = [];
     if (!q.stage || UNIV_STAGE_EDU.includes(q.stage)) {
       classRows = await applyListFilters(
-        db(CLASS_STUDENT).where('is_deleted', false),
+        tbl(db, CLASS_DB, CLASS_STUDENT, CLASS_STAGE).where('is_deleted', false),
         q,
         { skipStage: true },
       ).select('*');
       classRows = classRows
-        .map((r: any) => ({ ...r, stage: UNIV_STAGE_MAP[r.stage] ?? r.stage }))
+        .map((r: any) => {
+          // ★ #23 方案B：classRows 来自 t_uni_student（老表 sms_class.t_class_student）→ 阶段码走 readPhaseCode
+          const phase = readPhaseCode(r);
+          return { ...r, stage: UNIV_STAGE_MAP[phase] ?? phase };
+        })
         .filter((r: any) => !q.stage || r.stage === q.stage);
     }
 
@@ -333,7 +355,7 @@ studentRouter.get(
       fees.forEach((f: any) => unpaidEduNo.add(f.student_no));
     }
     if (jobIds.length) {
-      const fees = await db(FEE_CALL_TABLE)
+      const fees = await tbl(db, JOB_DB, FEE_CALL_TABLE, JOB_STAGE)
         .whereIn('student_id', jobIds)
         .andWhere('is_deleted', false)
         .andWhereNot('call_status', 3) // 3 = 已缴清
@@ -432,10 +454,10 @@ studentRouter.get(
     //   deptCode=1（初高部）时不查：这两个库里的班不属于初高部
     if (!deptCode || deptCode === 2) {
       collect(
-        await db(CLASS_STUDENT).where('is_deleted', false).whereNotNull('class_name').distinct().select('class_name'),
+        await tbl(db, CLASS_DB, CLASS_STUDENT, CLASS_STAGE).where('is_deleted', false).whereNotNull('class_name').distinct().select('class_name'),
       );
       collect(
-        await db(JOB_STUDENT).where('is_deleted', false).whereNotNull('class_name').distinct().select('class_name'),
+        await tbl(db, JOB_DB, JOB_STUDENT, JOB_STAGE).where('is_deleted', false).whereNotNull('class_name').distinct().select('class_name'),
       );
     }
 
@@ -472,7 +494,7 @@ studentRouter.get(
       .groupBy('student_status');
 
     // ★ 实训 / 就业的学生（合并进统计）
-    const jobRows = await db(JOB_STUDENT)
+    const jobRows = await tbl(db, JOB_DB, JOB_STUDENT, JOB_STAGE)
       .where('is_deleted', false)
       .whereIn('student_status', JOB_STAGE_STATUS)
       .modify((qb) => {
@@ -483,7 +505,7 @@ studentRouter.get(
       .groupBy('student_status');
 
     // ★ 大学部的学生（合并进统计）
-    const classRows = await db(CLASS_STUDENT)
+    const classRows = await tbl(db, CLASS_DB, CLASS_STUDENT, CLASS_STAGE)
       .where('is_deleted', false)
       .modify((qb) => {
         if (deptCode) qb.andWhere('dept_code', deptCode);

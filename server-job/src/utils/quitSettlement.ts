@@ -44,6 +44,11 @@ import {
 import { createApproval, type Operator } from './approval';
 import { sendNotice, NOTICE_TYPE } from './notice';
 import { today } from './date';
+// ★ 切读层：本文件的表全部在 sms_job（学段固定 job），开关关时与原实现等价
+import { tblInsTrx, tblTrx } from '../teaching/shared/uniTable';
+
+const DB = 'sms_job';
+const STAGE = 'job' as const;
 
 /* ============================================================
  * 表名与常量
@@ -150,13 +155,13 @@ export async function settleQuit(
   const now = new Date();
   const applyDate = leaveRow.leave_date || today();
 
-  const stu = await trx(STUDENT_TABLE).where({ id: leaveRow.student_id }).first();
+  const stu = await tblTrx(trx, DB, STUDENT_TABLE, STAGE).where({ id: leaveRow.student_id }).first();
   if (!stu) {
     return { hasDorm: false, dormChangeCreated: false, refundCreated: false, refundId: null };
   }
 
   const cls = leaveRow.class_id
-    ? await trx(CLASS_TABLE).where({ id: leaveRow.class_id, is_deleted: false }).first()
+    ? await tblTrx(trx, DB, CLASS_TABLE, STAGE).where({ id: leaveRow.class_id, is_deleted: false }).first()
     : null;
 
   // 单据挂在**该班班主任**名下（两条审批链第 1 环都是"班主任发起"）
@@ -183,7 +188,7 @@ export async function settleQuit(
    *      宿舍的已住人数也虚高。改走退宿审批后，审批通过时会正确释放床位。
    * ------------------------------------------------------------ */
   if (hasDorm) {
-    const bed = await trx(BED_TABLE)
+    const bed = await tblTrx(trx, DB, BED_TABLE, STAGE)
       .where({ student_id: stu.id, is_deleted: false })
       .orderBy('create_time', 'desc')
       .first();
@@ -204,7 +209,7 @@ export async function settleQuit(
       trx,
     );
 
-    await trx(CHANGE_TABLE).insert({
+    await tblInsTrx(trx, DB, CHANGE_TABLE, STAGE, {
       id: changeId,
       create_time: now,
       create_by: operator.userId,
@@ -271,7 +276,7 @@ export async function settleQuit(
     trx,
   );
 
-  await trx(REFUND_TABLE).insert({
+  await tblInsTrx(trx, DB, REFUND_TABLE, STAGE, {
     id: refundId,
     create_time: now,
     create_by: operator.userId,

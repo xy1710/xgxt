@@ -31,6 +31,7 @@ import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 import { buildApplyNo } from '../shared/conf';
+import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive } from '../shared/studentRef';
 
 const T = 't_class_flow';
@@ -39,9 +40,6 @@ const STAGE = 'jh' as const;
 /** ★ 老表所在库（切读路由层 tbl() 的第一个参数） */
 const SRC = 'sms_class_jh';
 
-/** ★ 全限定表名（conn 来自 job 库事务） */
-const WT = 'sms_class_jh.t_class_flow';
-const WS = 'sms_class_jh.t_class_student';
 
 /** ★ 本域只关心这三类流程（其余 4 类是初高独有，不属于本次合并范围） */
 const IN_SCOPE = [1, 2, 5];
@@ -140,8 +138,11 @@ export async function studentOptions(
   keyword: string,
   limit: number,
   opts: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean } = {},
+  user?: any,
 ): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class_jh', S, STAGE).where('is_deleted', 0);
+  /* ★ 数据范围：项目经理/班主任只能选自己带的班的学生 */
+  if (user && !(await applyClassScope(q, 'class_id', STAGE, user))) return [];
   if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
   if (opts.excludeStatuses?.length) {
     const ex = opts.excludeStatuses;
@@ -185,7 +186,7 @@ export async function findStudent(id: string): Promise<StudentSnapshot | null> {
 }
 
 /** 分页（★ 始终限定在三类流程内） */
-export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total: number }> {
+export async function list(q: LeaveListQuery, user?: any): Promise<{ rows: LeaveRow[]; total: number }> {
   const base = tbl(db, SRC, T, STAGE).where('is_deleted', 0).whereIn('flow_type', IN_SCOPE);
   if (q.keyword) {
     base.andWhere((b) => {
@@ -219,6 +220,9 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     const raw = await toRawLeaveStatus(STAGE, q.status);
     base.andWhere('flow_status', raw);
   }
+
+  /* ★ 数据范围：只看我负责的班的单据 */
+  if (user) await applyClassScopeKeepNull(base, 'class_id', STAGE, user);
 
   const [{ total }] = (await base.clone().count({ total: '*' })) as Array<{ total: number }>;
   const rows = (await base

@@ -59,7 +59,8 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { DormCandidateRow, DormRepo } from './types';
 import { bedNoText } from 'shared-types/class';
 import { hasRole, RoleCode, StudentStatus } from 'shared-types';
-import { tbl, tblIns, upd } from '../shared/uniTable';
+import { tbl, tblIns, upd, uniDb } from '../shared/uniTable';
+import { visibleClassIds } from '../shared/dataScope';
 import { listBuildingNames as listDormBuildingNames } from './building.service';
 
 const DORM_T = 't_job_dorm';
@@ -263,40 +264,45 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
    *   实训没有「宿舍管理员」这个角色，教务老师（ACAD_STAFF）就是宿舍口的管理者。
    */
   async function scopedDormIds(user: any): Promise<string[] | null> {
-    const mine = await myClasses(user);
-    if (mine.privileged) return null;
-    if (!mine.names.length && !mine.ids.length) return [];
-
-    /**
-     * ★ 2026-10-21：班主任能看到**教务分派给本班的宿舍**（哪怕还没有学生入住）。
-     *
-     * 之前只按「本班学生住哪间」反查 → 教务刚分派完、班主任还没填学生时，
-     * 班主任看到的是「暂无数据」，等于分派白做了。
-     * → 把 `t_edu_dorm_assignment` 里本班的分派房间一起并进可见范围：
-     *   分给这个班哪几间，班主任就只能看到哪几间。
-     */
-    const assigned = mine.names.length
-      ? ((await db(ASSIGN_T)
-          .whereIn('class_name', mine.names)
-          .where({ is_deleted: false })
-          .distinct('room_id')) as any[])
-      : [];
+    /* ★ 2026-10-19：统一走「交棒模型」的班级范围（与出勤/成绩/班级同口径）
+         · 项目经理 → 自己负责且未结业的实训班
+         · 就业老师 → 已结业（交棒）的班
+         · 班主任三人组 → 自己带的班
+         原来这里只按 head/teacher/assistant 查，项目经理/就业老师匹配不到 → 恒为空。 */
+    const classIds = await visibleClassIds(stage, user);
+    if (classIds === null) return null;
+    if (!classIds.length) return [];
 
     const ids = new Set<string>();
-    // ① 分派给本班的房间
-    for (const a of assigned) {
-      const id = str(a.room_id);
-      if (id) ids.add(id);
+
+    /**
+     * ★ 2026-10-21（远端）：班主任要能看到**教务分派给本班的宿舍**，哪怕还没有学生入住 ——
+     *   否则教务刚分派完、班主任还没填学生时，他看到的仍是「暂无数据」，分派等于白做。
+     *   分派表只有 class_name 快照（没有 class_id），所以先按我的班取班名再匹配。
+     */
+    try {
+      const myNames = (await uniDb('t_uni_class')
+        .whereIn('id', classIds)
+        .where({ is_deleted: 0 })
+        .select('class_name')) as Array<{ class_name: string }>;
+      const nameList = myNames.map((r) => String(r.class_name || '')).filter(Boolean);
+      if (nameList.length) {
+        const assigned = (await db(ASSIGN_T)
+          .whereIn('class_name', nameList)
+          .where({ is_deleted: false })
+          .distinct('room_id')) as any[];
+        for (const a of assigned) if (str(a.room_id)) ids.add(String(a.room_id));
+      }
+    } catch {
+      /* 分派表不存在 → 跳过 */
     }
 
-    // ② 本班学生已经入住的房间（学生主档 dorm_id 是权威来源）
-    const stayingFilters = (b: any) => {
-      if (mine.ids.length) b.whereIn('class_id', mine.ids);
-      if (mine.names.length) b.orWhereIn('class_name', mine.names);
-    };
+    /* ② 本班学生已经入住的房间（学生主档 dorm_id 是权威来源）
+     *   统一表 sms_common.t_uni_student 为主，sms_perm.t_student_base 兜底老数据；
+     *   两者都按 classIds 限定，不再用「班名」模糊匹配。 */
     const stayingSources: Array<() => any> = [
-      () => tbl(db, SRC_DB, STUDENT_T, stage),
-      () => db(PERM_STUDENT),
+      () => tbl(db, SRC_DB, STUDENT_T, stage).whereIn('class_id', classIds),
+      () => db(PERM_STUDENT).whereIn('class_id', classIds),
     ];
     for (const src of stayingSources) {
       try {
@@ -305,9 +311,8 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           .whereIn('student_status', IN_SCHOOL_STATUS)
           .whereNotNull('dorm_id')
           .andWhere('dorm_id', '<>', '')
-          .andWhere(stayingFilters)
           .distinct('dorm_id')) as any[];
-        for (const s of rows) if (str(s.dorm_id)) ids.add(String(s.dorm_id));
+        for (const r of rows) if (str(r.dorm_id)) ids.add(String(r.dorm_id));
       } catch {
         /* 表不存在 → 跳过 */
       }
@@ -1206,7 +1211,23 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
     }
     if (beds.length < target) {
       const dorm = await T_DORM().where({ id: dormId }).first();
-      const start = beds.reduce((mx: number, b: any) => Math.max(mx, Number(b.bed_no ?? 0)), 0);
+      /**
+       * ★★ 续号必须把**软删床位**也算进来（否则撞 uk_dorm_bed）
+       *
+       * 【原来为什么错】
+       *   上面 `beds` 是 `is_deleted: false` 的活跃床位，`start` 取它们的最大 bed_no。
+       *   但裁剪时删掉的是 `free.slice(0, surplus)`（**无 orderBy，顺序不保证**）——
+       *   完全可能删掉编号最大的那几张。
+       *   于是「4 张床 → 裁到 2 张（删了 3/4 床）→ 再扩到 4 张」时：
+       *     active = [1,2] → start = 2 → 新增 bed_no 3、4
+       *   → 与「已软删但仍在表里、且占着 uk_dorm_bed(room_id, bed_no, edu_stage)」的
+       *     3/4 号床**撞唯一键**。老表 `t_job_dorm_bed` 无此唯一索引，一直掩盖着。
+       *
+       * 【改法】取号范围改用**全量**（含软删）床位的最大 bed_no。
+       *   软删的号段从此不再复用 —— 与「唯一键永久占位」的语义保持一致。
+       */
+      const allBeds = (await T_BED().where({ dorm_id: dormId }).select('bed_no')) as Array<Record<string, any>>;
+      const start = allBeds.reduce((mx: number, b: any) => Math.max(mx, Number(b.bed_no ?? 0)), 0);
       const rows = [];
       for (let i = start + 1; i <= target; i += 1) {
         rows.push({

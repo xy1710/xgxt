@@ -17,6 +17,13 @@
 
 import { Request } from 'express';
 import { DataScope } from 'shared-types/class-jh';
+// ★ P4 切读层：`getScopedClassIds()` 原来是裸 `db(classTable)` ——
+//   它被 `class-jh/routes/student.route.ts` 与 `teaching/student/repo.classJh.ts`
+//   共用，而那两处**已经切读**（班级表 `sms_class_jh.t_class_info` 已归一）
+//   → 这里若不切，开关打开后会绕过统一表、在白名单阶段就读老表。
+//   旧签名不带库名，故新增可选参数（不传 = 保持原样，开关关时行为不变）。
+import { tbl } from '../../teaching/shared/uniTable';
+import type { TeachingStage } from '../../teaching/shared/dto';
 
 /** 计算得到的班级数据范围 */
 export interface ClassScope {
@@ -77,17 +84,26 @@ export function applyClassScope(
  * 取「本班级」范围下当前用户可见的班级 ID 白名单。
  *
  * @param db        knex 实例
- * @param classTable 班级表名
+ * @param classTable 班级表名（老表名，如 `t_class_info`）
  * @param scope    由 buildClassScope 计算得出
+ * @param dbName   ★ P4 切读层：班级表所在库（如 `sms_class_jh`）。
+ *                 传了就走 `tbl()` → 开关打开时读统一表 `t_uni_class`；
+ *                 不传 = 保持原样（开关关时两种写法产生同一条 SQL）。
+ * @param stage    统一表 `edu_stage` 取值（传了 dbName 时必填），默认 `jh`
  * @returns 可见班级 ID 数组；范围为全部/部门时返回 null（表示不限制）
  */
 export async function getScopedClassIds(
   db: any,
   classTable: string,
   scope: ClassScope,
+  dbName?: string,
+  stage: TeachingStage = 'jh',
 ): Promise<string[] | null> {
   if (!scope.isClassScope || !scope.userId) return null;
-  const rows = await db(classTable)
+  const base = dbName
+    ? tbl(db, dbName, classTable, stage)
+    : db(classTable);
+  const rows = await base
     .where('is_deleted', false)
     .andWhere((qb: any) => {
       qb.where('head_teacher_id', scope.userId)

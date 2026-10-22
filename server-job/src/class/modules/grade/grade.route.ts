@@ -19,7 +19,6 @@ import {
   tblInsTrx,
   uniUpdCols,
   readPhaseCode,
-  USE_UNI_TABLE,
 } from '../../../teaching/shared/uniTable';
 
 /**
@@ -82,10 +81,10 @@ const PUSH = () => tbl(db, SRC, PUSH_T, STAGE);
  * 读、排序、统计、写入**全部**必须走这四个常量，
  * 漏一处就会出现「列表能查出来但分数是 null」或「平均分恒为 0」。
  */
-const COL_WRITTEN = () => (USE_UNI_TABLE ? 'score_written' : 'written_score');
-const COL_MACHINE = () => (USE_UNI_TABLE ? 'score_machine' : 'machine_score');
-const COL_INTERVIEW = () => (USE_UNI_TABLE ? 'score_interview' : 'interview_score');
-const COL_COMP = () => (USE_UNI_TABLE ? 'score_total' : 'comp_score');
+const COL_WRITTEN = () => 'score_written';
+const COL_MACHINE = () => 'score_machine';
+const COL_INTERVIEW = () => 'score_interview';
+const COL_COMP = () => 'score_total';
 
 /**
  * 把四项分数按开关写进一条成绩行

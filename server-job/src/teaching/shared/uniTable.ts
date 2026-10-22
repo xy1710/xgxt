@@ -54,7 +54,14 @@ import type { TeachingStage } from '../shared/dto';
  *   ③ 学段列改名 stage → edu_stage   —— ✅ 20261010_022
  *   ④ 加环境变量启动跑对比回归       —— ⏳ 步骤 2 本步
  */
-export const USE_UNI_TABLE = process.env.TEACHING_UNI_TABLE === '1';
+/**
+ * ★ P8（2026-10-19）后：教学域老表已全部 DROP，统一表是**唯一真源**。
+ *   所以开关语义从「显式 1 才开」改为「**默认开，只有显式 0 才关**」——
+ *   否则一旦某环境忘了配 TEACHING_UNI_TABLE（.env 不入库），
+ *   散落在各路由的列名分支就会退回老列名，读出 undefined（静默错值，不报错）。
+ *   保留 0 的唯一用途：极端情况下做「纯统一表 vs 旧列名」的对照排查。
+ */
+export const USE_UNI_TABLE = process.env.TEACHING_UNI_TABLE !== '0';
 
 /** 某学段是否该走统一表（当前是全局开关，学段粒度留待后续细化） */
 export function useUni(stage: TeachingStage): boolean {
@@ -175,7 +182,26 @@ export const UNI_MAP: Record<string, string> = {
   'sms_class_jh.t_class_flow': 't_uni_approval',
   'sms_job.t_job_student_leave': 't_uni_approval',
   'sms_class.t_class_approval_log': 't_uni_approval_log',
-  'sms_class_jh.t_class_approval_log': 't_uni_approval_log',
+  /**
+   * ⚠️ 这里**曾经**还登记了一条 `'sms_class_jh.t_class_approval_log'`，
+   *   P4 收尾时实测删除（2026-10-16）。
+   *
+   * 【为什么删：那张老表根本不存在】
+   *   初高的审批流水表叫 **`t_class_flow_log`**（14 列，与 `t_uni_approval_log`
+   *   的共有列逐列一致），已在第 14 批登记为本条下方的映射。
+   *   实测 `information_schema`：`sms_class_jh` 下与 flow/log 相关的表只有
+   *     `t_class_flow` / `t_class_flow_log` / `t_class_op_log` / `t_class_refund_log`
+   *   —— **没有** `t_class_approval_log`。
+   *
+   * 【为什么必须删，而不是「留着也无害」】
+   *   它不是无害：`assertUniMapConsistent()` 只比对**两份副本的 key 是否一致**，
+   *   查不出「这个 key 指向的老表不存在」→ 一条错映射会稳稳地骗过所有自检。
+   *   而它的害处是**误导**：后来的改造者会以为初高有这张表，
+   *   进而把 `tbl(db, 'sms_class_jh', 't_class_approval_log', 'jh')` 写进代码
+   *   —— 开关关时报「数据表不存在」，开关开时却「正常」，
+   *   又是一次「老表挂、切读绿」的假象。
+   *   （登记表的准确性本身就是资产，见第 4 期「映射覆盖率」一节。）
+   */
 
   /* ------------------------------------------------------------
    * ★ 第 4 期第 2 批：`class/modules/approval` 老审批接口切读
@@ -241,8 +267,32 @@ export const UNI_MAP: Record<string, string> = {
    *   → t_uni_attendance / t_uni_attendance_detail
    *   老表 15+13 列，统一表 32+19 列，缺 0；唯一类型冲突 phone 已由
    *   迁移 006 加宽到 varchar(32) 对齐。
+   *
+   * ★★ 2026-10-16（P2 出勤归一）补齐如下 3 条 —— 这是出勤域迟迟不能切读的
+   *    **最后三块拼图**。三条全部经 information_schema 逐列对账确认「老表独有列 = 0」，
+   *    即统一表是超集，切读不会 `Unknown column`、不会丢字段：
+   *
+   *   ① `sms_class_jh.t_class_attendance_detail`（16 列）→ t_uni_attendance_detail（19 列）
+   *      缺 3：edu_stage / stage_code / class_name（后两列老表本就没有，属补充）。
+   *      ⚠️ 初高的明细表叫 `_detail`、大学的叫 `_absent`，**列名还不一样**
+   *         （初高查 `attendance_status` / `absent_reason`，大学只有 `absent_reason`）
+   *         → 这正是「同一业务、两套命名」的典型，统一表把两套列都留着。
+   *
+   *   ② `sms_job.t_job_attendance`（18 列）→ t_uni_attendance（32 列）
+   *      ⚠️ 注意表名容易误导：实训这张表叫「attendance」，但它是**按人按天的明细**，
+   *         不是班级台账（实训没有「先建台账再挂明细」那套）。
+   *         初高/大学的台账 t_class_attendance 也映射到同一张 t_uni_attendance
+   *         → 统一表同时装得下「台账行」和「明细行」，靠 edu_stage + 列是否为空区分。
+   *
+   *   ③ `sms_job.t_job_attendance_summary`（15 列）→ t_uni_attendance_summary（17 列）
+   *      缺 2：edu_stage / stage_code，其余逐列同名同义。
+   *      ⚠️ 之前 `t_uni_attendance_summary` 这张表**建好了却一条映射都没有**
+   *         → 属于「统一表躺在那里没人用」，删老表的就绪度盘点会把它算成未归一。
    */
   'sms_class.t_class_attendance_absent': 't_uni_attendance_detail',
+  'sms_class_jh.t_class_attendance_detail': 't_uni_attendance_detail',
+  'sms_job.t_job_attendance': 't_uni_attendance',
+  'sms_job.t_job_attendance_summary': 't_uni_attendance_summary',
 
   /**
    * 【催费域】★ 副本与流水是两张表，不合并
@@ -287,6 +337,133 @@ export const UNI_MAP: Record<string, string> = {
    *   索引：老表 7 个普通索引，主键 + uk_refund(apply_no, edu_stage)
    */
   'sms_job.t_job_refund': 't_uni_refund',
+
+  /* ==========================================================
+   * ★ 第 4 期 · 第 12 批（2026-10-16 · 补「孤儿统一表」）补 11 条
+   *
+   * 【为什么叫孤儿表】
+   *   这 11 张统一表**早就建好了，却一直没登记进 UNI_MAP** ——
+   *   等于建了没人用：`tbl()` 查不到映射就静默回退老表，
+   *   切读打开后这些域的数据仍然停在老表里，且 P5 搬迁时「无处可搬」。
+   *   全库实测：43 张统一表里只有 31 张被登记 → 12 张是孤儿。
+   *
+   * 【怎么找到对应老表的 —— 用列重合度自动匹配，不是凭表名猜】
+   *   脚本 `scripts/_uni-orphan-match.mjs`：拿统一表的核心列（剔除
+   *   id / edu_stage / stage_code / is_deleted / 4 个审计列）去比每张老表的列集合，
+   *   输出 Top3 候选 + 「仅老表有」列。
+   *   → 11 张全部命中率 100%、「仅老表有 = 0」：统一表是老表的**严格超集**，
+   *     所以**不需要登记 UNI_COL_RENAME**（无列改名）。
+   *
+   * 【逐对实测（列重合/老表列数，仅老表有列数）】
+   *   sms_job.t_job_approval          → t_uni_approval_main   19/19  缺 0
+   *   sms_class_jh.t_class_checkout_apply → t_uni_checkout_apply 18/18  缺 0
+   *   sms_class_jh.t_class_term       → t_uni_class_term       6/6   缺 0
+   *   sms_job.t_employment_log        → t_uni_employment_log  13/13  缺 0
+   *   sms_job.t_kpi_target            → t_uni_kpi_target       3/3   缺 0
+   *   sms_class_jh.t_class_op_log     → t_uni_op_log          11/11  缺 0
+   *   sms_class_jh.t_class_refund_log → t_uni_refund_log       8/8   缺 0
+   *   sms_job.t_review                → t_uni_review          13/13  缺 0
+   *   sms_class_jh.t_class_setting    → t_uni_setting          4/4   缺 0
+   *   sms_class_jh.t_class_stage      → t_uni_stage_def        4/4   缺 0
+   *   sms_class_jh.t_student_base     → t_uni_student_base_jh 24/24  缺 0
+   *
+   * 【★ 第 12 张孤儿 `t_uni_class_transfer_all` 刻意不登记】
+   *   它 17 列、0 行；列与 `sms_class.t_class_transfer` 完全重合，
+   *   而后者**早已映射到 `t_uni_class_transfer`（44 列）** ——
+   *   UNI_MAP 以老表为 key，一张老表只能指向一张统一表。
+   *   → `t_uni_class_transfer_all` 是早期废弃版本，**待 DROP**（属 P8）。
+   */
+  // —— 审批（实训权威表；原注释称「t_job_approval 未归一」，本次补上）——
+  'sms_job.t_job_approval': 't_uni_approval_main',
+  // —— 初高：退宿申请 / 学期 / 操作日志 / 退费流水 / 设置 / 阶段定义 / 学生基础档 ——
+  'sms_class_jh.t_class_checkout_apply': 't_uni_checkout_apply',
+  'sms_class_jh.t_class_term': 't_uni_class_term',
+  'sms_class_jh.t_class_op_log': 't_uni_op_log',
+  'sms_class_jh.t_class_refund_log': 't_uni_refund_log',
+  'sms_class_jh.t_class_setting': 't_uni_setting',
+  'sms_class_jh.t_class_stage': 't_uni_stage_def',
+  'sms_class_jh.t_student_base': 't_uni_student_base_jh',
+  // ⚠️ 注意：jh 有**两张**学生表 —— `t_class_student`（已映射到 t_uni_student）
+  //    与 `t_student_base`（本次映射到 t_uni_student_base_jh）。它们是不同的表，别合并。
+  // —— 实训：就业流水 / 就业回访 / KPI 目标 ——
+  'sms_job.t_employment_log': 't_uni_employment_log',
+  'sms_job.t_review': 't_uni_review',
+  'sms_job.t_kpi_target': 't_uni_kpi_target',
+
+  /* ==========================================================
+   * ★ 第 4 期 · 第 13 批（2026-10-16 · P3 实训老接口开工前）补 5 条
+   *
+   * 【怎么发现的】`scripts/_p3-legacy-scan.mjs` ——
+   *   扫 `src/routes/*`（实训老接口，23 文件）时，把每个文件引用的表拿去查 UNI_MAP，
+   *   发现 5 张**实训老表没登记**。后果同「孤儿表」：
+   *   `tbl()` 查不到映射就**静默回退老表**，P3 切读时这几个域的数据仍留在老表里，
+   *   而且是「不报错、只是没切过去」——最难发现的一类。
+   *
+   * 【为什么这 5 张特别容易漏】
+   *   它们的目标统一表**早就登记过别的学段了**（一张统一表服务三学段），
+   *   于是「统一表不空、映射不为空」的直觉检查会误判成已完成：
+   *     t_uni_exam_score     ← 已有 sms_class.t_class_grade
+   *     t_uni_fee            ← 已有 sms_common.t_class_fee_sync
+   *     t_uni_class_transfer ← 已有 sms_class.t_class_student_transfer / t_class_transfer
+   *     t_uni_handover       ← 已有 sms_class.t_class_training_handoff
+   *     t_uni_notify         ← 已有 sms_class.t_class_notify
+   *   漏的是**实训那一路老表**（`sms_job.*`）。
+   *
+   * 【逐列对账结果】见 `exports/_col-diff.md` 中这 5 对（`_uni-col-diff.mjs` 产出）：
+   *   sms_job.t_job_exam_score        → t_uni_exam_score     （老表独有列 0）
+   *   sms_job.t_job_fee_call          → t_uni_fee            （老表独有列 0）
+   *   sms_job.t_job_class_transfer    → t_uni_class_transfer （老表独有列 0）
+   *   sms_job.t_job_training_handoff  → t_uni_handover       （老表独有列 0）
+   *   sms_job.t_job_notice            → t_uni_notify         （老表独有列 0）
+   *   → 统一表都是老表的超集 ⇒ **不需要 UNI_COL_RENAME**。
+   *
+   * ⚠️ `t_uni_exam_score` 例外提醒：本表同一批分数存了「两套列」
+   *   （`written_score` / `score_written` 等），字典第 818~842 行明确
+   *   「切读时读写都用 `score_*` 新列」→ 读路径的列名由业务代码按开关取，
+   *   仓储里不许硬写旧列名。
+   */
+  'sms_job.t_job_exam_score': 't_uni_exam_score',
+  'sms_job.t_job_fee_call': 't_uni_fee',
+  'sms_job.t_job_class_transfer': 't_uni_class_transfer',
+  'sms_job.t_job_training_handoff': 't_uni_handover',
+  'sms_job.t_job_notice': 't_uni_notify',
+
+  /* ==========================================================
+   * ★ 第 4 期 · 第 14 批（2026-10-16 · P4 初高老接口开工前）补 7 条
+   *
+   * 【怎么发现的】同上一批：`node scripts/_p3-legacy-scan.mjs class-jh`
+   *   扫 `src/class-jh/routes/*`（13 文件）时发现这 7 张初高表没登记。
+   *
+   * 【为什么也特别容易漏】
+   *   初高的统一表映射只登记了「班级/学生/出勤/考试/宿舍/审批」这几路，
+   *   而**费用、退费、通知、交接、阶段流水**这几路的初高老表一直没登记 ——
+   *   它们的目标统一表全都已通过**别的学段**登记过：
+   *     t_uni_fee            ← sms_common.t_class_fee_sync / sms_job.t_job_fee_call
+   *     t_uni_refund         ← sms_class.t_class_refund_apply / sms_job.t_job_refund
+   *     t_uni_handover       ← sms_class.t_class_training_handoff / sms_job.t_job_training_handoff
+   *     t_uni_notify         ← sms_class.t_class_notify / sms_job.t_job_notice
+   *     t_uni_exam_score     ← sms_class.t_class_grade / sms_job.t_job_exam_score
+   *     t_uni_approval_log   ← sms_class.t_class_approval_log
+   *     t_uni_dorm_building  ← sms_job.t_dorm
+   *
+   * 【逐列对账结果】`_uni-col-diff.mjs`（见 `exports/_col-diff.md`）：7 对**老表独有列均为 0**
+   *   → 统一表是超集，**不需要 UNI_COL_RENAME**。
+   *
+   * ⚠️ `t_uni_exam_score` 的「两套列」陷阱（字典第 818~842 行）：
+   *   初高老表用的是 `score_*` 那一套（`score_written` / `score_machine` /
+   *   `score_interview` / `score_other` / `score_total`），统一表里**同名存在** →
+   *   初高这条路**不需要**按开关取列名；踩坑的是大学的 `t_class_grade`
+   *   （它写 `written_score` / `comp_score`，而综合分只在 `score_total` 里有值）。
+   * ⚠️ `t_uni_class_transfer_all` 那条历史遗留（不登记）与本次无关。
+   */
+  'sms_class_jh.t_class_fee': 't_uni_fee',
+  'sms_class_jh.t_class_refund': 't_uni_refund',
+  'sms_class_jh.t_class_fee_notify': 't_uni_notify',
+  'sms_class_jh.t_class_handover': 't_uni_handover',
+  'sms_class_jh.t_class_exam_score': 't_uni_exam_score',
+  'sms_class_jh.t_class_flow_log': 't_uni_approval_log',
+  'sms_class_jh.t_class_building': 't_uni_dorm_building',
+  'sms_job.t_job_approval_log': 't_uni_approval_log',
 };
 
 /** 该老表是否已归一（未归一的仓储继续读老表，不受开关影响） */
@@ -335,8 +512,81 @@ export function tbl(
 ): Knex.QueryBuilder {
   if (!USE_UNI_TABLE) return db(table);
   const uni = UNI_MAP[`${dbName}.${table}`];
-  if (!uni) return db(table); // 未归一的表 → 仍走老库
+  if (!uni) return db(qualify(db, dbName, table)); // 未归一的表 → 仍走老库
   return uniDb(uni).where({ edu_stage: stage });
+}
+
+/**
+ * ★★ 开关关时的表名：**只在「目标表不在当前连接库」时才带库名前缀**
+ *
+ * 【为什么必须有这个函数（P3 实训老接口开工时实测踩到）】
+ *   `tbl()` 的入参是「老表所属的库名」，而传进来的 `db` **不一定连在那个库上**。
+ *   实训侧的老路由就有这种写法：
+ *     `dorm.route.ts` / `studentLeave.route.ts`：
+ *       用 **sms_job 的连接** 读 `sms_class.t_class_student`
+ *     `auth.route.ts`：
+ *       用 sms_job 的连接依次读 `sms_class.t_class_info` 与 `t_job_class`
+ *   如果开关关时天真地 `return db(table)`（丢掉库名），就会在 sms_job 库里
+ *   找 `t_class_student` → `ER_NO_SUCH_TABLE`
+ *   → errorHandler 翻译成「**数据表不存在（请先执行 npm run migrate）**」，
+ *     **极具误导**：迁移全跑了，是这里丢了库名前缀。
+ *   （`tblTrx()` 早就带了库名，注释里也写了同一件事；`tbl()` 这次补齐。）
+ *
+ * 【为什么不是无条件加前缀】
+ *   同库调用占绝大多数。无条件加前缀虽然**语义等价**，
+ *   但会让「开关关」这条默认路径的 SQL 文本发生变化 ——
+ *   本项目「开关关 = 与切读前完全一致」这条底线就破了。
+ *   → 只在**确实跨库**时才加前缀，此时与老代码的写法（`db('库.表')`）一字不差。
+ *   ⚠️ 拿不到连接库名时按「同库」处理，保持既有行为不变（绝不凭空加前缀）。
+ */
+function qualify(db: Knex, dbName: string, table: string): string {
+  const cur = String((db as any)?.client?.config?.connection?.database ?? '');
+  return cur && cur !== dbName ? `${dbName}.${table}` : table;
+}
+
+/**
+ * ★ `tbl()` 的**别名单**：用于 join（`from` 侧带 `as 别名`）
+ *
+ * 【为什么需要单独一个函数 —— 别名的 `where` 不能写成 `{edu_stage: stage}`】
+ *   join 时主表要起别名，`edu_stage` 必须带别名前缀（`cs.edu_stage`），
+ *   否则三学段数据会在 join 结果里串味（统一表三学段混在一张表）。
+ *   → 直接写 `uniDb('t_uni_x as cs').where({edu_stage: stage})` 会报
+ *     `Column 'edu_stage' in where clause is ambiguous`（两表都有这列时）。
+ *
+ * 【★ 开关语义与 `tblTrx` 完全一致（不是 `tbl` 的字面推广，注意区别）】
+ *   开关关 → `runner('库名.表名 as 别名')`（带库名前缀，跨库事务也安全）
+ *   开关开 → `uniDb('统一表 as 别名').where({'别名.edu_stage': stage})`
+ *   → 因此「被 join 的两张表必须同库」这个前提依然成立：
+ *      开关关 → 都在 `dbName`；开关开 → 都归一 → 都在 sms_common。
+ *   目前唯一调用方 `attendance/repo.job.ts::roster()` 满足前提
+ *   （t_job_class_student + t_student_base 同在 sms_job，且都映射到 sms_common）。
+ *   ⚠️ 不要拿它去 join 一张已归一、一张未归一的表 —— 那条 SQL 在两库里跑不通。
+ *   ⚠️ `runner` 传事务时，开关开分支会**脱离该事务**（与 tblTrx 同款局限）。
+ */
+export function tblAs(
+  runner: any,
+  dbName: string,
+  table: string,
+  stage: TeachingStage,
+  alias: string,
+): any {
+  // ★ P8：开关关分支删除（老表已 DROP）
+  const uni = UNI_MAP[`${dbName}.${table}`];
+  if (!uni) return runner(`${dbName}.${table} as ${alias}`);
+  // ⚠️ 与 tblTrx 同款：切到 sms_common（因此会脱离原事务，见 tblTrx 的跨库说明）
+  return uniDb(`${uni} as ${alias}`).where({ [`${alias}.edu_stage`]: stage });
+}
+
+/**
+ * ★ 解析「老表名 → 统一表名」，**只给 join 的被连侧**用
+ *
+ * `tblAs` 负责 from 侧（要绑连接 + 带别名限定 edu_stage）；
+ * 被 join 的那张表只能作为**裸表名**传进 `leftJoin()`，
+ * 且它必须与 from 侧同库（见 `tblAs` 的适用范围说明）。
+ */
+export function tblRef(dbName: string, table: string): string {
+  // ★ P8：开关关分支删除
+  return UNI_MAP[`${dbName}.${table}`] || table;
 }
 
 /**
@@ -374,7 +624,7 @@ export function tblTrx(
   stage: TeachingStage | 'emp',
 ): Knex.QueryBuilder {
   // ⚠️ 开关关时也要带库名前缀（跨库事务场景，见上方说明）
-  if (!USE_UNI_TABLE) return trx(`${dbName}.${table}`);
+  // ★ P8：开关关分支删除（老表已 DROP）——统一表路径固定生效
   const uni = UNI_MAP[`${dbName}.${table}`];
   if (!uni) return trx(`${dbName}.${table}`);
   // ⚠️ 跨库事务：trx 来自 job 连接（sms_job），写 sms_common 会脱离这个事务。
@@ -402,7 +652,7 @@ export function ins(
   stage: TeachingStage | 'emp',
   payload: Record<string, any>,
 ): Knex.QueryBuilder {
-  if (!USE_UNI_TABLE) return db(table).insert(payload);
+  // ★ P8：开关关分支删除
   const uni = UNI_MAP[`${dbName}.${table}`];
   if (!uni) return db(table).insert(payload);
   return uniDb(uni).insert({ ...payload, edu_stage: stage });
@@ -421,22 +671,34 @@ export function upd(
   table: string,
   stage: TeachingStage | 'emp',
 ): Knex.QueryBuilder {
-  if (!USE_UNI_TABLE) return qb;
+  // ★ P8：开关关分支删除——update 一律补 edu_stage 条件（防跨学段误更新）
   return qb.where({ edu_stage: stage });
 }
 
 /**
- * 事务版路由（写路径用）
+ * ★★★ 2026-10-16（P2）**删除了 `trxTbl()` —— 它是一个「名字与行为相反」的陷阱**
  *
- * ⚠️⚠️ **第 4 期步骤 2 刻意不切这 4 个混合事务函数**（斌哥拍板）：
- *   attendance/repo.class.ts::save()
- *   attendance/repo.classJh.ts::save()
- *   exam/repo.class.ts::save() / ::remove()
- *   它们在**同一个事务里**既写已归一表又写未归一表，
- *   切读后两者在不同数据库 → knex 事务只绑定一个连接 → 做不到原子性。
- *   → 这些函数继续用老库的 `db.transaction` + `trx(老表名)`。
- *   → 到第 4 期步骤 5（出勤明细归一）后 attendance 就不再混合；
- *     步骤 3（考试内容归一）后 exam 也不再混合。届时再切。
+ * 【它原来长这样，且与紧邻上方文档互相矛盾】
+ *     export function trxTbl(trx, dbName, table, stage) {
+ *       if (!USE_UNI_TABLE) return trx(table);
+ *       const uni = UNI_MAP[`${dbName}.${table}`];
+ *       if (!uni) return trx(table);
+ *       return trx(uni).where({ edu_stage: stage });   // ← 在**事务自己的连接**上查统一表
+ *     }
+ *   而 `tblTrx()` 的开关开分支是 `uniDb(uni)` —— **切到 sms_common**。
+ *   两者名字只差两个字母、文档还都写着「事务版路由」，行为却完全相反：
+ *     `trxTbl` = 留在原库   `tblTrx` = 切到统一库
+ *
+ * 【为什么直到 P2 才炸】
+ *   它此前**没有任何调用方**（全仓 grep 确认），所以这个矛盾一直没暴露。
+ *   P2 给 attendance 的事务接入切读层时用了它，开关一开立刻：
+ *     `Table 'sms_class_jh.t_uni_attendance' doesn't exist`
+ *   —— 统一表在 sms_common，却在 sms_class_jh 的连接上找，必然找不到。
+ *
+ * 【怎么修】删函数，attendance 全部改用 `tblTrx()`（见上方「★ tblTrx() 的事务版」）：
+ *   全仓 20+ 处（class/modules/*、exam、leave、refund）用的都是 `tblTrx`，
+ *   它经过验证、且开关关时带库名前缀（跨库事务不会 ER_NO_SUCH_TABLE）。
+ *   → **事务内读写统一表，一律用 `tblTrx` / `tblInsTrx`**，不要再造第二个同名函数。
  */
 export function trxTbl(
   trx: any,
@@ -614,7 +876,8 @@ export async function uniUpdCols(
   table: string,
   patch: Record<string, any>,
 ): Promise<Record<string, any>> {
-  const uni = USE_UNI_TABLE ? UNI_MAP[`${dbName}.${table}`] : null;
+  // ★ P8：开关关分支删除（老表已 DROP）——insert 一律走统一表
+  const uni = UNI_MAP[`${dbName}.${table}`] || null;
   if (!uni) {
     /**
      * 开关关：**仍要剔掉老表没有的列**。
@@ -633,6 +896,28 @@ export async function uniUpdCols(
     const target = rename[k] ?? k;
     if (!cols.has(target)) continue;
     out[target] = patch[k];
+  }
+  /**
+   * ★★ 2026-10-16（P2）补：**NOT NULL 列收到 null/undefined → 删掉整个键**
+   *
+   * 【为什么 update 路径也必须兜这一层】
+   *   之前只有 insert 路径（`tblIns` / `tblInsTrx`）做了这件事，update 没有。
+   *   而 MariaDB 对两者的语义不同：
+   *     insert 不给列 → 走 DEFAULT
+   *     update 不给列 → **保持原值**（不是置默认）
+   *   → 所以 update 显式传 null 必报 `Column 'xxx' cannot be null`。
+   *
+   * 【本轮实测】出勤明细重存时 `absent_reason: null`
+   *   → `Column 'absent_reason' cannot be null`（统一表该列 `NOT NULL DEFAULT ''`，
+   *     老表却是**可空** → 老表模式一路绿灯，切读才炸）。
+   *
+   * ⚠️ 语义提醒：删键 = 「不动这一列」，**不等于**「清空成默认值」。
+   *   真要清空一个 NOT NULL 列，业务代码必须显式传 `''`（或 0），
+   *   见 `attendance/repo.classJh.ts` 里 `absent_reason: r.reason ?? ''`。
+   */
+  const notNull = await uniNotNullColsOf(uni);
+  for (const k of Object.keys(out)) {
+    if (notNull.has(k) && (out[k] === null || out[k] === undefined)) delete out[k];
   }
   return out;
 }
@@ -780,7 +1065,8 @@ export async function tblIns(
   stage: TeachingStage | 'emp',
   payload: Record<string, any>,
 ): Promise<any> {
-  const uni = USE_UNI_TABLE ? UNI_MAP[`${dbName}.${table}`] : null;
+  // ★ P8：开关关分支删除（老表已 DROP）——insert 一律走统一表
+  const uni = UNI_MAP[`${dbName}.${table}`] || null;
   if (!uni) return db(table).insert(await stripUniOnlyCols(db, dbName, table, payload));
   const cols = await uniColumnsOf(uni);
   const mapped = toUniColumns(dbName, table, payload, cols);
@@ -819,7 +1105,8 @@ export async function tblInsTrx(
   stage: TeachingStage | 'emp',
   payload: Record<string, any>,
 ): Promise<any> {
-  const uni = USE_UNI_TABLE ? UNI_MAP[`${dbName}.${table}`] : null;
+  // ★ P8：开关关分支删除（老表已 DROP）——insert 一律走统一表
+  const uni = UNI_MAP[`${dbName}.${table}`] || null;
   // ⚠️ 同 tblTrx：必须带库名前缀，否则跨库事务会 ER_NO_SUCH_TABLE
   if (!uni) return trx(`${dbName}.${table}`).insert(await stripUniOnlyCols(trx, dbName, table, payload));
   // ⚠️ 同 tblTrx：写 sms_common 会脱离 trx，原子性由业务层保证，不要误以为有事务
@@ -851,13 +1138,41 @@ export async function tblInsTrx(
  *   → 用一个函数按开关返回列名，是唯一能让两套行为都正确的写法。
  */
 export function phaseCodeCol(): string {
-  return USE_UNI_TABLE ? 'stage_code' : 'stage';
+  // ★ P8 / #23 方案 B：统一表唯一真源，阶段码列固定 stage_code
+  return 'stage_code';
 }
 
-/** 从一行里读阶段码（两套列名都兼容，避免漏改时报 undefined） */
-export function readPhaseCode(row: Record<string, any>): any {
-  const v = USE_UNI_TABLE ? row.stage_code ?? row.stage : row.stage ?? row.stage_code;
+/**
+ * 从一行里读阶段码（两套列名都兼容，避免漏改时报 undefined）
+ *
+ * ★ 2026-10-16（#23 方案B）：允许传 null/undefined —— 老接口里大量
+ *   `cls?.stage ?? …` / `stu?.stage ?? …` 的可空场景（如 `stage: cls?.stage ?? null`），
+ *   直接 `readPhaseCode(cls)` 就不用在每个调用点写三目。
+ */
+export function readPhaseCode(row: Record<string, any> | null | undefined): any {
+  if (!row) return null;
+  // ★ P8：统一表唯一真源，优先 stage_code（兼容历史行里的 stage 残留）
+  const v = row.stage_code ?? row.stage;
   return v === undefined || v === null || v === '' ? null : Number(v);
+}
+
+/**
+ * 阶段码的「读投影」表达式 —— 显式 select 列清单里替换裸 `'stage'`
+ *
+ *   开关关 → `stage`（老表列名）
+ *   开关开 → `stage_code`（统一表列名）
+ *   带 alias 时两边统一回同一个字段名，下游 `r.xxx` 一行都不用改：
+ *     phaseCodeSelect({ ref: 's', alias: 's_stage' })
+ *       → 关 `s.stage as s_stage` ／ 开 `s.stage_code as s_stage`
+ *
+ * 【为什么需要它】
+ *   `select('*')` 场景下游用 `readPhaseCode(row)` 读即可；
+ *   但**显式列清单**里若写死 `'stage'`，开关开时选到的是**遗留列**
+ *   （P5 会搬运老表同名列，其值与 `stage_code` 不保证一致）→ 必须换列名。
+ */
+export function phaseCodeSelect(opts: { ref?: string; alias?: string } = {}): string {
+  const col = `${opts.ref ? `${opts.ref}.` : ''}${phaseCodeCol()}`;
+  return opts.alias ? `${col} as ${opts.alias}` : col;
 }
 
 /* ============================================================

@@ -753,7 +753,9 @@ watch(
   { immediate: true },
 );
 
-const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '实训' };
+// ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
+//   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
+const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '就业部' };
 
 const DORM_STAGE_ORDER: DormStage[] = ['jh', 'class', 'job'];
 const stageOptions = computed(() => visibleStageOptions('dorm', DORM_STAGE_ORDER, STAGE_LABEL));

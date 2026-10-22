@@ -73,13 +73,16 @@
         empty-text="暂无缴费账单"
         row-key="studentId"
       >
-        <el-table-column prop="studentNo" label="学号" width="110" />
+        <!-- 未分班的学生没有学号，显示「—」（与缴费核对台同口径） -->
+        <el-table-column label="学号" width="110">
+          <template #default="{ row }">{{ dash(row.studentNo) }}</template>
+        </el-table-column>
         <el-table-column prop="studentName" label="姓名" width="90" />
         <el-table-column label="班级" width="100">
           <template #default="{ row }">{{ dash(row.className) }}</template>
         </el-table-column>
 
-        <!-- 四类费用列 -->
+        <!-- 五类费用列 -->
         <el-table-column
           v-for="g in GROUP_COLS"
           :key="g.key"
@@ -218,12 +221,14 @@ import type { BillStudentRow, BillStudentQuery, DeptCode } from 'shared-types/fi
 import { fetchBillStudents, fetchBillClasses } from '@/finance/api/finance';
 import { formatAmount, dash } from '@/finance/utils/finance';
 
-/** 四类费用列（顺序与原型一致：学费 / 餐费 / 住宿费 / 保险费） */
+/** 五类费用列（顺序与原型一致：学费 / 餐费 / 住宿费 / 保险费 + 杂费） */
 const GROUP_COLS = [
   { key: 'tuition', title: '学费缴费记录' },
   { key: 'meal', title: '餐费缴费记录' },
   { key: 'dorm', title: '住宿费缴费记录' },
   { key: 'insurance', title: '保险费' },
+  // ★ 2026-10-22：押金 + 校服单独成「杂费」列
+  { key: 'other', title: '杂费缴费记录' },
 ] as const;
 
 const loading = ref(false);
@@ -443,6 +448,11 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+/* ★ 2026-10-22：五类分组为奇数，最后一项独占整行时拉满宽度，避免右侧留空 */
+.dbox:last-child:nth-child(odd) {
+  grid-column: span 2;
 }
 
 .dbox {

@@ -20,6 +20,8 @@ import { nameOf } from '../utils/enumName';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件各表均已归一，裸 db() 全部走 tbl()/tblIns()；开关关时逐字节等价。
+import { tbl, tblIns } from '../../teaching/shared/uniTable';
 
 export const handoverRouter = Router();
 
@@ -27,6 +29,9 @@ const HANDOVER_TABLE = 't_class_handover';
 const TERM_TABLE = 't_class_term';
 const CLASS_TABLE = 't_class_info';
 const STUDENT_TABLE = 't_class_student';
+
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /* ============================================================
  * 1. 交接列表
@@ -48,12 +53,12 @@ handoverRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof handoverListSchema>;
 
-    const query = db(HANDOVER_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, HANDOVER_TABLE, STAGE).where('is_deleted', false);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.startDate) query.andWhere('handover_time', '>=', `${q.startDate} 00:00:00`);
     if (q.endDate) query.andWhere('handover_time', '<=', `${q.endDate} 23:59:59`);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -106,7 +111,7 @@ handoverRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof handoverAddSchema>;
 
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     const isHead = body.handoverRole === HandoverRole.HEAD_TEACHER;
@@ -117,7 +122,7 @@ handoverRouter.post(
     const now = new Date();
 
     // 1) 交接记录
-    await db(HANDOVER_TABLE).insert({
+    await tblIns(db, DB, HANDOVER_TABLE, STAGE, {
       id,
       class_id: cls.id,
       class_name: cls.class_name,
@@ -137,7 +142,7 @@ handoverRouter.post(
     });
 
     // 2) 更新班级岗位（t_class_info.head_teacher_name/teacher_name 为 NOT NULL，写入必填的接管人姓名）
-    await db(CLASS_TABLE)
+    await tbl(db, DB, CLASS_TABLE, STAGE)
       .where({ id: cls.id })
       .update(
         isHead
@@ -146,7 +151,7 @@ handoverRouter.post(
       );
 
     // 3) 同步学生冗余字段
-    await db(STUDENT_TABLE)
+    await tbl(db, DB, STUDENT_TABLE, STAGE)
       .where({ class_id: cls.id, is_deleted: false })
       .update(
         isHead
@@ -182,7 +187,7 @@ handoverRouter.get(
   validate(z.object({ classId: z.string().min(1, '班级必填') })),
   wrap(async (req, res) => {
     const { classId } = (req as any).validated as { classId: string };
-    const rows = await db(TERM_TABLE)
+    const rows = await tbl(db, DB, TERM_TABLE, STAGE)
       .where({ class_id: classId, is_deleted: false })
       .orderBy('start_date', 'asc');
 
@@ -222,12 +227,12 @@ handoverRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof termAddSchema>;
 
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     const id = randomUUID();
     const now = new Date();
-    await db(TERM_TABLE).insert({
+    await tblIns(db, DB, TERM_TABLE, STAGE, {
       id,
       class_id: cls.id,
       class_name: cls.class_name,

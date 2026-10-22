@@ -21,6 +21,17 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 import mysql from 'mysql2/promise';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+
+/**
+ * ★ P8（2026-10-19）：教学域老表已 DROP，本脚本仍按老表列名写数据 ——
+ *   流程包成「临时重建老表 → 按老逻辑写 → 定向同步进统一表 → 清除临时老表」。
+ *   同步用 `_uni-sync-legacy.mjs --prefix=demo-`（只搬运本脚本造的行，不碰其它数据）。
+ */
+const SCRIPTS = fileURLToPath(new URL('.', import.meta.url));
+const runNode = (script, ...args) =>
+  spawnSync(process.execPath, [path.join(SCRIPTS, script), ...args], { stdio: 'inherit' });
 
 const DB = {
   host: process.env.DB_HOST || 'localhost',
@@ -585,9 +596,17 @@ async function seed(c) {
 
 /* ---- main ---- */
 (async () => {
+  const isClean = process.argv[2] === 'clean';
+
+  /* ★ P8：老表已 DROP —— 先把空壳老表临时建出来，否则下面每条 SQL 都 ER_NO_SUCH_TABLE */
+  console.log('→ 临时重建教学域老表…');
+  if (runNode('_uni-recreate-legacy.mjs').status !== 0) {
+    throw new Error('临时老表重建失败（检查 exports/p8-final-backup 是否存在）');
+  }
+
   const c = await mysql.createConnection(DB);
   try {
-    if (process.argv[2] === 'clean') {
+    if (isClean) {
       await clean(c);
     } else {
       await seed(c);
@@ -603,6 +622,11 @@ async function seed(c) {
     }
   } finally {
     await c.end();
+    /* ★ 同步进统一表（产品只读统一表）；清理模式则从统一表删掉演示行 */
+    console.log(`\n→ ${isClean ? '从统一表删除演示行' : '定向同步进统一表'}…`);
+    runNode('_uni-sync-legacy.mjs', '--prefix=demo-', ...(isClean ? ['--delete'] : []));
+    console.log('→ 清除临时老表…');
+    runNode('_uni-recreate-legacy.mjs', '--drop');
   }
 })().catch((e) => {
   console.error('❌ 出错：', e.message);

@@ -13,7 +13,7 @@ import { buildStudentNo, now, seqOfStudentNo, uuid } from '../../lib/ids';
 import { GenderName, StageName, StudentStatusName, stageNameOf } from '../../lib/dict';
 import { assertClassAcceptStudent, isRepeatStudent } from '../../lib/classRule';
 import { wrap } from '../../middleware/error';
-import { tbl, tblTrx, tblIns, tblInsTrx, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblIns, tblInsTrx, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 import { TransferType } from 'shared-types';
 // ★ 2026-10-20 试学闭环：班主任发起补费 / 退学回写咨询状态，走服务间内部通道
 import { consultClient } from '../../lib/consultClient';
@@ -51,7 +51,6 @@ const LIVE = () => tbl(commonDb, SRC_COMMON, LIVE_T, STAGE);
 function dormOf(row: Record<string, unknown> | undefined): Record<string, unknown> | null {
   if (!row) return null;
   const c = rowToCamel<Record<string, unknown>>(row);
-  if (!USE_UNI_TABLE) return c;
   return {
     ...c,
     dormId: c.roomId ?? null,
@@ -323,7 +322,7 @@ studentRouter.post(
       teacherName = (cls.teacher_name as string) ?? null;
       assistantId = (cls.assistant_id as string) ?? null;
       assistantName = (cls.assistant_name as string) ?? null;
-      if (stage === null) stage = cls.stage as number;
+      if (stage === null) stage = readPhaseCode(cls) as number | null;
     }
 
     // 学号：不传则自动生成
@@ -362,7 +361,7 @@ studentRouter.post(
       age: b.age ?? null,
       dept_code: b.deptCode,
       student_status: b.studentStatus ?? StudentStatus.STUDYING,
-      stage,
+      [phaseCodeCol()]: stage,
       id_card: b.idCard ?? null,
       phone: b.phone ?? null,
       parent_phone: b.parentPhone ?? null,
@@ -501,11 +500,11 @@ studentRouter.put(
       patch.teacher_name = cls.teacher_name ?? null;
       patch.assistant_id = cls.assistant_id ?? null;
       patch.assistant_name = cls.assistant_name ?? null;
-      if (b.stage === undefined) patch.stage = cls.stage;
+      if (b.stage === undefined) patch[phaseCodeCol()] = readPhaseCode(cls);
     }
 
     const simple: Array<[keyof typeof b, string]> = [
-      ['stage', 'stage'],
+      ['stage', phaseCodeCol()],
       ['education', 'education'],
       ['enrollDate', 'enroll_date'],
       ['idCard', 'id_card'],
@@ -595,7 +594,7 @@ const SORT_COLUMN: Record<string, string> = {
   enrollDate: 'enroll_date',
   studentStatus: 'student_status',
   repeatCount: 'repeat_count',
-  stage: 'stage',
+  stage: phaseCodeCol(),
 };
 
 /** 学生状态 → 综合素质标签（原型「综合素质」列展示用） */
@@ -614,7 +613,7 @@ function toRosterItem(row: Record<string, unknown>): Record<string, unknown> {
   const c = rowToCamel<Record<string, unknown>>(row);
   const gender = row.gender as number;
   const status = row.student_status as number;
-  const stage = row.stage as number | null;
+  const stage = readPhaseCode(row);
   return {
     studentId: c.id,
     studentNo: c.studentNo,
@@ -682,7 +681,7 @@ studentRouter.get(
     if (query.classId) base.where('class_id', query.classId);
     if (query.deptCode) base.where('dept_code', query.deptCode);
     if (query.studentStatus) base.where('student_status', query.studentStatus);
-    if (query.stage) base.where('stage', query.stage);
+    if (query.stage) base.where(phaseCodeCol(), query.stage);
     if (query.studentNo) base.where('student_no', 'like', `%${query.studentNo}%`);
     if (query.studentName) base.where('student_name', 'like', `%${query.studentName}%`);
     if (query.keyword) {
@@ -741,7 +740,7 @@ studentRouter.get(
     if (query.classId) base.where('class_id', query.classId);
     if (query.deptCode) base.where('dept_code', query.deptCode);
     if (query.studentStatus) base.where('student_status', query.studentStatus);
-    if (query.stage) base.where('stage', query.stage);
+    if (query.stage) base.where(phaseCodeCol(), query.stage);
     if (query.studentNo) base.where('student_no', 'like', `%${query.studentNo}%`);
     if (query.studentName) base.where('student_name', 'like', `%${query.studentName}%`);
     if (query.keyword) {
@@ -792,7 +791,7 @@ studentRouter.get(
       //   写死 amount 的症状是「不报错但欠费额恒为 0」：
       //   切读时 amount 变成未定义列，COALESCE 兜成 0，欠费人数直接归零。
       const FEE_T = 't_class_fee_sync';
-      const AMT = USE_UNI_TABLE ? 'fee_amount' : 'amount';
+      const AMT = 'fee_amount';
       const feeBase = tbl(commonDb, 'sms_common', FEE_T, STAGE);
       const due = await feeBase
         .where('is_deleted', 0)
@@ -875,7 +874,7 @@ studentRouter.get(
      *   前端契约不变。老表模式保持原来的两次查询不动。
      */
     const mergedXfers =
-      USE_UNI_TABLE && classId
+      classId
         ? (await notDeleted(tbl(db, SRC, 't_class_student_transfer', STAGE))
             .where(function (this: import('knex').Knex.QueryBuilder) {
               this.where('class_id', classId).orWhere('student_id', studentId);
@@ -1045,7 +1044,7 @@ studentRouter.post(
         graduate_school: (stu.graduate_school as string) ?? null,
         home_address: (stu.home_address as string) ?? null,
         intend_dept_code: (target.dept_code as number) ?? (stu.dept_code as number) ?? null,
-        intend_stage: (target.stage as number) ?? (stu.stage as number) ?? null,
+        intend_stage: (readPhaseCode(target) as number | null) ?? (readPhaseCode(stu) as number | null) ?? null,
         intend_class_id: b.targetClassId,
         intend_class_name: target.class_name as string,
         remark: b.reason?.trim() || '班级信息管理发起换班',
@@ -1197,7 +1196,7 @@ studentRouter.post(
 
           const fromClassId = (stu.class_id as string) ?? null;
           const fromClassName = (stu.class_name as string) ?? null;
-          const fromStage = (stu.stage as number) ?? (item.fromStage ?? 0);
+          const fromStage = (readPhaseCode(stu) as number | null) ?? (item.fromStage ?? 0);
           const fromDept = (stu.dept_code as number) ?? (item.fromDeptCode ?? 0);
 
           // ① 落审批记录（升学申请，状态=已接收），成绩快照随档案保存
@@ -1230,7 +1229,7 @@ studentRouter.post(
 
           // ② 更新学生档案：stage / 部门 / 班级归属
           const patch: Record<string, unknown> = {
-            stage: item.toStage,
+            [phaseCodeCol()]: item.toStage,
             dept_code: item.toDeptCode,
           };
           if (item.toClassId) {
@@ -1251,7 +1250,7 @@ studentRouter.post(
             //   统一表 t_uni_class_transfer.transfer_type 是 int，字典 1~5 +斌哥拍板新增的 6=升学转班。
             //   写死 'upgrade' 切读时会报 `Incorrect integer value: 'upgrade'`（老表模式正常，属归一差异）。
             //   → 按开关给对应值，老表行为与改写前完全一致。
-            transfer_type: USE_UNI_TABLE ? TransferType.CLASS_UPGRADE : ('upgrade' as never),
+            transfer_type: TransferType.CLASS_UPGRADE,
             from_user_id: null,
             from_user_name: fromClassName,
             to_user_id: null,

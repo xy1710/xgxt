@@ -387,6 +387,12 @@ consultInternalRouter.post(
       className: z.string().max(100).optional().nullable(),
       operatorName: z.string().optional().default('班主任'),
       operatorTitle: z.string().optional().default('班主任'),
+      /**
+       * ★ 2026-10-22：教学侧建档生成的学号
+       *   回写到咨询学生表，后续「补费」建单就能直接带上真学号，
+       *   不会再去兜 `ZX...` 临时号（临时号在财务侧推不进教学台账）。
+       */
+      studentNo: z.string().max(32).optional().nullable(),
     }),
   ),
   wrap(async (req, res) => {
@@ -395,8 +401,35 @@ consultInternalRouter.post(
       className?: string | null;
       operatorName: string;
       operatorTitle: string;
+      studentNo?: string | null;
     };
     const stu = await findByConsultNo(b.consultNo);
+
+    /* ★ 2026-10-22：把教学侧建档生成的学号回写咨询学生表
+     *
+     * 为什么必须在下面「状态是否已推进」的判断【之前】：
+     *   状态已经是试学中/正式在读时会提前 return，
+     *   但学号可能还没写进去（首次调用失败、或老数据补写），
+     *   所以要有独立于状态的补写通道。
+     *
+     * 口径：只补空，不覆盖。
+     *   咨询学生表一旦已有学号（人工维护或历史数据），不拿新学号冲掉。
+     *
+     * 不回写的后果（真实踩点）：
+     *   后续「补费」建单会走 `stu.student_no || tempStudentNo(id)`，
+     *   兜出 `ZX...` 临时号 → 同一学生补费单学号和已入班单据对不上，
+     *   而且临时号在财务侧回查不到教学学生，缴费台账推不出去。
+     */
+    const noFromTeaching = String(b.studentNo || '').trim();
+    if (noFromTeaching && !String(stu.student_no || '').trim()) {
+      await db(STUDENT_TABLE)
+        .where({ id: stu.id })
+        .update({ student_no: noFromTeaching, update_time: new Date() });
+      stu.student_no = noFromTeaching;
+      // eslint-disable-next-line no-console
+      console.log(`[consult] 学号回写：${String(stu.student_name)} → ${noFromTeaching}`);
+    }
+
     const cur = Number(stu.consult_state);
     const fullSettled = await isFullFeeSettled(String(stu.id));
     const studentStatus =

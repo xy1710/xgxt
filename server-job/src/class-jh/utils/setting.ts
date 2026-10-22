@@ -14,9 +14,15 @@
  */
 
 import { db } from './db';
+// ★ P4 切读层：`t_class_setting`（sms_class_jh）**已归一** → 读走 tbl()。
+//   开关关时 `tbl()` 退化为 `db('t_class_setting')`，SQL 一字不差。
+import { tbl } from '../../teaching/shared/uniTable';
 
 /** 设置表 */
 const SETTING_TABLE = 't_class_setting';
+/** 初高库 + 学段取值 */
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /** 默认值（与种子/ARCH 一致） */
 export const SETTING_DEFAULTS: Record<string, string> = {
@@ -31,7 +37,7 @@ export const SETTING_DEFAULTS: Record<string, string> = {
 
 /** 读取全部设置（KV 映射） */
 export async function getAllSettings(): Promise<Record<string, string>> {
-  const rows = await db(SETTING_TABLE).where('is_deleted', false).select('setting_key', 'setting_value');
+  const rows = await tbl(db, DB, SETTING_TABLE, STAGE).where('is_deleted', false).select('setting_key', 'setting_value');
   const map: Record<string, string> = { ...SETTING_DEFAULTS };
   for (const r of rows) {
     if (r.setting_value !== null && r.setting_value !== undefined) {
@@ -43,7 +49,7 @@ export async function getAllSettings(): Promise<Record<string, string>> {
 
 /** 读取单个设置字符串值 */
 export async function getSetting(key: string): Promise<string> {
-  const row = await db(SETTING_TABLE).where({ setting_key: key, is_deleted: false }).first();
+  const row = await tbl(db, DB, SETTING_TABLE, STAGE).where({ setting_key: key, is_deleted: false }).first();
   if (row && row.setting_value !== null && row.setting_value !== undefined) {
     return String(row.setting_value);
   }

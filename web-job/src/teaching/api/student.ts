@@ -1,11 +1,13 @@
 /**
- * 统一学生档案接口（第 2 期）· 前端封装
+ * 统一学生档案接口 · 前端封装
  * ============================================================
  *
- * 一套接口服务**四个学段**（比别的域多一个「教务/edu」），学段由 `stage` 区分。
+ * 一套接口服务**三个学段**（初高 / 大学 / 就业部），学段由 `stage` 区分。
+ *
+ * ★ 2026-10-21 用户口径：学生档案界面删除「就业」「教务」两个入口
+ *   （数据保留在库里，「就业」那批人从「就业部」看）。
  *
  * 【「全部」的语义】不传 stage = 合并当前账号可见的学段 + 按学号去重。
- *   —— 这正是原来「教务」页提供的「全校总台账」能力（原页自己拼了三个库）。
  */
 
 import { http } from '@/api/request';
@@ -13,7 +15,7 @@ import type { StagePlanOption } from './class';
 
 export type { StagePlanOption };
 
-export type StudentStage = 'jh' | 'class' | 'job' | 'emp' | 'edu';
+export type StudentStage = 'jh' | 'class' | 'emp';
 
 export interface StudentRow {
   stage: StudentStage;
@@ -30,6 +32,8 @@ export interface StudentRow {
   className: string | null;
   phaseCode: number | null;
   phaseName: string;
+  /** 班级绑定的「阶段方案阶段」名称（有值时段列优先显示它） */
+  schemeStageName: string | null;
   headTeacherId: string | null;
   headTeacherName: string | null;
   teacherId: string | null;
@@ -138,6 +142,10 @@ export interface StudentListParams {
   deptCode?: number;
   studentStatus?: number;
   phaseCode?: number;
+  /** ★ 2026-10-21：按「阶段方案阶段」筛选（值 = 方案阶段明细 ID） */
+  schemeStageId?: string;
+  /** 只看「班级没绑阶段方案」的学生（含没有班级的） */
+  noScheme?: boolean;
   keyword?: string;
   unassigned?: boolean;
   page?: number;
@@ -221,6 +229,38 @@ export interface StudentExtras {
   }>;
   dormOwnerName: string | null;
   dormClassName: string | null;
+  /** ★ 2026-10-21：缴费记录（只读，取自财务「账单明细」） */
+  payments: StudentPayments;
+}
+
+/** 缴费记录 · 单笔 */
+export interface StudentPaymentRecord {
+  billNo: string;
+  feeTypeName: string;
+  /** 金额（分）；展示用 finance/utils 的 formatAmount */
+  amount: number;
+  date: string;
+  voucherNo: string | null;
+  operatorName: string | null;
+  remark: string | null;
+}
+
+/** 缴费记录 · 一类费用 */
+export interface StudentPaymentGroup {
+  key: string;
+  name: string;
+  count: number;
+  amount: number;
+  latestDate: string | null;
+  records: StudentPaymentRecord[];
+}
+
+export interface StudentPayments {
+  groups: StudentPaymentGroup[];
+  totalCount: number;
+  totalAmount: number;
+  latestDate: string | null;
+  note: string | null;
 }
 
 export interface StudentStageMeta {
@@ -229,6 +269,16 @@ export interface StudentStageMeta {
   phaseOptions: Array<{ value: number; label: string }>;
   /** ★ 2026-10-16 阶段方案（见 api/class.ts 的 StagePlanOption） */
   planOptions?: StagePlanOption[];
+  /** ★ 2026-10-21：阶段筛选选项 —— 来自「系统设置 · 阶段方案」，实时 */
+  schemeStageOptions?: Array<{
+    id: string;
+    name: string;
+    schemeId: string;
+    schemeName: string;
+    deptCode: number;
+    studyMonths: number | null;
+    sortNo: number;
+  }>;
   sections: string[];
   supportUnassigned: boolean;
 }

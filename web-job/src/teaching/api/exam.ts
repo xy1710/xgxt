@@ -20,6 +20,8 @@ export interface ExamRow {
   classNames: string;
   contentTypes: number[];
   contentNames: string;
+  /** 自定义类型名称（exam_type=5「其他」时） */
+  examTypeCustom?: string | null;
   status: number;
   statusName: string;
   creatorName: string | null;
@@ -60,6 +62,8 @@ export interface ExamSaveBody {
   id?: string;
   examName: string;
   examType: number;
+  /** exam_type=5 时的自定义类型名称 */
+  examTypeName?: string | null;
   examDate: string;
   classIds: string[];
   contents?: Array<{ type: number; name?: string; fullScore?: number | null }>;

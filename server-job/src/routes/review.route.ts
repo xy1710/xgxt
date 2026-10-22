@@ -29,6 +29,9 @@ import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
 import { pushNotification } from '../utils/empNotice';
+// ★ P3 切读层：本文件两张表（t_review / t_student_base）都已归一，
+//   全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblIns } from '../teaching/shared/uniTable';
 // ★ 2026-10-16：姓名可手填 → 复用「按姓名尽量匹配学生」的共用逻辑
 import { resolveStudentByName } from '../utils/studentResolve';
 // ★ 2026-10-16：补上阶段隔离（这个模块原来完全没有 → 任何角色都能看到全部复盘）
@@ -40,6 +43,10 @@ export const reviewRouter = Router();
 
 const TABLE = 't_review';
 const STUDENT = 't_student_base';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /* ============================================================
  * 0. 班级下拉选项（只读）
@@ -103,14 +110,14 @@ reviewRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
 
     // ★ 2026-10-16：补阶段隔离 —— 老师只能看到自己班级的数据
     //   就业老师 / 项目经理 → 只看自己带的实训班；班主任（大学侧）不看实训/就业数据；
     //   校长 / 学管 / 管理员 → 不限。
     //   ownCreatedBy：姓名可手填 → 未关联学生（student_id 为 NULL）的记录，
     //   也要让**建单人自己**看得到，否则建完就"消失"了。
-    await applyTrainingScope(query, req, { table: TABLE, via: 'student', ownCreatedBy: true });
+    await applyTrainingScope(query, req, { table: TABLE, dbName: DB, via: 'student', ownCreatedBy: true });
 
     if (q.studentId) query.andWhere('student_id', q.studentId);
     // ★ 2026-10-16：班级筛选 —— 复盘表没有 class_id（只有 class_name 快照），
@@ -128,7 +135,7 @@ reviewRouter.get(
     if (q.startDate) query.andWhere('review_time', '>=', `${q.startDate} 00:00`);
     if (q.endDate) query.andWhere('review_time', '<=', `${q.endDate} 23:59`);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -154,11 +161,11 @@ reviewRouter.get(
 
     // ★ 2026-10-16：详情也要过数据范围，否则拿到 id 就能绕过列表看别人的复盘。
     //   不通过时统一抛「不存在」，避免暴露"这条记录存在但你没权限"。
-    const guard: any = db(TABLE).where({ id, is_deleted: false });
-    await applyTrainingScope(guard, req, { table: TABLE, via: 'student', ownCreatedBy: true });
+    const guard: any = tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false });
+    await applyTrainingScope(guard, req, { table: TABLE, dbName: DB, via: 'student', ownCreatedBy: true });
     if (!(await guard.first())) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在');
 
-    const row = await db(TABLE)
+    const row = await tbl(db, DB, TABLE, STAGE)
       .where({ id, is_deleted: false })
       .first([
         ...SELECT_FIELDS,
@@ -229,7 +236,7 @@ reviewRouter.post(
     assertOfferConclusion(body.interviewConclusion, body.reviewConclusion);
 
     const id = randomUUID();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       student_id: student ? student.id : null,
       student_no: student ? student.student_no : null,
@@ -288,7 +295,7 @@ reviewRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在或已被删除');
 
     // ★ 同新增：姓名可手填，能唯一匹配到学生就重新关联，否则只记姓名
@@ -297,7 +304,7 @@ reviewRouter.put(
     // ★ 2026-10-02（斌哥）：同 add —— 服务端兜底校验「发 offer 必须配已签约入职」
     assertOfferConclusion(body.interviewConclusion, body.reviewConclusion);
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       student_id: student ? student.id : null,
       student_no: student ? student.student_no : null,
       student_name: body.studentName,
@@ -336,10 +343,10 @@ reviewRouter.delete(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在或已被删除');
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -355,10 +362,10 @@ reviewRouter.put(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在');
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       audio_name: null,
       audio_data: null,
       update_time: new Date(),

@@ -41,6 +41,10 @@ import { remoteGet, isRemoteTimeout } from '../shared/http';
 import { today } from '../utils/date';
 // ★ 2026-10-05：内部服务令牌统一从 config 读（原来这里是第三个不同的默认值）
 import { config } from '../config';
+// ★ P3 切读层：本文件 6 张实训老表（t_job_training_handoff / t_student_base /
+//   t_job_class / t_job_class_student / t_job_dorm / t_job_dorm_bed）都已归一，
+//   读走 tbl()/tblTrx()、写走 tblIns()/tblInsTrx()；开关关时与原实现逐字节等价。
+import { tbl, tblIns, tblInsTrx, tblTrx, phaseCodeCol } from '../teaching/shared/uniTable';
 
 const router = Router();
 
@@ -90,6 +94,10 @@ const ROSTER = 't_job_class_student';
 /** ★ 宿舍主档 / 床位表（2026-10-04：大学部宿舍跟着一起搬过来） */
 const DORM = 't_job_dorm';
 const BED = 't_job_dorm_bed';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 升实训后：学习阶段 = 实训（13） */
 const TRAINING_STAGE = 13;
@@ -184,12 +192,12 @@ async function ensureDormRoom(
   gender: number | null,
   operator: HandoffOperator,
 ): Promise<string> {
-  const existed = await trx(DORM).where({ dorm_no: roomNo, is_deleted: false }).first();
+  const existed = await tblTrx(trx, DB, DORM, STAGE).where({ dorm_no: roomNo, is_deleted: false }).first();
   if (existed) return existed.id as string;
 
   const dormId = randomUUID();
   const now = new Date();
-  await trx(DORM).insert({
+  await tblInsTrx(trx, DB, DORM, STAGE, {
     id: dormId,
     create_time: now,
     create_by: operator.userId,
@@ -210,7 +218,7 @@ async function ensureDormRoom(
 
   // 建 4 个空床位（1上/1下/2上/2下，对应 bed_no = 1/2/3/4）
   for (let i = 1; i <= DORM_BED_COUNT; i += 1) {
-    await trx(BED).insert({
+    await tblInsTrx(trx, DB, BED, STAGE, {
       id: randomUUID(),
       create_time: now,
       create_by: operator.userId,
@@ -232,11 +240,11 @@ async function ensureDormRoom(
 
 /** 重算某宿舍的「已住人数」（宿舍主档上冗余一份，列表页不用每行去 count） */
 async function recalcDormUsedCount(trx: any, dormId: string): Promise<void> {
-  const row = await trx(BED)
+  const row = await tblTrx(trx, DB, BED, STAGE)
     .where({ dorm_id: dormId, bed_status: BED_USED, is_deleted: false })
     .count({ c: '*' })
     .first();
-  await trx(DORM).where({ id: dormId }).update({ used_count: Number((row as any)?.c) || 0 });
+  await tblTrx(trx, DB, DORM, STAGE).where({ id: dormId }).update({ used_count: Number((row as any)?.c) || 0 });
 }
 
 /**
@@ -270,7 +278,7 @@ async function carryStudentBed(
   const dormId = await ensureDormRoom(trx, `${building}|${dormNo}`, building, dormNo, stu.gender ?? null, operator);
 
   // 找这间宿舍里的目标床位
-  const bed = await trx(BED)
+  const bed = await tblTrx(trx, DB, BED, STAGE)
     .where({ dorm_id: dormId, bed_no: bedNo ?? 1, is_deleted: false })
     .first();
 
@@ -288,7 +296,7 @@ async function carryStudentBed(
   }
 
   // 占床
-  await trx(BED).where({ id: bed.id }).update({
+  await tblTrx(trx, DB, BED, STAGE).where({ id: bed.id }).update({
     bed_status: BED_USED,
     student_id: studentId,
     student_no: stu.studentNo || null,
@@ -300,7 +308,7 @@ async function carryStudentBed(
   });
 
   // 回写学生主档
-  await trx(STU).where({ id: studentId }).update({
+  await tblTrx(trx, DB, STU, STAGE).where({ id: studentId }).update({
     dorm_id: dormId,
     dorm_no: dormNo,
     update_time: now,
@@ -429,7 +437,7 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
     );
   }
   // ---------- 幂等：同一个交接单号只处理一次 ----------
-  const existed = await db(HANDOFF).where({ handoff_no: payload.handoffNo, is_deleted: false }).first();
+  const existed = await tbl(db, DB, HANDOFF, STAGE).where({ handoff_no: payload.handoffNo, is_deleted: false }).first();
   if (existed) {
     return {
       handoffNo: payload.handoffNo,
@@ -464,7 +472,7 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
 
     const className = universityNo;
     // 先按统一编号找（这是"同一个班"的主键）
-    let cls = await trx(CLASS)
+    let cls = await tblTrx(trx, DB, CLASS, STAGE)
       .where({ is_deleted: false })
       .andWhere((qb: any) => {
         qb.where('university_no', universityNo).orWhere('class_name', universityNo);
@@ -475,8 +483,8 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
     if (cls) {
       // ★ 复用已有班：只改阶段与项目经理，不新建
       targetClassId = cls.id;
-      await trx(CLASS).where({ id: targetClassId }).update({
-        stage: TRAINING_STAGE,                       // 阶段 20x → 13
+      await tblTrx(trx, DB, CLASS, STAGE).where({ id: targetClassId }).update({
+        [phaseCodeCol()]: TRAINING_STAGE,             // 阶段 20x → 13
         // ★ 交棒模型：项目经理 = 建班时安排的真人（不再默认写班主任）
         project_manager_id: payload.projectManagerId || null,
         project_manager_name: payload.projectManagerName || null,
@@ -492,7 +500,7 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
       });
     } else {
       targetClassId = randomUUID();
-      await trx(CLASS).insert({
+      await tblInsTrx(trx, DB, CLASS, STAGE, {
         id: targetClassId,
         create_time: new Date(),
         create_by: operator.userId,
@@ -501,7 +509,7 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
         class_code: universityNo,                   // ★ 不再是 TR-交接单号
         university_no: universityNo,               // ★ 统一编号（两库共用）
         dept_code: TRAINING_DEPT,
-        stage: TRAINING_STAGE,
+        [phaseCodeCol()]: TRAINING_STAGE,
         head_teacher_id: payload.headTeacherId || operator.userId,
         head_teacher_name: payload.headTeacherName || operator.userName,
         // ★ 交棒模型：项目经理 = 建班时安排的真人（不再默认写班主任）
@@ -548,7 +556,7 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
           attendance_rate: s.attendanceRate ?? null,
           repeat_count: s.repeatCount ?? 0,
           dept_code: TRAINING_DEPT,
-          stage: TRAINING_STAGE,
+          [phaseCodeCol()]: TRAINING_STAGE,
           student_status: TRAINING_STATUS,
           class_id: targetClassId,
           class_name: className,
@@ -559,7 +567,7 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
         };
         if (s.remark) archive.remark = s.remark;
 
-        const old = await trx(STU).where({ student_no: s.studentNo, is_deleted: false }).first();
+        const old = await tblTrx(trx, DB, STU, STAGE).where({ student_no: s.studentNo, is_deleted: false }).first();
         let studentId: string;
 
         if (old) {
@@ -567,12 +575,12 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
           studentId = old.id;
           // 备注：只在新有值时覆盖，避免把原来的人工备注冲掉
           if (!s.remark) delete archive.remark;
-          await trx(STU).where({ id: studentId }).update(archive);
+          await tblTrx(trx, DB, STU, STAGE).where({ id: studentId }).update(archive);
           results.push({ studentNo: s.studentNo, studentName: s.studentName, action: 'updated' });
         } else {
           // 新建
           studentId = randomUUID();
-          await trx(STU).insert({
+          await tblInsTrx(trx, DB, STU, STAGE, {
             id: studentId,
             create_time: new Date(),
             create_by: operator.userId,
@@ -584,11 +592,11 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
         }
 
         // ---------- 3. 花名册（在班唯一，已存在就不重复插） ----------
-        const inRoster = await trx(ROSTER)
+        const inRoster = await tblTrx(trx, DB, ROSTER, STAGE)
           .where({ class_id: targetClassId, student_id: studentId, is_deleted: false })
           .first();
         if (!inRoster) {
-          await trx(ROSTER).insert({
+          await tblInsTrx(trx, DB, ROSTER, STAGE, {
             id: randomUUID(),
             create_time: new Date(),
             create_by: operator.userId,
@@ -625,14 +633,14 @@ export async function processHandoff(payload: HandoffPayload, operator: HandoffO
     }
 
     // ---------- 4. 回填班级人数 ----------
-    const [{ c: realCount }] = (await trx(ROSTER)
+    const [{ c: realCount }] = (await tblTrx(trx, DB, ROSTER, STAGE)
       .where({ class_id: targetClassId, is_deleted: false, status: ROSTER_IN })
       .count({ c: '*' })) as any;
-    await trx(CLASS).where({ id: targetClassId }).update({ student_count: Number(realCount) });
+    await tblTrx(trx, DB, CLASS, STAGE).where({ id: targetClassId }).update({ student_count: Number(realCount) });
 
     // ---------- 5. 写交接单副本 ----------
     const failed = results.filter((r) => r.action === 'failed').length;
-    await trx(HANDOFF).insert({
+    await tblInsTrx(trx, DB, HANDOFF, STAGE, {
       id: randomUUID(),
       create_time: new Date(),
       create_by: operator.userId,
@@ -749,7 +757,7 @@ router.get(
   validate(listSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
-    const base = db(HANDOFF).where('is_deleted', false);
+    const base = tbl(db, DB, HANDOFF, STAGE).where('is_deleted', false);
     if (q.sourceClassName) base.andWhere('source_class_name', 'like', `%${q.sourceClassName}%`);
     if (q.receiveStatus) base.andWhere('receive_status', q.receiveStatus);
 
@@ -800,7 +808,7 @@ router.post(
     // ---- 2. 过滤掉已接收过的 ----
     const nos = handoffs.map((h) => h.handoffNo).filter(Boolean);
     const existedRows = nos.length
-      ? await db(HANDOFF).whereIn('handoff_no', nos).where('is_deleted', false).select('handoff_no')
+      ? await tbl(db, DB, HANDOFF, STAGE).whereIn('handoff_no', nos).where('is_deleted', false).select('handoff_no')
       : [];
     const existedSet = new Set((existedRows as any[]).map((r) => r.handoff_no));
     const todo = handoffs.filter((h) => h.handoffNo && !existedSet.has(h.handoffNo));

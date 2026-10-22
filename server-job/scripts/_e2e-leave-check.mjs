@@ -221,11 +221,18 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
       `approval_status=${jobRow1?.approval_status}`,
     );
 
-    const apJob = await dbJob('t_job_approval')
+    const apJob = await (USE_UNI ? uniDb('t_uni_approval_main') : dbJob('t_job_approval'))
       .where({ biz_type: 'quit', biz_id: jobId, is_deleted: 0 })
       .first();
-    check('★ 实训：审批单落在 t_job_approval（统一审批表）', !!apJob, apJob ? '有' : '无');
-    if (apJob) reg('sms_job', 't_job_approval', apJob.id);
+    check(
+      `★ 实训：审批单落在${USE_UNI ? ' t_uni_approval_main' : ' t_job_approval'}（统一审批表）`,
+      !!apJob,
+      apJob ? '有' : '无',
+    );
+    if (apJob) {
+      reg('sms_job', 't_job_approval', apJob.id);
+      if (USE_UNI) reg('sms_common', 't_uni_approval_main', apJob.id);
+    }
 
     const ap1 = await req(`${API}/approve`, {
       method: 'POST',
@@ -450,6 +457,8 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
     if (resId2) reg('sms_job', 't_job_student_leave', resId2);
     // 模拟「建单时没填班」的老单：直接把单上的复学班清空
     await dbJob('t_job_student_leave').where({ id: resId2 }).update({ new_class_id: null });
+    /* ★ 切读后产品读的是统一表：夹具必须同时清统一表，否则「单上无班」根本没生效 */
+    if (USE_UNI) await uniDb('t_uni_approval').where({ id: resId2 }).update({ new_class_id: null });
     const apR2 = await req(`${API}/approve`, {
       method: 'POST',
       token: tDean,
@@ -571,11 +580,29 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
       }
     }
     console.log(`\n（已清理自检夹具 ${removed} 行）`);
+    /* ★ #24：审批主表行此前从未清理（逐轮累积），统一侧产物也要按开关清。
+       用「夹具学生名 = 自检%」过滤，避免误删真实数据。 */
     try {
       await dbJob('t_job_approval_log')
         .whereIn('approval_id', dbJob('t_job_approval').select('id').where('is_deleted', 0))
         .where('create_time', '>=', new Date(Date.now() - 3600_000))
         .del();
+      await dbJob('t_job_approval')
+        .where('student_name', 'like', '自检%')
+        .where('create_time', '>=', new Date(Date.now() - 3600_000))
+        .del();
+      if (USE_UNI) {
+        const mainRows = await uniDb('t_uni_approval_main')
+          .where('student_name', 'like', '自检%')
+          .where('create_time', '>=', new Date(Date.now() - 3600_000))
+          .select('id');
+        const ids = mainRows.map((r) => r.id);
+        if (ids.length) {
+          await uniDb('t_uni_approval_log').whereIn('approval_id', ids).del();
+          await uniDb('t_uni_approval_main').whereIn('id', ids).del();
+        }
+        await uniDb('t_uni_approval').where('student_name', 'like', '自检%').del();
+      }
     } catch {
       /* 忽略 */
     }

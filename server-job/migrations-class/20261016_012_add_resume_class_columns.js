@@ -25,6 +25,9 @@
  * @param { import("knex").Knex } knex
  */
 exports.up = async function (knex) {
+  /* ★ P8 之后这些老表已 DROP（统一表是 t_uni_*）：表不在就跳过，
+     否则 npm run migrate 会断在 hasColumn 上。 */
+  if (!(await knex.schema.hasTable('t_class_suspend_apply'))) return;
   await knex.schema.alterTable('t_class_suspend_apply', (table) => {
     table.string('new_class_id', 36).nullable().comment('复学班ID（发起申请时必填，审批可改；仅复学单有值）');
     table.string('new_class_name', 50).nullable().comment('复学班名称（快照）');

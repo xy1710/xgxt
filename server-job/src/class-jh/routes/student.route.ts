@@ -39,8 +39,14 @@ import { BizError } from '../middleware/errorHandler';
 import { buildClassScope, getScopedClassIds } from '../middleware/dataScope';
 import { mobile, idCard, dateOnly, dateOnlyRequired } from '../utils/zodRules';
 import { classSync } from '../../utils/classSync';
+// ★ 2026-10-22 学号新规：LZ + 班级编号 + 班内序号(3位, 每班从001独立)
+import { nextStudentNoForClass } from '../../teaching/shared/studentNo';
 // ★ 2026-10-06：缴费记录统一取数（实时财务管理 + 初高台账兜底）
 import { fetchStudentFeeRecords, summarizeFees } from '../../utils/financeFeeRef';
+// ★ P4 切读层：本文件六张表（t_class_student / t_class_info / t_class_dorm_resident /
+//   t_class_exam_score / t_class_flow / t_class_repeat）均已归一，
+//   全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblIns, phaseCodeCol, readPhaseCode } from '../../teaching/shared/uniTable';
 
 export const studentRouter = Router();
 
@@ -51,6 +57,10 @@ const DORM_RESIDENT_TABLE = 't_class_dorm_resident';
 const EXAM_SCORE_TABLE = 't_class_exam_score';
 const FLOW_TABLE = 't_class_flow';
 const REPEAT_TABLE = 't_class_repeat';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务初高） */
+const STAGE = 'jh' as const;
+const DB = 'sms_class_jh';
 
 /* ============================================================
  * 通用助手
@@ -68,22 +78,13 @@ function calcAge(birthDate?: string | Date | null): number | null {
   return age >= 0 ? age : null;
 }
 
-/** 生成学号：S + yyyy + 4 位序号（Q8 裁决） */
-async function generateStudentNo(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `S${year}`;
-  const rows = await db(TABLE)
-    .where('student_no', 'like', `${prefix}%`)
-    .orderBy('student_no', 'desc')
-    .limit(1)
-    .select('student_no');
-  let seq = 1;
-  if (rows.length && rows[0].student_no) {
-    const tail = String(rows[0].student_no).slice(prefix.length);
-    const n = parseInt(tail, 10);
-    if (!Number.isNaN(n)) seq = n + 1;
-  }
-  return `${prefix}${String(seq).padStart(4, '0')}`;
+/**
+ * 生成学号（★ 2026-10-22 用户口径）：
+ *   LZ + 班级编号 + 班内序号(3位)，如 LZQ17001
+ *   必须选班级、班级必须有班级编号；没有就报错（不造旧格式兜底号）
+ */
+async function generateStudentNo(classId?: string | null): Promise<string> {
+  return nextStudentNoForClass('jh', classId);
 }
 
 /** 当前时间 → 'yyyy-MM-dd HH:mm:ss'（推送时间戳用） */
@@ -187,7 +188,7 @@ function toStudent(row: any) {
  * @param allowClosed     是否允许转入封班班级（休学复学/末班为 true）
  */
 async function loadClassOrFail(classId: string): Promise<any> {
-  const cls = await db(CLASS_TABLE).where({ id: classId, is_deleted: false }).first();
+  const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: classId, is_deleted: false }).first();
   if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '目标班级不存在');
   return cls;
 }
@@ -222,7 +223,7 @@ studentRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.keyword) {
       query.andWhere((qb) => {
         qb.where('student_no', 'like', `%${q.keyword}%`)
@@ -231,13 +232,13 @@ studentRouter.get(
       });
     }
     if (q.classId) query.andWhere('class_id', q.classId);
-    if (q.stage) query.andWhere('stage', q.stage);
+    if (q.stage) query.andWhere(phaseCodeCol(), q.stage);
     if (q.studentStatus) query.andWhere('student_status', q.studentStatus);
     if (q.deptCode) query.andWhere('dept_code', q.deptCode);
 
     // 数据范围：本班级范围时按班主任/教员/助教过滤
     const scope = buildClassScope(req);
-    const classIds = await getScopedClassIds(db, CLASS_TABLE, scope);
+    const classIds = await getScopedClassIds(db, CLASS_TABLE, scope, DB, STAGE);
     if (classIds) {
       if (!classIds.length) {
         res.json(page([], 0, q));
@@ -248,7 +249,7 @@ studentRouter.get(
       query.andWhere('dept_code', scope.deptCode);
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -272,7 +273,7 @@ studentRouter.get(
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     const base = toStudent(row);
@@ -292,7 +293,7 @@ studentRouter.get(
     };
 
     // ---- 宿舍信息 ----
-    const resident = await db(DORM_RESIDENT_TABLE)
+    const resident = await tbl(db, DB, DORM_RESIDENT_TABLE, STAGE)
       .where({ student_id: id, is_active: true, is_deleted: false })
       .orderBy('check_in_date', 'desc')
       .first();
@@ -309,7 +310,7 @@ studentRouter.get(
       : { dormNo: row.dorm_no, bedNo: row.bed_no };
 
     // ---- 考试成绩 ----
-    const scoreRows = await db(EXAM_SCORE_TABLE).where({ student_id: id, is_deleted: false }).orderBy('exam_date', 'desc');
+    const scoreRows = await tbl(db, DB, EXAM_SCORE_TABLE, STAGE).where({ student_id: id, is_deleted: false }).orderBy('exam_date', 'desc');
     const exam = scoreRows.map((s: any) => ({
       scoreId: s.id,
       examId: s.exam_id,
@@ -333,8 +334,8 @@ studentRouter.get(
     };
 
     // ---- 班级流程 / 末班记录 ----
-    const flowRows = await db(FLOW_TABLE).where({ student_id: id, is_deleted: false }).orderBy('create_time', 'desc');
-    const repeatRows = await db(REPEAT_TABLE).where({ student_id: id, is_deleted: false }).orderBy('repeat_time', 'desc');
+    const flowRows = await tbl(db, DB, FLOW_TABLE, STAGE).where({ student_id: id, is_deleted: false }).orderBy('create_time', 'desc');
+    const repeatRows = await tbl(db, DB, REPEAT_TABLE, STAGE).where({ student_id: id, is_deleted: false }).orderBy('repeat_time', 'desc');
     const cls = {
       flows: flowRows.map((f: any) => ({
         flowId: f.id,
@@ -404,11 +405,12 @@ studentRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
 
-    const studentNo = body.studentNo?.trim() || (await generateStudentNo());
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略手填值（用户口径）
+    const studentNo = await generateStudentNo(body.classId ?? null);
     // ⚠️ 唯一性预检必须按「物理范围」查（不带 is_deleted 过滤）：
     //    t_class_student.uk_student_no 是物理唯一索引，被逻辑删除的历史行仍占用学号。
     //    若这里带 is_deleted=false，删除后重建同号会绕过预检、直撞索引 → 返回 50002。
-    const exists = await db(TABLE).where({ student_no: studentNo }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ student_no: studentNo }).first();
     if (exists) {
       throw new BizError(
         BizCode.STUDENT_NO_EXISTS,
@@ -424,12 +426,12 @@ studentRouter.post(
     if (body.classId) {
       const cls = await loadClassOrFail(body.classId);
       className = cls.class_name;
-      stage = stage ?? cls.stage;
+      stage = stage ?? readPhaseCode(cls);
     }
 
     const id = randomUUID();
     const now = new Date();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       student_no: studentNo,
       student_name: body.studentName,
@@ -440,7 +442,7 @@ studentRouter.post(
       dept_code: body.deptCode,
       class_id: body.classId ?? null,
       class_name: className,
-      stage,
+      [phaseCodeCol()]: stage,
       student_status: body.studentStatus,
       education: body.education ?? null,
       graduate_school: body.graduateSchool ?? null,
@@ -507,10 +509,10 @@ studentRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const exists = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!exists) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       student_name: body.studentName,
       gender: body.gender,
       birth_date: body.birthDate ?? null,
@@ -544,10 +546,10 @@ studentRouter.delete(
   checkPermission('class:student:delete'),
   wrap(async (req, res) => {
     const { id } = req.params;
-    const exists = await db(TABLE).where({ id, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!exists) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或已被删除');
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -569,7 +571,7 @@ studentRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.keyword) {
       query.andWhere((qb) => {
         qb.where('student_no', 'like', `%${q.keyword}%`)
@@ -578,7 +580,7 @@ studentRouter.get(
       });
     }
     if (q.classId) query.andWhere('class_id', q.classId);
-    if (q.stage) query.andWhere('stage', q.stage);
+    if (q.stage) query.andWhere(phaseCodeCol(), q.stage);
     if (q.studentStatus) query.andWhere('student_status', q.studentStatus);
     if (q.deptCode) query.andWhere('dept_code', q.deptCode);
 
@@ -608,7 +610,7 @@ interface CreateFlowInput {
 async function createFlow(input: CreateFlowInput): Promise<string> {
   const flowId = randomUUID();
   const now = new Date();
-  await db(FLOW_TABLE).insert({
+  await tblIns(db, DB, FLOW_TABLE, STAGE, {
     id: flowId,
     flow_type: input.flowType,
     student_id: input.studentId ?? null,
@@ -633,7 +635,7 @@ async function createFlow(input: CreateFlowInput): Promise<string> {
 
 /** 取学生或抛错 */
 async function loadStudentOrFail(studentId: string): Promise<any> {
-  const s = await db(TABLE).where({ id: studentId, is_deleted: false }).first();
+  const s = await tbl(db, DB, TABLE, STAGE).where({ id: studentId, is_deleted: false }).first();
   if (!s) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
   return s;
 }
@@ -651,7 +653,7 @@ function assertStatusIn(student: any, allowed: StudentStatus[], actionName: stri
 
 /** 回写 student.pending_flow_type */
 async function setPendingFlow(studentId: string, flowType: FlowType | null, userId?: string): Promise<void> {
-  await db(TABLE).where({ id: studentId }).update({
+  await tbl(db, DB, TABLE, STAGE).where({ id: studentId }).update({
     pending_flow_type: flowType,
     update_time: new Date(),
     update_by: userId || 'system',
@@ -762,7 +764,7 @@ studentRouter.post(
       extra: {
         resume_class_id: cls.id,
         resume_date: body.resumeDate,
-        to_stage: cls.stage,
+        to_stage: readPhaseCode(cls),
       },
     });
 
@@ -878,7 +880,7 @@ const repeatSchema = z.object({
 async function assertRepeatAllowed(studentId: string, toClassId: string): Promise<{ stu: any; toCls: any }> {
   const stu = await loadStudentOrFail(studentId);
   assertStatusIn(stu, [StudentStatus.STUDYING], '申请末班');
-  if (!canRepeatByStage(stu.stage)) {
+  if (!canRepeatByStage(readPhaseCode(stu))) {
     throw new BizError(
       BizCode.BUSINESS_RULE_VIOLATION,
       `「${resolveStageName(stu.stage) || stu.stage}」阶段学生不可末班，仅非1期阶段可办理末班`,
@@ -909,17 +911,17 @@ export async function applyRepeatEffect(
   const nextCount = (stu.repeat_count ?? 0) + 1;
 
   // 1) 末班记录
-  await db(REPEAT_TABLE).insert({
+  await tblIns(db, DB, REPEAT_TABLE, STAGE, {
     id: repeatId,
     student_id: stu.id,
     student_no: stu.student_no,
     student_name: stu.student_name,
     from_class_id: stu.class_id ?? null,
     from_class_name: stu.class_name ?? null,
-    from_stage: stu.stage ?? null,
+    from_stage: readPhaseCode(stu) ?? null,
     to_class_id: toCls.id,
     to_class_name: toCls.class_name,
-    to_stage: toCls.stage,
+    to_stage: readPhaseCode(toCls),
     repeat_reason: reason,
     repeat_time: now,
     repeat_count: nextCount,
@@ -931,10 +933,10 @@ export async function applyRepeatEffect(
   });
 
   // 2) 学生：改班级/阶段 + 累计次数 + 清 pending（审批通过，学生状态仍为 5 正式在读）
-  await db(TABLE).where({ id: stu.id }).update({
+  await tbl(db, DB, TABLE, STAGE).where({ id: stu.id }).update({
     class_id: toCls.id,
     class_name: toCls.class_name,
-    stage: toCls.stage,
+    [phaseCodeCol()]: readPhaseCode(toCls),
     repeat_count: nextCount,
     pending_flow_type: null,
     update_time: now,
@@ -951,8 +953,8 @@ export async function applyRepeatEffect(
     opUserId: user?.userId,
     opUserName: user?.userName,
     opDesc: `学生末班生效：${stu.class_name || ''} → ${toCls.class_name}（累计第 ${nextCount} 次）`,
-    beforeValue: { classId: stu.class_id, stage: stu.stage, repeatCount: stu.repeat_count ?? 0 },
-    afterValue: { classId: toCls.id, stage: toCls.stage, repeatCount: nextCount },
+    beforeValue: { classId: stu.class_id, stage: readPhaseCode(stu), repeatCount: stu.repeat_count ?? 0 },
+    afterValue: { classId: toCls.id, stage: readPhaseCode(toCls), repeatCount: nextCount },
   });
 
   return repeatId;
@@ -984,8 +986,8 @@ export async function createRepeatFlow(
     extra: {
       from_class_id: stu.class_id ?? null,
       to_class_id: toCls.id,
-      from_stage: stu.stage ?? null,
-      to_stage: toCls.stage,
+      from_stage: readPhaseCode(stu) ?? null,
+      to_stage: readPhaseCode(toCls),
       transfer_reason: body.repeatReason,
       notify_user_id: body.notifyUserId ?? null,
       is_notified: body.isNotified ?? false,
@@ -1003,7 +1005,7 @@ export async function createRepeatFlow(
     opUserId: user?.userId,
     opUserName: user?.userName,
     opDesc: `提交末班申请（学生 ${stu.student_name} → ${toCls.class_name}）`,
-    beforeValue: { classId: stu.class_id, stage: stu.stage, repeatCount: stu.repeat_count ?? 0 },
+    beforeValue: { classId: stu.class_id, stage: readPhaseCode(stu), repeatCount: stu.repeat_count ?? 0 },
     afterValue: { pendingFlowType: FlowType.REPEAT, toClassId: toCls.id },
   });
 
@@ -1060,8 +1062,8 @@ studentRouter.post(
       extra: {
         from_class_id: stu.class_id ?? null,
         to_class_id: toCls.id,
-        from_stage: stu.stage ?? null,
-        to_stage: body.toStage ?? toCls.stage,
+        from_stage: readPhaseCode(stu) ?? null,
+        to_stage: body.toStage ?? readPhaseCode(toCls),
         transfer_reason: body.transferReason ?? null,
       },
     });
@@ -1077,8 +1079,8 @@ studentRouter.post(
       opUserId: req.user?.userId,
       opUserName: req.user?.userName,
       opDesc: `提交转班申请（学生 ${stu.student_name} → 班级 ${toCls.class_name}）`,
-      beforeValue: { classId: stu.class_id, stage: stu.stage },
-      afterValue: { toClassId: toCls.id, toStage: body.toStage ?? toCls.stage },
+      beforeValue: { classId: stu.class_id, stage: readPhaseCode(stu) },
+      afterValue: { toClassId: toCls.id, toStage: body.toStage ?? readPhaseCode(toCls) },
     });
 
     res.json(ok({ flowId }, '转班申请已提交'));
@@ -1137,7 +1139,7 @@ studentRouter.get(
       res.json(ok({}, '查询成功'));
       return;
     }
-    const rows = (await db(TABLE)
+    const rows = (await tbl(db, DB, TABLE, STAGE)
       .where({ source_system: 'consult', is_deleted: false })
       .whereIn('source_id', nos)
       .select('source_id', 'id', 'student_no', 'class_id', 'class_name')) as Array<Record<string, unknown>>;
@@ -1163,7 +1165,7 @@ studentRouter.post(
     const body = (req as any).validated as z.infer<typeof fromConsultSchema>;
 
     // ---- 幂等：同一咨询单只建一次档 ----
-    const dup = await db(TABLE)
+    const dup = await tbl(db, DB, TABLE, STAGE)
       .where({ source_system: 'consult', source_id: body.consultNo })
       .first();
     if (dup) {
@@ -1174,19 +1176,12 @@ studentRouter.post(
     // ---- 班级必须存在且开放 ----
     const cls = await assertClassAcceptsIntake(body.classId, false);
 
-    // 接收弹窗补的学号优先；留空则按初高规则自动生成
-    let studentNo = String(body.studentNo ?? '').trim();
-    if (studentNo) {
-      const dupNo = await db(TABLE).where({ student_no: studentNo, is_deleted: false }).first();
-      if (dupNo) {
-        throw new BizError(BizCode.DATA_DUPLICATE, `学号 ${studentNo} 已存在，请换一个或留空由系统生成`);
-      }
-    } else {
-      studentNo = await generateStudentNo();
-    }
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略接收弹窗里手填的值
+    //   （用户口径：即使班主任填了也以规则为准）
+    const studentNo = await generateStudentNo(cls.id);
     const id = randomUUID();
     const now = new Date();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       student_no: studentNo,
       student_name: body.studentName,
@@ -1254,7 +1249,7 @@ studentRouter.post(
     const body = (req as any).validated as z.infer<typeof promoteSchema>;
     const user = req.user!;
 
-    const stu = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const stu = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     if (Number(stu.student_status) !== StudentStatus.STUDYING) {
       throw new BizError(

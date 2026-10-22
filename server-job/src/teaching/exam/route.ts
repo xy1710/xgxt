@@ -95,6 +95,8 @@ teachingExamRouter.post(
         id: str(b.id),
         examName: String(b.examName ?? ''),
         examType: Number(b.examType ?? 1),
+        /* ★ 前端选「其他」时传的自定义类型名 */
+        examTypeName: b.examTypeName ? String(b.examTypeName) : null,
         examDate: String(b.examDate ?? ''),
         classIds,
         contents: Array.isArray(b.contents)

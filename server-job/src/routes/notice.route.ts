@@ -26,6 +26,13 @@ import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
 import { fmtDateTime } from '../utils/date';
 import { NOTICE_TABLE, NOTICE_TYPE } from '../utils/notice';
+// ★ P3 切读层：t_job_notice（实训通知表）已归一（sms_job.t_job_notice → t_uni_notify），
+//   全部走 tbl() 路由；开关关时与原实现逐字节等价。
+import { tbl } from '../teaching/shared/uniTable';
+
+/** ★ 老表所在库 + 统一表 edu_stage 取值（本路由只服务实训） */
+const DB = 'sms_job';
+const STAGE = 'job' as const;
 
 export const noticeRouter = Router();
 
@@ -99,14 +106,14 @@ noticeRouter.get(
     const q = (req as any).validated as z.infer<typeof listSchema>;
     const user = req.user!;
 
-    let query = db(NOTICE_TABLE).where('is_deleted', false);
+    let query = tbl(db, DB, NOTICE_TABLE, STAGE).where('is_deleted', false);
     query = myNoticeWhere(query, user);
 
     if (q.title) query.andWhere('title', 'like', `%${q.title}%`);
     if (q.noticeType) query.andWhere('notice_type', q.noticeType);
     if (q.isRead !== undefined) query.andWhere('is_read', !!q.isRead);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -129,9 +136,9 @@ noticeRouter.get(
 noticeRouter.get(
   '/unread-count',
   wrap(async (req, res) => {
-    let query = db(NOTICE_TABLE).where({ is_deleted: false, is_read: false });
+    let query = tbl(db, DB, NOTICE_TABLE, STAGE).where({ is_deleted: false, is_read: false });
     query = myNoticeWhere(query, req.user!);
-    const [{ total }] = await query.count({ total: '*' });
+    const [{ total }] = (await query.count({ total: '*' })) as Array<{ total: number }>;
     res.json(ok({ count: Number(total) }));
   }),
 );
@@ -146,7 +153,7 @@ noticeRouter.get(
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
-    const row = await db(NOTICE_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, NOTICE_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '通知不存在或已被删除');
     res.json(ok(toVo(row)));
   }),
@@ -168,10 +175,10 @@ noticeRouter.put(
   wrap(async (req, res) => {
     const { id, isRead } = (req as any).validated as { id: string; isRead: number };
 
-    const row = await db(NOTICE_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, NOTICE_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '通知不存在或已被删除');
 
-    await db(NOTICE_TABLE).where({ id }).update({
+    await tbl(db, DB, NOTICE_TABLE, STAGE).where({ id }).update({
       is_read: !!isRead,
       read_time: isRead ? new Date() : null,
     });
@@ -188,7 +195,7 @@ noticeRouter.put(
 noticeRouter.put(
   '/read-all',
   wrap(async (req, res) => {
-    let query = db(NOTICE_TABLE).where({ is_deleted: false, is_read: false });
+    let query = tbl(db, DB, NOTICE_TABLE, STAGE).where({ is_deleted: false, is_read: false });
     query = myNoticeWhere(query, req.user!);
 
     const affected = await query.update({ is_read: true, read_time: new Date() });
@@ -205,10 +212,10 @@ noticeRouter.delete(
   '/delete/:id',
   wrap(async (req, res) => {
     const { id } = req.params;
-    const row = await db(NOTICE_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, NOTICE_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '通知不存在或已被删除');
 
-    await db(NOTICE_TABLE).where({ id }).update({ is_deleted: true });
+    await tbl(db, DB, NOTICE_TABLE, STAGE).where({ id }).update({ is_deleted: true });
     res.json(ok(null, '删除成功'));
   }),
 );

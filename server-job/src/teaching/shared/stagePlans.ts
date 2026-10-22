@@ -16,36 +16,63 @@
  */
 
 import { db as classJhDb } from '../../class-jh/utils/db';
+import { uniDb } from './uniTable';
 import type { StagePlanOption } from './dto';
 
-const PLAN_T = 't_class_stage_plan';
-const STAGE_T = 't_class_stage';
+/* ★ 2026-10-21：改读「设置页真正在写」的新模型
+ *   旧实现读的是 t_class_stage_plan + t_class_stage.plan_id，
+ *   而 P8 已把阶段字典归一成 t_uni_stage_def、方案改版成
+ *   t_class_stage_scheme(+_stage) —— 旧表早就不存在，导致方案下拉恒空、
+ *   就业部/实训的阶段选项一个都出不来。
+ */
+const SCHEME_T = 't_class_stage_scheme';
+const SCHEME_STAGE_T = 't_class_stage_scheme_stage';
+const STAGE_DEF_T = 't_uni_stage_def';
 
 /** 读全部阶段方案（含每个方案下的阶段，按 sort_no 排序） */
 export async function loadStagePlanOptions(): Promise<StagePlanOption[]> {
   try {
-    const plans = (await classJhDb(PLAN_T)
+    const plans = (await classJhDb(SCHEME_T)
       .where('is_deleted', false)
-      .select('id', 'plan_name', 'dept_code', 'sort_no')
+      .select('id', 'scheme_name', 'dept_code', 'sort_no')
       .orderBy('sort_no', 'asc')
       .orderBy('create_time', 'asc')) as Array<Record<string, any>>;
+    if (!plans.length) return [];
 
-    const stages = (await classJhDb(STAGE_T)
+    const stages = (await classJhDb(SCHEME_STAGE_T)
       .where('is_deleted', false)
-      .select('plan_id', 'stage_code', 'stage_name', 'sort_no')
-      .orderBy('sort_no', 'asc')
-      .orderBy('stage_code', 'asc')) as Array<Record<string, any>>;
+      .select('scheme_id', 'stage_name', 'sort_no')
+      .orderBy('sort_no', 'asc')) as Array<Record<string, any>>;
+
+    /* 方案明细里只有阶段名（没有阶段码），用统一阶段字典按
+       (部门, 阶段名) 反查编码 —— 查不到就跳过，避免给出空编码 */
+    // ⚠️ 阶段字典已归一，在 sms_common，必须用统一库连接（初高库没有这张表）
+    const defs = (await uniDb(STAGE_DEF_T)
+      .where('is_deleted', false)
+      .select('dept_code', 'stage_code', 'stage_name')) as Array<Record<string, any>>;
+    const codeOf = new Map<string, number>();
+    for (const d of defs) {
+      codeOf.set([String(Number(d.dept_code)), String(d.stage_name ?? '')].join('|'), Number(d.stage_code));
+    }
+
+    const deptOfPlan = new Map<string, number>();
+    for (const p of plans) deptOfPlan.set(String(p.id), Number(p.dept_code));
 
     const byPlan = new Map<string, Array<{ value: number; label: string }>>();
     for (const s of stages) {
-      const key = String(s.plan_id ?? '');
-      if (!byPlan.has(key)) byPlan.set(key, []);
-      byPlan.get(key)!.push({ value: Number(s.stage_code), label: String(s.stage_name ?? '') });
+      const schemeId = String(s.scheme_id ?? '');
+      const name = String(s.stage_name ?? '');
+      const dept = deptOfPlan.get(schemeId);
+      if (!dept) continue;
+      const code = codeOf.get([String(dept), name].join('|'));
+      if (code === undefined || Number.isNaN(code)) continue;
+      if (!byPlan.has(schemeId)) byPlan.set(schemeId, []);
+      byPlan.get(schemeId)!.push({ value: code, label: name });
     }
 
     return plans.map((p) => ({
       id: String(p.id),
-      name: String(p.plan_name ?? ''),
+      name: String(p.scheme_name ?? ''),
       deptCode: Number(p.dept_code),
       phases: byPlan.get(String(p.id)) ?? [],
     }));

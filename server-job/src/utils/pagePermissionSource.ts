@@ -124,6 +124,19 @@ const PROJECT_MANAGER_PAGES: string[] = [
   // 实训阶段带班日常
   'job:class:view',
   'job:classStudent:view',
+  /* ============================================================
+   * ★ 2026-10-22：项目经理要能看到「学生档案」
+   *
+   *   学生档案 2026-10-21 收成三学段（初高 / 大学 / 就业部），实训学生
+   *   已并入就业部（dept_code=3）——项目经理带的班就在这里。
+   *   而就业部页签的权限码是 `job:empArchive:view`（原属就业老师），
+   *   项目经理没有 → 学生档案整体进不去（连菜单都看不到）。
+   *
+   *   业务依据：「项目经理 = 实训阶段班主任」，他必须能看到自己带的学员。
+   *   数据范围不会因此放宽：repo.emp 的 PROJECT_MANAGER 分支只放
+   *   「project_manager_id = 自己 且未结业」的班，别人班的学员看不到。
+   * ============================================================ */
+  'job:empArchive:view',
   'job:classTransfer:view',   // ★ 能看班级交接记录（但不能执行交接）
   'job:attendance:view',
   'job:examScore:view',

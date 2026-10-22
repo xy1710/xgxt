@@ -33,6 +33,9 @@ import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
 import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
+// ★ P3 切读层：本文件三张表（t_job_class_student / t_job_class / t_student_base）都已归一，
+//   读/写走 tbl()/tblTrx()/tblInsTrx()，两处 join 走 tblAs()/tblRef()；开关关时与原实现等价。
+import { tbl, tblAs, tblRef, tblInsTrx, tblTrx, phaseCodeSelect } from '../teaching/shared/uniTable';
 
 export const classStudentRouter = Router();
 
@@ -40,6 +43,10 @@ export const classStudentRouter = Router();
 const CS_TABLE = 't_job_class_student';
 const CLASS_TABLE = 't_job_class';
 const STUDENT_TABLE = 't_student_base';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 花名册在班状态 */
 const CS_IN = 1;
@@ -58,10 +65,10 @@ const STUDENT_SUSPENDED = 6;
  * 任何花名册变动后都要调一次 —— 保证 t_job_class.student_count 准确
  */
 async function refreshStudentCount(classId: string) {
-  const [{ cnt }] = await db(CS_TABLE)
+  const [{ cnt }] = (await tbl(db, DB, CS_TABLE, STAGE)
     .where({ class_id: classId, status: CS_IN, is_deleted: false })
-    .count({ cnt: '*' });
-  await db(CLASS_TABLE).where({ id: classId }).update({
+    .count({ cnt: '*' })) as Array<{ cnt: number }>;
+  await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: classId }).update({
     student_count: Number(cnt),
     update_time: new Date(),
   });
@@ -87,8 +94,8 @@ classStudentRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(`${CS_TABLE} as cs`)
-      .leftJoin(`${STUDENT_TABLE} as s`, 'cs.student_id', 's.id')
+    const query = tblAs(db, DB, CS_TABLE, STAGE, 'cs')
+      .leftJoin(`${tblRef(DB, STUDENT_TABLE)} as s`, 'cs.student_id', 's.id')
       .where('cs.is_deleted', false)
       .andWhere('cs.class_id', q.classId);
 
@@ -109,7 +116,8 @@ classStudentRouter.get(
         's.phone as s_phone',
         's.parent_phone as s_parent_phone',
         's.repeat_count as s_repeat_count',
-        's.stage as s_stage',
+        // ★ #23 方案B：join 侧换列名（别名保持 s_stage，下游 r.s_stage 不变）
+        phaseCodeSelect({ ref: 's', alias: 's_stage' }),
         's.dorm_no as s_dorm_no',
       )
       .orderBy('cs.status', 'asc')
@@ -170,13 +178,13 @@ classStudentRouter.get(
     const q = (req as any).validated;
 
     // 先查出「已经在本班（在班）」的学生ID，排除掉
-    const inClass = await db(CS_TABLE)
+    const inClass = await tbl(db, DB, CS_TABLE, STAGE)
       .where({ class_id: q.classId, status: CS_IN, is_deleted: false })
       .select('student_id');
     const excludeIds = inClass.map((r: any) => r.student_id);
 
-    const query = db(`${STUDENT_TABLE} as s`)
-      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
+    const query = tblAs(db, DB, STUDENT_TABLE, STAGE, 's')
+      .leftJoin(`${tblRef(DB, CLASS_TABLE)} as c`, 's.class_id', 'c.id')
       .where('s.is_deleted', false);
 
     if (excludeIds.length) query.whereNotIn('s.id', excludeIds);
@@ -254,7 +262,7 @@ classStudentRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated;
 
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     // ---- 规则：已结业的班不能加人 ----
@@ -263,7 +271,7 @@ classStudentRouter.post(
     }
 
     // ---- 规则：封班的班只接受「休学学生」和「末次班学生」 ----
-    const students = await db(STUDENT_TABLE)
+    const students = await tbl(db, DB, STUDENT_TABLE, STAGE)
       .whereIn('id', body.studentIds)
       .andWhere('is_deleted', false)
       .select('id', 'student_no', 'student_name', 'student_status', 'repeat_count', 'class_id', 'class_name');
@@ -286,7 +294,7 @@ classStudentRouter.post(
     }
 
     // ---- 找出已经在班的（防重复） ----
-    const exist = await db(CS_TABLE)
+    const exist = await tbl(db, DB, CS_TABLE, STAGE)
       .where({ class_id: body.classId, status: CS_IN, is_deleted: false })
       .whereIn('student_id', body.studentIds)
       .select('student_id');
@@ -321,11 +329,11 @@ classStudentRouter.post(
 
       const BATCH = 500;
       for (let i = 0; i < rows.length; i += BATCH) {
-        await trx(CS_TABLE).insert(rows.slice(i, i + BATCH));
+        await tblInsTrx(trx, DB, CS_TABLE, STAGE, rows.slice(i, i + BATCH));
       }
 
       // ⚠️ 同步学生主档（斌哥拍板：要同步）
-      await trx(STUDENT_TABLE)
+      await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .whereIn('id', toAdd.map((s: any) => s.id))
         .update({
           class_id: body.classId,
@@ -364,11 +372,11 @@ classStudentRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated;
 
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     // 只处理「在班」的那条记录
-    const rows = await db(CS_TABLE)
+    const rows = await tbl(db, DB, CS_TABLE, STAGE)
       .where({ class_id: body.classId, status: CS_IN, is_deleted: false })
       .whereIn('student_id', body.studentIds)
       .select('id', 'student_id', 'student_name');
@@ -381,7 +389,7 @@ classStudentRouter.post(
     const now = new Date();
 
     await db.transaction(async (trx) => {
-      await trx(CS_TABLE)
+      await tblTrx(trx, DB, CS_TABLE, STAGE)
         .whereIn(
           'id',
           rows.map((r: any) => r.id),
@@ -398,7 +406,7 @@ classStudentRouter.post(
       // ⚠️ 同步学生主档：把 class_id / class_name 清空
       //    （说明：本模块只管实训班，学生可能马上要进新班；
       //      若走「换班」流程，换班接口会在新班里重新写 class_id）
-      await trx(STUDENT_TABLE)
+      await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .whereIn('id', rows.map((r: any) => r.student_id))
         .andWhere('class_id', body.classId)
         .update({

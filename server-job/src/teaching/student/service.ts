@@ -2,11 +2,17 @@
  * 学生档案适配器（Adapter）
  * ============================================================
  *
- * 【与前面几个域的适配器有两处不同】
- *   ① 学段是 **4 个**（多一个「教务/edu」）→ 权限校验用泛化版 `assertStageCodeEx`
- *   ② 合并时**必须按学号去重** —— 同一个人可能同时存在于多个库（影子表）；
- *      例如「大学 → 实训」升上来的人，class 库和 job 库各有一条。
- *      去重规则：保留**阶段更靠后**的那条（job > class > jh > edu）。
+ * 【★ 2026-10-21 用户口径：学生档案只剩三个学段】
+ *   删除「就业」（job）与「教务」（edu）两个入口，保留初高 / 大学 / 就业部：
+ *     · job 的数据与就业部是同一批人（sms_job 里 stage_key=job、dept_code=3），
+ *       两个入口指向同一批学生，只会让人以为「就业」和「就业部」是两拨人
+ *     · edu 是 sms_edu.t_student_base（教务宿舍模块的学生副本），档案里再列一遍
+ *       既重复又对不上号
+ *   两张表的数据一条没删 —— 教务宿舍、实训模块还在用，只是档案不再列这两个入口。
+ *
+ * 【合并时必须按学号去重】
+ *   同一个人可能同时存在于多个库：例如「大学 → 就业部」的人，class 库和 sms_job 库各一条。
+ *   去重规则：保留**阶段更靠后**的那条（emp > class > jh）。
  *
  * 【「全部」= 统一页的默认视图 = 原来「教务」页提供的「全校总台账」能力】
  *   合并前只有教务页能看全校，所以它在页面里自己拼了三个库。
@@ -17,8 +23,6 @@ import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import * as repoClassJh from './repo.classJh';
 import * as repoClass from './repo.class';
-import * as repoJob from './repo.job';
-import * as repoEdu from './repo.edu';
 import * as repoEmp from './repo.emp';
 import type {
   StudentDetail,
@@ -34,41 +38,43 @@ import { STUDENT_DEDUP_PRIORITY, STUDENT_STAGES, STUDENT_STAGE_NAME } from '../s
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
+import { loadSchemeStagesForStage } from '../shared/stageSchemes';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
+import { assertStudentsInScope } from '../shared/dataScope';
 import { randomUUID } from 'crypto';
 import { db as classDb } from '../../class/db';
+import { db as jhDb } from '../../class-jh/utils/db';
 import { tbl, tblInsTrx, tblTrx, phaseCodeCol } from '../shared/uniTable';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import { insertUpgrade, listByStudentNo } from './upgrade.repo';
 import { ClassStatus, CLASS_STATUS_NAME, DeptCode } from 'shared-types';
 
+/**
+ * ★ 2026-10-21：学生档案只剩三个学段（就业、教务已在用户口径下删除）
+ *   数据没删 —— sms_job / sms_edu 两张学生表还在，只是档案不再列这两个入口。
+ */
 const REPOS: Record<StudentStage, StudentRepo> = {
   jh: repoClassJh.repo,
   class: repoClass.repo,
-  job: repoJob.repo,
-  // ★ 2026-10-19 批注：就业部独立学段
+  // ★ 就业部：按 dept_code=3 取数（含 stage_key=job 的那 5 个实训学生）
   emp: repoEmp.repo,
-  edu: repoEdu.repo,
 };
 
 /** 各学段学生档案页的权限码（= 合并前各学段原页面的权限码，一个都没改） */
-const CODES: Record<StudentStage, string> = {
+const CODES: Record<StudentStage, string | string[]> = {
   jh: 'classjh:student:view',
   class: 'class:student:view',
-  job: 'job:empArchive:view',
+
   emp: 'job:empArchive:view',
-  edu: 'edu:student:view',
 };
 
 /** 各学段所属门户模块（与全站 moduleOfPageCode 口径一致） */
 const MODULE: Record<StudentStage, string> = {
   jh: 'class-jh',
   class: 'class',
-  job: 'job',
   emp: 'job',
-  edu: 'edu',
 };
 
 const LABEL = '学生档案';
@@ -108,8 +114,53 @@ async function mergedRows(
     if (ta !== tb) return ta < tb ? 1 : -1;
     return a.studentNo.localeCompare(b.studentNo, 'zh-Hans-CN');
   });
+  await attachSchemeStageNames(rows);
   return { rows, stages };
 }
+
+/**
+ * ★ 2026-10-21：把「班级绑定的阶段方案阶段名」挂到行上
+ *
+ * 【为什么在 service 层做】
+ *   三个仓储各查一遍班级表就重复三次；这里按学段分组、每学段一次 whereIn，
+ *   总共最多 3 次查询（通常只有 1 次）。
+ *
+ * ⚠️ 三个学段的班级表在三个库，**必须用各自的连接**：
+ *   `tbl()` 在统一表开关关闭时是 `db(table)`（不带库前缀），用错连接会查错库。
+ */
+async function attachSchemeStageNames(rows: StudentRow[]): Promise<void> {
+  const need = new Map<StudentStage, Set<string>>();
+  for (const r of rows) {
+    if (!r.classId) continue;
+    if (!need.has(r.stage)) need.set(r.stage, new Set());
+    need.get(r.stage)!.add(r.classId);
+  }
+  if (!need.size) return;
+
+  const nameOf = new Map<string, string>();
+  for (const [stage, ids] of need) {
+    const src = CLASS_SRC[stage];
+    try {
+      const list = (await tbl(src.conn, src.schema, src.table, stage)
+        .whereIn('id', [...ids])
+        .select('id', 'scheme_stage_name')) as Array<Record<string, any>>;
+      for (const c of list) {
+        const nm = String(c.scheme_stage_name ?? '').trim();
+        if (nm) nameOf.set(String(c.id), nm);
+      }
+    } catch {
+      /* 方案字段没迁移 / 库没起来：阶段列退回阶段码名称，不影响列表 */
+    }
+  }
+  for (const r of rows) r.schemeStageName = r.classId ? (nameOf.get(r.classId) ?? null) : null;
+}
+
+/** 学段 → 班级表所在库（班级绑定的阶段方案在班级表上） */
+const CLASS_SRC: Record<StudentStage, { conn: any; schema: string; table: string }> = {
+  jh: { conn: jhDb, schema: 'sms_class_jh', table: 't_class_info' },
+  class: { conn: classDb, schema: 'sms_class', table: 't_class_info' },
+  emp: { conn: db, schema: 'sms_job', table: 't_job_class' },
+};
 
 /**
  * 按学号去重：同学号保留**阶段更靠后**的那条
@@ -174,8 +225,12 @@ export async function getStudentDetail(
   user: any,
 ): Promise<StudentDetail> {
   await assertStageView(user, stage);
+  // ★ 2026-10-22：学生档案收成三学段（jh/class/emp）后，三个都是带班概念，一律过范围
+  await assertStudentsInScope(stage, [id], user, '该学生');
   const d = await REPOS[stage].detail(id, user);
   if (!d) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或没有访问权限');
+  // ★ 2026-10-21：详情「阶段」也要显示方案阶段名（与列表同一口径）
+  await attachSchemeStageNames([d.base]);
   // ★ 2026-10-20 升云记录：按学号挂到详情上（升云后大学那条是新 id，只有学号两边一致）
   //   放在 service 层而不是各仓储里 —— 5 个仓储都要有，写一遍比写五遍强。
   if (stage === 'jh' || stage === 'class') {
@@ -193,7 +248,7 @@ export async function getStudentDetail(
  */
 export async function getStudentExtras(stage: StudentStage, id: string, user: any) {
   const d = await getStudentDetail(stage, id, user);
-  const out = {
+  const out: import('../shared/dto').StudentExtras = {
     scores: [] as Array<
       import('../shared/dto').ScoreRow & {
         examType?: number | null;
@@ -203,10 +258,17 @@ export async function getStudentExtras(stage: StudentStage, id: string, user: an
     dormChanges: [] as import('../shared/dto').DormChangeRow[],
     dormOwnerName: null as string | null,
     dormClassName: null as string | null,
+    payments: {
+      groups: [],
+      totalCount: 0,
+      totalAmount: 0,
+      latestDate: null,
+      note: null,
+    },
   };
 
-  /* 1. 考试成绩（成绩域）—— 成绩/宿舍/考试域只覆盖 jh/class/job 三学段 */
-  if (stage !== 'edu' && stage !== 'emp') {
+  /* 1. 考试成绩（成绩域）—— 成绩/宿舍/考试域只覆盖 jh/class 两学段（就业部没有考试成绩） */
+  if (stage !== 'emp') {
     try {
       const { listScores } = await import('../score/service');
       const r = await listScores({ stage, studentId: String(id), page: 1, size: 200 }, user);
@@ -250,6 +312,15 @@ export async function getStudentExtras(stage: StudentStage, id: string, user: an
         /* 宿舍详情查不到就留空 */
       }
     }
+  }
+
+  /* 3. 缴费记录（财务账单明细，只读）—— 按学号取，跨学段都能看到 */
+  try {
+    const { listPaymentsByStudentNo } = await import('../../finance/services/bill.service');
+    out.payments = await listPaymentsByStudentNo(d.base.studentNo);
+  } catch {
+    /* 财务库没起来 / 账单表没迁移：缴费签显示空态，不影响其它签 */
+    out.payments.note = '财务账单暂时读不到，请稍后重试';
   }
 
   return out;
@@ -296,6 +367,8 @@ export async function listStageMeta(user: any): Promise<StudentStageMeta[]> {
       // ★ 2026-10-19：本部门方案里的阶段并进筛选下拉（就业部/实训 dept_code=3 共用一套）
       phaseOptions: mergePhaseOptions(s, await repo.phaseOptions(), planOptions),
       planOptions,
+      // ★ 2026-10-21：阶段筛选改读「阶段方案」（新表），实时跟随系统设置
+      schemeStageOptions: await loadSchemeStagesForStage(s),
       sections: repo.sections,
       supportUnassigned: repo.supportUnassigned,
     });
@@ -304,11 +377,12 @@ export async function listStageMeta(user: any): Promise<StudentStageMeta[]> {
 }
 
 /* ============================================================
- * 班级下拉（四学段）
+ * 班级下拉（三学段）
  * ============================================================
- * 前三个学段直接复用共享的 `listClassesByStage`（三个学段的班级表各不相同）；
- * 「教务」没有自己的班级表（它按学生表里出现过的 class_id/class_name 去重取），
- * 所以这里单独补一段 —— 这是四个学段里唯一「班级不来自班级表」的那个。
+ * 三个学段各有一张班级表，直接复用共享的 `listClassesByStage`。
+ *
+ * ★ 2026-10-21：原来这里还给「教务」单独拼过一段（从 sms_edu 学生表里
+ *   去重取 class_id / class_name）—— 教务学段已从学生档案删除，这段一并去掉。
  */
 export interface StudentClassOption {
   stage: StudentStage;
@@ -324,22 +398,6 @@ export async function listStudentClasses(user: any): Promise<StudentClassOption[
   const stages = await visibleStages(user);
   const out: StudentClassOption[] = [];
   for (const s of stages) {
-    if (s === 'edu') {
-      const rows = (await db('sms_edu.t_student_base')
-        .where('is_deleted', false)
-        .whereNotNull('class_id')
-        .where('class_id', '<>', '')
-        .distinct('class_id', 'class_name')) as Array<Record<string, any>>;
-      for (const r of rows) {
-        out.push({
-          stage: s,
-          stageName: STUDENT_STAGE_NAME[s],
-          id: String(r.class_id),
-          name: String(r.class_name ?? ''),
-        });
-      }
-      continue;
-    }
     for (const c of await listClassesByStage(s)) {
       out.push({
         stage: s,

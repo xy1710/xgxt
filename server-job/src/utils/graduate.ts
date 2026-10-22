@@ -57,6 +57,11 @@ import { db } from './db';
 import { BizError } from '../middleware/errorHandler';
 import { createApproval, type Operator } from './approval';
 import { sendNotice, NOTICE_TYPE } from './notice';
+// ★ 切读层：本文件的表全部在 sms_job（学段固定 job），开关关时与原实现等价
+import { tbl, tblAs, tblInsTrx, tblRef, tblTrx } from '../teaching/shared/uniTable';
+
+const DB = 'sms_job';
+const STAGE = 'job' as const;
 
 /* ============================================================
  * 表名与常量
@@ -137,10 +142,10 @@ function headOperatorOf(cls: any, fallback: Operator): Operator {
 
 /** 重算班级在班人数（★ 花名册任何变动后都要调） */
 async function refreshClassStudentCount(conn: any, classId: string): Promise<void> {
-  const [{ cnt }] = await conn(CS_TABLE)
+  const [{ cnt }] = (await tbl(conn, DB, CS_TABLE, STAGE)
     .where({ class_id: classId, status: CS_IN, is_deleted: false })
-    .count({ cnt: '*' });
-  await conn(CLASS_TABLE).where({ id: classId }).update({ student_count: Number(cnt) });
+    .count({ cnt: '*' })) as Array<{ cnt: number }>;
+  await tbl(conn, DB, CLASS_TABLE, STAGE).where({ id: classId }).update({ student_count: Number(cnt) });
 }
 
 /**
@@ -149,8 +154,8 @@ async function refreshClassStudentCount(conn: any, classId: string): Promise<voi
  * ⚠️ 只认花名册 status=1，且必须限定 class_id
  */
 async function listInClassStudents(conn: any, classId: string): Promise<any[]> {
-  return conn(`${CS_TABLE} as cs`)
-    .join(`${STUDENT_TABLE} as s`, 'cs.student_id', 's.id')
+  return tblAs(conn, DB, CS_TABLE, STAGE, 'cs')
+    .join(`${tblRef(DB, STUDENT_TABLE)} as s`, 'cs.student_id', 's.id')
     .where('cs.class_id', classId)
     .andWhere('cs.status', CS_IN)
     .andWhere('cs.is_deleted', false)
@@ -174,7 +179,7 @@ async function listInClassStudents(conn: any, classId: string): Promise<any[]> {
  * ============================================================ */
 
 export async function previewGraduate(classId: string): Promise<GraduatePreview> {
-  const cls = await db(CLASS_TABLE).where({ id: classId, is_deleted: false }).first();
+  const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: classId, is_deleted: false }).first();
   if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
   if (cls.class_status === CLASS_GRADUATED) {
     throw new BizError(BizCode.CLASS_STATUS_NOT_ALLOW, '该班级已结业');
@@ -209,7 +214,7 @@ export async function graduateClass(
   closeDate: string,
   operator: Operator,
 ): Promise<GraduateResult> {
-  const cls = await db(CLASS_TABLE).where({ id: classId, is_deleted: false }).first();
+  const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: classId, is_deleted: false }).first();
   if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
   if (cls.class_status === CLASS_GRADUATED) {
     throw new BizError(BizCode.CLASS_STATUS_NOT_ALLOW, '该班级已结业');
@@ -230,7 +235,7 @@ export async function graduateClass(
 
   await db.transaction(async (trx) => {
     /* ---- ① 班级：已结业 + 记住原状态（供撤销） ---- */
-    await trx(CLASS_TABLE).where({ id: classId }).update({
+    await tblTrx(trx, DB, CLASS_TABLE, STAGE).where({ id: classId }).update({
       class_status: CLASS_GRADUATED,
       close_date: closeDate,
       prev_class_status: cls.class_status ?? null,
@@ -246,7 +251,7 @@ export async function graduateClass(
     const ids = willTransfer.map((r) => r.id);
 
     /* ---- ② 花名册：在班 → 已离班（⚠️ 必须限定 class_id） ---- */
-    await trx(CS_TABLE)
+    await tblTrx(trx, DB, CS_TABLE, STAGE)
       .where('class_id', classId)
       .whereIn('student_id', ids)
       .andWhere('status', CS_IN)
@@ -259,7 +264,7 @@ export async function graduateClass(
       });
 
     /* ---- ③ 学生主档：实训中(8) → 待就业(9)  ← 这就是"转就业" ---- */
-    await trx(STUDENT_TABLE)
+    await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
       .whereIn('id', ids)
       .andWhere('student_status', STU_TRAINING)
       .update({
@@ -275,7 +280,7 @@ export async function graduateClass(
     const withDorm = willTransfer.filter((r) => !!r.dorm_id);
 
     for (const stu of withDorm) {
-      const bed = await trx(BED_TABLE)
+      const bed = await tblTrx(trx, DB, BED_TABLE, STAGE)
         .where({ student_id: stu.id, is_deleted: false })
         .orderBy('create_time', 'desc')
         .first();
@@ -300,7 +305,7 @@ export async function graduateClass(
         trx,
       );
 
-      await trx(CHANGE_TABLE).insert({
+      await tblInsTrx(trx, DB, CHANGE_TABLE, STAGE, {
         id: changeId,
         create_time: now,
         create_by: operator.userId,
@@ -358,7 +363,7 @@ export async function graduateClass(
         trx,
       );
 
-      await trx(REFUND_TABLE).insert({
+      await tblInsTrx(trx, DB, REFUND_TABLE, STAGE, {
         id: refundId,
         create_time: now,
         create_by: operator.userId,
@@ -452,7 +457,7 @@ export async function revokeGraduate(
   classId: string,
   operator: Operator,
 ): Promise<RevokeGraduateResult> {
-  const cls = await db(CLASS_TABLE).where({ id: classId, is_deleted: false }).first();
+  const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: classId, is_deleted: false }).first();
   if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
   if (cls.class_status !== CLASS_GRADUATED) {
     throw new BizError(BizCode.CLASS_STATUS_NOT_ALLOW, '该班级未结业，无法撤销');
@@ -461,7 +466,7 @@ export async function revokeGraduate(
   const now = new Date();
 
   // 本批"因结业而离班"的纪录（一个班只结业一次，不会有别的批次混进来）
-  const leftRows = await db(CS_TABLE)
+  const leftRows = await tbl(db, DB, CS_TABLE, STAGE)
     .where({ class_id: classId, status: CS_LEFT, leave_type: LEAVE_TYPE_GRADUATE, is_deleted: false })
     .select('student_id');
   const studentIds = leftRows.map((r: any) => r.student_id);
@@ -471,7 +476,7 @@ export async function revokeGraduate(
 
   await db.transaction(async (trx) => {
     /* ---- ① 班级：回到结业前的状态 ---- */
-    await trx(CLASS_TABLE).where({ id: classId }).update({
+    await tblTrx(trx, DB, CLASS_TABLE, STAGE).where({ id: classId }).update({
       // ★ 2026-10-02：「开放」已废弃 —— 兜底值从 1(开放) 改成 2(封班)
       class_status: cls.prev_class_status ?? 2,
       close_date: null,
@@ -482,7 +487,7 @@ export async function revokeGraduate(
 
     if (studentIds.length > 0) {
       /* ---- ② 花名册：回「在班」 ---- */
-      await trx(CS_TABLE)
+      await tblTrx(trx, DB, CS_TABLE, STAGE)
         .where('class_id', classId)
         .whereIn('student_id', studentIds)
         .andWhere('status', CS_LEFT)
@@ -497,7 +502,7 @@ export async function revokeGraduate(
 
       /* ---- ③ 学生主档：待就业(9) → 实训中(8) ----
          ⚠️ 只回滚"待就业"的，别把已经就业(10)的学生也拽回来 */
-      const affected = await trx(STUDENT_TABLE)
+      const affected = await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .whereIn('id', studentIds)
         .andWhere('student_status', STU_WAIT_EMPLOY)
         .update({
@@ -513,7 +518,7 @@ export async function revokeGraduate(
 
     /* ---- ⑤ 作废"这次生成的、还没审批通过"的退宿申请 ----
        ⚠️ 必须做！否则学生已经回班了，教务老师一点通过就把他的床位退了。 */
-    cancelledDormChange = await trx(CHANGE_TABLE)
+    cancelledDormChange = await tblTrx(trx, DB, CHANGE_TABLE, STAGE)
       .where({ class_id: classId, biz_type: DormChangeBizType.CHECKOUT, is_deleted: false })
       .whereIn('approval_status', [
         ApprovalStatus.DRAFT,
@@ -542,15 +547,15 @@ export async function countPendingGraduateBills(classId: string): Promise<{
   pendingDormChange: number;
   pendingRefund: number;
 }> {
-  const [{ c: dormCnt }] = await db(CHANGE_TABLE)
+  const [{ c: dormCnt }] = (await tbl(db, DB, CHANGE_TABLE, STAGE)
     .where({ class_id: classId, biz_type: DormChangeBizType.CHECKOUT, is_deleted: false })
     .whereIn('approval_status', [ApprovalStatus.DRAFT, ApprovalStatus.PENDING_MANAGER])
-    .count({ c: '*' });
+    .count({ c: '*' })) as Array<{ c: number }>;
 
-  const [{ c: refundCnt }] = await db(REFUND_TABLE)
+  const [{ c: refundCnt }] = (await tbl(db, DB, REFUND_TABLE, STAGE)
     .where({ class_id: classId, is_deleted: false, refund_type: RefundType.ACCOMMODATION })
     .whereIn('approval_status', [ApprovalStatus.DRAFT, ApprovalStatus.PENDING_MANAGER, ApprovalStatus.PENDING_PRINCIPAL])
-    .count({ c: '*' });
+    .count({ c: '*' })) as Array<{ c: number }>;
 
   return {
     pendingDormChange: Number(dormCnt) || 0,

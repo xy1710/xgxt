@@ -49,6 +49,14 @@ import {
 import { db } from './db';
 import { BizError } from '../middleware/errorHandler';
 import { sendNotice, NOTICE_TYPE } from './notice';
+// ★ 切读层：审批单主表 t_job_approval + 轨迹表 t_job_approval_log 均在 sms_job
+//   （学段固定 job）已归一 → 全部切读。
+//   ⚠️ 轨迹表 t_job_approval_log 的映射是 P4 收尾时补进 UNI_MAP 的
+//     （原「未登记 → 保持原样」的注释已作废）。
+import { tbl, tblIns } from '../teaching/shared/uniTable';
+
+const DB = 'sms_job';
+const STAGE = 'job' as const;
 
 /** 审批单主表 */
 export const APPROVAL_TABLE = 't_job_approval';
@@ -95,7 +103,7 @@ export async function createApproval(
   const id = randomUUID();
   const now = new Date();
 
-  await conn(APPROVAL_TABLE).insert({
+  await tblIns(conn, DB, APPROVAL_TABLE, STAGE, {
     id,
     create_time: now,
     create_by: params.applicant.userId,
@@ -140,7 +148,7 @@ export async function submitApproval(
 ): Promise<void> {
   const conn = trxOpt || db;
 
-  const appr = await conn(APPROVAL_TABLE).where({ id: approvalId, is_deleted: false }).first();
+  const appr = await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId, is_deleted: false }).first();
   if (!appr) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '审批单不存在');
 
   if (appr.status !== ApprovalStatus.DRAFT) {
@@ -180,7 +188,7 @@ export async function submitApproval(
   const nextStatus: ApprovalStatus = ApprovalStatus.PENDING_MANAGER;
   const now = new Date();
 
-  await conn(APPROVAL_TABLE).where({ id: approvalId }).update({
+  await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId }).update({
     status: nextStatus,
     current_step: 1,
     current_handler_role: firstNode.roles[0] || null,
@@ -227,7 +235,7 @@ export async function doApprove(
 ): Promise<{ finished: boolean; status: ApprovalStatus }> {
   const conn = trxOpt || db;
 
-  const appr = await conn(APPROVAL_TABLE).where({ id: approvalId, is_deleted: false }).first();
+  const appr = await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId, is_deleted: false }).first();
   if (!appr) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '审批单不存在');
 
   if (isFinished(appr.status)) {
@@ -267,7 +275,7 @@ export async function doApprove(
   const nextStep = isLast ? step : step + 1;
   const nextNode = isLast ? null : getApprovalNode(appr.biz_type, nextStep);
 
-  await conn(APPROVAL_TABLE).where({ id: approvalId }).update({
+  await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId }).update({
     status: nextStatus,
     current_step: nextStep,
     current_handler_role: nextNode ? nextNode.roles[0] || null : null,
@@ -316,7 +324,7 @@ export async function doReject(
     throw new BizError(BizCode.APPROVAL_REJECT_NEED_REASON, '驳回时必须填写驳回原因');
   }
 
-  const appr = await conn(APPROVAL_TABLE).where({ id: approvalId, is_deleted: false }).first();
+  const appr = await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId, is_deleted: false }).first();
   if (!appr) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '审批单不存在');
 
   if (isFinished(appr.status)) {
@@ -343,7 +351,7 @@ export async function doReject(
 
   const now = new Date();
 
-  await conn(APPROVAL_TABLE).where({ id: approvalId }).update({
+  await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId }).update({
     status: ApprovalStatus.REJECTED,
     current_handler_role: null,
     current_handler_hint: '已驳回',
@@ -387,7 +395,7 @@ export async function doCancel(
 ): Promise<void> {
   const conn = trxOpt || db;
 
-  const appr = await conn(APPROVAL_TABLE).where({ id: approvalId, is_deleted: false }).first();
+  const appr = await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId, is_deleted: false }).first();
   if (!appr) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '审批单不存在');
 
   // ★ 与 submitApproval 同口径：撤回也走 isMyApproval（万能测试号放行）
@@ -404,7 +412,7 @@ export async function doCancel(
 
   const now = new Date();
 
-  await conn(APPROVAL_TABLE).where({ id: approvalId }).update({
+  await tbl(conn, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId }).update({
     status: ApprovalStatus.CANCELED,
     current_handler_role: null,
     current_handler_hint: '已撤销',
@@ -429,7 +437,7 @@ export async function doCancel(
  * 查审批轨迹
  */
 export async function getApprovalLogs(approvalId: string): Promise<any[]> {
-  return db(APPROVAL_LOG_TABLE)
+  return tbl(db, DB, APPROVAL_LOG_TABLE, STAGE)
     .where({ approval_id: approvalId, is_deleted: false })
     .orderBy('create_time', 'asc');
 }
@@ -460,7 +468,7 @@ export async function buildChainNodes(
  * 取审批单（业务模块查状态用）
  */
 export async function getApproval(approvalId: string): Promise<any> {
-  return db(APPROVAL_TABLE).where({ id: approvalId, is_deleted: false }).first();
+  return tbl(db, DB, APPROVAL_TABLE, STAGE).where({ id: approvalId, is_deleted: false }).first();
 }
 
 /* ============================================================
@@ -485,7 +493,7 @@ async function writeLog(
     comment?: string;
   },
 ): Promise<void> {
-  await conn(APPROVAL_LOG_TABLE).insert({
+  await tblIns(conn, DB, APPROVAL_LOG_TABLE, STAGE, {
     id: randomUUID(),
     create_time: new Date(),
     is_deleted: false,

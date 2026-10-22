@@ -46,6 +46,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { assertClassCodeAvailable } from '../shared/classCode';
 
 const T = 't_job_class';
 const ROSTER_T = 't_job_class_student';
@@ -79,6 +80,14 @@ function numOrNull(v: unknown): number | null {
 }
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
+
+/**
+ * ★ 2026-10-22：班级编号唯一性校验 → **三部门全局唯一**
+ *   （学号 = LZ + 班级编号 + 序号，跨部门重号会生成同一串学号）
+ */
+async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
+  await assertClassCodeAvailable(code, { stage: STAGE, id: excludeId });
+}
 
 /** 行 → 统一结构 */
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
@@ -138,7 +147,7 @@ async function applyScope(qb: any, user: any): Promise<void> {
   }
   if (hasRole(roles, RoleCode.PROJECT_MANAGER)) {
     const mine = (await tbl(db, 'sms_job', T, STAGE)
-      .where({ project_manager_id: uid, is_deleted: false, stage_key: 'emp' })
+      .where({ project_manager_id: uid, is_deleted: false })
       .select('id')) as Array<{ id: string }>;
     const ids = mine.map((c) => c.id);
     if (!ids.length) qb.whereRaw('1 = 0');
@@ -153,9 +162,8 @@ async function applyScope(qb: any, user: any): Promise<void> {
 function buildBase(q: ClassListQuery) {
   // ★ 2026-10-19：就业部与实训共用 t_job_class，且两边 dept_code 都是 3（就业部），
   //   所以隔离只能靠 stage_key（'emp' / 'job'）。
-  const qb = tbl(db, 'sms_job', T, STAGE)
-    .where('is_deleted', false)
-    .andWhere('stage_key', 'emp');
+  // ★ 2026-10-21：同 repo.job —— edu_stage='emp' 已足够区分，去掉 stage_key 过滤
+  const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', false);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.classStatus) qb.andWhere('class_status', q.classStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
@@ -255,6 +263,23 @@ export const repo: ClassRepo = {
     set('remark', body.remark);
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
+    /**
+     * ★ 2026-10-22 修：编辑时编号改不了
+     *
+     * 原来 `class_code` 只在**新增**分支写，编辑分支的 payload 里没有这一列 ——
+     * 前端传了新编号，SQL 里没有它，保存成功但编号没变（用户看到的就是「改不了」）。
+     *
+     * ⚠️ 只在 body.classCode !== undefined 时处理：
+     *    班级交接（service.ts handover）也走 save()，不带编号字段；
+     *    无条件要求必填会把交接拦死。表单提交时空串被 route 转成 null，仍会报必填。
+     */
+    if (body.classCode !== undefined) {
+      const code = String(body.classCode ?? '').trim();
+      if (!code) throw new Error('班级编号必填');
+      await assertClassCodeUnique(code, body.id);
+      payload.class_code = code;
+    }
+
     if (body.id) {
       // 修改时也走状态机
       if (body.classStatus !== undefined) {
@@ -290,10 +315,7 @@ export const repo: ClassRepo = {
       String(body.className || '').trim() ||
       `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const deptCode = Number(body.deptCode ?? 3);
-    const dupCode = (await tbl(db, 'sms_job', T, STAGE).where({ class_code: classCode, is_deleted: false }).first()) as
-      | Record<string, any>
-      | undefined;
-    if (dupCode) throw new Error(`班级编号「${classCode}」已存在`);
+    await assertClassCodeUnique(classCode);
     const dupName = (await tbl(db, 'sms_job', T, STAGE)
       .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;

@@ -32,10 +32,18 @@ import { validate } from '../middleware/validate';
 import { checkPermission, SUPER_TEST_ROLE } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 import { fmtDate } from '../utils/date';
+// ★ P3 切读层：本文件四张表（t_student_base / t_job_class / t_dorm / t_employment_log）都已归一，
+//   读/写走 tbl()/tblTrx()/tblIns()/tblInsTrx()；列表接口的一处 join 走 tblAs()/tblRef()；
+//   开关关时与原实现等价。
+import { tbl, tblAs, tblRef, tblIns, tblInsTrx, tblTrx } from '../teaching/shared/uniTable';
 
 export const studentRouter = Router();
 
 const TABLE = 't_student_base';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /* ============================================================
  * 1. 查询学生列表（信息档案 - 基础信息）
@@ -84,10 +92,8 @@ studentRouter.get(
       unassigned?: boolean;
     };
 
-    const query = db(TABLE)
-      .leftJoin('t_dorm', function () {
-        this.on('t_student_base.dorm_id', '=', 't_dorm.id');
-      })
+    const query = tblAs(db, DB, TABLE, STAGE, TABLE)
+      .leftJoin(`${tblRef(DB, 't_dorm')} as t_dorm`, 't_student_base.dorm_id', '=', 't_dorm.id')
       .where('t_student_base.is_deleted', false)
       // ⚠️ 就业模块只管「走出咨询阶段」的学生，前面的状态一概不显示
       .whereIn('t_student_base.student_status', [
@@ -106,7 +112,7 @@ studentRouter.get(
     if (q.studentStatus) query.andWhere('t_student_base.student_status', q.studentStatus);
     if (q.education) query.andWhere('t_student_base.education', 'like', `%${q.education}%`);
     if (q.keyword) {
-      query.andWhere((qb) => {
+      query.andWhere((qb: any) => {
         qb.where('t_student_base.student_no', 'like', `%${q.keyword}%`)
           .orWhere('t_student_base.student_name', 'like', `%${q.keyword}%`)
           .orWhere('t_student_base.phone', 'like', `%${q.keyword}%`);
@@ -114,7 +120,7 @@ studentRouter.get(
     }
     // 未分配宿舍：没宿舍ID 或 宿舍号为空
     if (q.unassigned) {
-      query.andWhere((qb) => {
+      query.andWhere((qb: any) => {
         qb.whereNull('t_student_base.dorm_id').orWhere('t_student_base.dorm_no', '');
       });
     }
@@ -147,7 +153,7 @@ studentRouter.get(
         // ⚠️ 这里**只按 class_id 过滤，不做 head_teacher_id 兜底** ——
         //    因为实训班的班主任字段与项目经理同人（斌哥口径：实训阶段班主任由
         //    项目经理担任），用 head_teacher_id 兜底会等于「全放开」，失去隔离。
-        const mine = await db('t_job_class')
+        const mine = await tbl(db, DB, 't_job_class', STAGE)
           .where({ project_manager_id: uid, is_deleted: false })
           // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
           // .whereNot('class_status', ClassStatus.GRADUATED)
@@ -230,14 +236,14 @@ studentRouter.get(
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
 
     if (!row) {
       throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     }
 
     const dorm = row.dorm_id
-      ? await db('t_dorm').where({ id: row.dorm_id, is_deleted: false }).first()
+      ? await tbl(db, DB, 't_dorm', STAGE).where({ id: row.dorm_id, is_deleted: false }).first()
       : null;
 
     res.json(ok({
@@ -307,13 +313,13 @@ studentRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
 
-    const exists = await db(TABLE).where({ student_no: body.studentNo, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ student_no: body.studentNo, is_deleted: false }).first();
     if (exists) {
       throw new BizError(BizCode.STUDENT_NO_EXISTS, `学号 ${body.studentNo} 已存在，请勿重复添加`);
     }
 
     const id = randomUUID();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       student_no: body.studentNo,
       student_name: body.studentName,
@@ -355,13 +361,13 @@ studentRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const exists = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!exists) {
       throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     }
 
     if (body.studentNo !== exists.student_no) {
-      const dup = await db(TABLE)
+      const dup = await tbl(db, DB, TABLE, STAGE)
         .where({ student_no: body.studentNo, is_deleted: false })
         .whereNot('id', body.id)
         .first();
@@ -370,7 +376,7 @@ studentRouter.put(
       }
     }
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       student_no: body.studentNo,
       student_name: body.studentName,
       gender: body.gender,
@@ -404,12 +410,12 @@ studentRouter.delete(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const exists = await db(TABLE).where({ id, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!exists) {
       throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或已被删除');
     }
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -478,7 +484,7 @@ studentRouter.post(
       );
     }
 
-    const stu = await db(TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     // ② 状态校验：必须还在「待就业」
@@ -497,14 +503,14 @@ studentRouter.post(
 
     await db.transaction(async (trx) => {
       // ③ 待就业(9) → 已就业(10)
-      await trx(TABLE).where({ id: stu.id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: stu.id }).update({
         student_status: StudentStatus.EMPLOYED,
         update_time: now,
         update_by: operatorId,
       });
 
       // ④ 记一条就业日志（入职信息）—— 免得单位/岗位/薪资没处存
-      await trx(EMPLOYMENT_LOG_TABLE).insert({
+      await tblInsTrx(trx, DB, EMPLOYMENT_LOG_TABLE, STAGE, {
         id: randomUUID(),
         create_time: now,
         create_by: operatorId,

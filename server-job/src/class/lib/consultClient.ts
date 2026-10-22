@@ -115,12 +115,15 @@ export const consultClient = {
     className?: string | null;
     operatorName?: string;
     operatorTitle?: string;
+    /** ★ 2026-10-22：建档生成的学号，一并回写咨询学生表（后续补费要用） */
+    studentNo?: string;
   }): Promise<ConsultOutcome> {
     return post('/api/consult/student/internal/receive-ack', {
       consultNo: input.consultNo,
       className: input.className ?? null,
       operatorName: input.operatorName || '班主任',
       operatorTitle: input.operatorTitle || '班主任',
+      studentNo: input.studentNo ?? null,
     });
   },
 

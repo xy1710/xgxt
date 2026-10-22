@@ -16,6 +16,10 @@
  *   node tools/bug-record.mjs prune  <hash>                  收敛该 hash 的重复，保留最早一条
  *   node tools/bug-record.mjs audit                          全表查重（按 hash / 标题）
  *
+ * 作者守卫：upsert 默认只处理 menglinglei 的提交，其它作者会**静默跳过**（exit 0）。
+ *   补录别人的改动必须加 --any-author，否则会看到「全部 OK 但一条没进」：
+ *   node tools/bug-record.mjs upsert <hash> --payload f.json --any-author
+ *
  * payload 只需写业务字段（纯文本即可，脚本自动转单选数组）：
  *   {
  *     "BUG标题": "一句人话，说清哪里错了",
@@ -28,6 +32,10 @@
  *
  * 严重等级：P0阻断 / P1严重 / P2一般 / P3 轻微（注意 P3 中间有空格）
  * BUG来源：用户反馈 / 内部测试 / 改造过程中新发现 / 遗留程序改造
+ *
+ * 负责人：默认写「王寒逸」（本机约定，2026-10-22 起）。
+ *   需要归属他人时用环境变量覆盖，不要改源码：
+ *   BUG_OWNER_OPEN_ID=ou_xxx node tools/bug-record.mjs upsert <hash> --payload f.json
  */
 
 import { execFileSync, execSync } from 'node:child_process';
@@ -38,7 +46,11 @@ import { join, resolve } from 'node:path';
 const BASE_TOKEN = 'KHPobyqjZaBiw5sri3XcHWORnub';
 const TABLE_ID = 'tblsOphac4l6EM6E';
 const PROJECT_RECORD_ID = 'recvxTFfo60NKZ'; // 所属项目 → 学管系统
-const OWNER_OPEN_ID = 'ou_bc9379a083f52b683ad4101f805706dd'; // 负责人 → 孟令磊
+// 负责人默认 → 王寒逸。
+// 约定（2026-10-22）：本机提交的缺陷记录一律归属王寒逸。
+// 别的机器 / 别的同事若需归属他人，用环境变量覆盖，不要改这里：
+//   BUG_OWNER_OPEN_ID=ou_xxx node tools/bug-record.mjs upsert ...
+const OWNER_OPEN_ID = process.env.BUG_OWNER_OPEN_ID || 'ou_c1820c66e8f80b2b71ae1bc6e6d51b2e'; // 王寒逸
 
 const SEVERITY = ['P0阻断', 'P1严重', 'P2一般', 'P3 轻微'];
 const SOURCE = ['用户反馈', '内部测试', '改造过程中新发现', '遗留程序改造'];
@@ -372,8 +384,16 @@ function main() {
   }
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8'));
   const info = gitInfo(hash);
-  if (info && !/menglinglei/.test(info.author)) {
+  /**
+   * 作者守卫：默认只写 menglinglei 的提交（历史团队约定）。
+   *
+   * ⚠️ 但它是个**静默跳过**：打印一句「按约定跳过」就 exit 0。
+   * 批量补录别的同事的改动时，若不注意就会看到「48/48 OK、失败 0」，
+   * 实际表里一条没进（2026-10-20 踩过）。补录其它作者必须显式加 --any-author。
+   */
+  if (!opts['any-author'] && info && !/menglinglei/.test(info.author)) {
     console.log(`作者 ${info.author} 不是 menglinglei，按约定跳过（不写缺陷表）。`);
+    console.log('  → 确实要补录这位作者的改动，请加 --any-author 重跑（本次什么都没写）。');
     process.exit(0);
   }
   const fields = normalizePayload(hash, payload, opts.time ? String(opts.time) : info?.time);

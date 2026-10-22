@@ -28,7 +28,9 @@ import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
 const STAGE_ORDER: TeachingStage[] = ['jh', 'class', 'job'];
-const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高部', class: '大学部', job: '实训' };
+// ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
+//   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
+const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高部', class: '大学部', job: '就业部' };
 
 const availableStages = computed(() => STAGE_ORDER.filter((s) => stageVisible('exam', s)));
 
@@ -143,6 +145,8 @@ const form = reactive({
   classId: '',
   examName: '',
   examType: 1,
+  /** 考试类型=其他(5) 时的自定义名称 */
+  examTypeName: '',
   examDate: today(),
   contentTypes: [1] as number[],
   fullScores: {} as Record<string, number | undefined>,
@@ -164,6 +168,7 @@ async function openForm(row?: ExamRow) {
     form.classId = row.classIds[0] || '';
     form.examName = row.examName;
     form.examType = row.examType;
+    form.examTypeName = row.examTypeCustom || '';
     form.examDate = row.examDate;
     form.contentTypes = (d.contents || []).map((c) => c.type);
     form.fullScores = {};
@@ -177,6 +182,7 @@ async function openForm(row?: ExamRow) {
     form.classId = query.classId || '';
     form.examName = '';
     form.examType = 1;
+    form.examTypeName = '';
     form.examDate = today();
     form.contentTypes = [1];
     form.fullScores = {};
@@ -191,6 +197,7 @@ async function submitForm() {
   if (!form.examName.trim()) return ElMessage.warning('请填写考试名称');
   if (!form.classId) return ElMessage.warning('请选择班级');
   if (!form.contentTypes.length) return ElMessage.warning('请至少选择一个考试内容项');
+  if (form.examType === 5 && !form.examTypeName.trim()) return ElMessage.warning('类型选择「其他」时必须填写具体类型名称');
 
   saving.value = true;
   try {
@@ -199,6 +206,7 @@ async function submitForm() {
       id: form.id,
       examName: form.examName.trim(),
       examType: form.examType,
+      examTypeName: form.examType === 5 ? form.examTypeName.trim() : null,
       examDate: form.examDate,
       classIds: [form.classId],
       contents: form.contentTypes.map((t) => ({
@@ -375,6 +383,16 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           <el-select v-model="form.examType" style="width: 160px">
             <el-option v-for="(n, t) in EXAM_TYPE_NAME" :key="t" :label="n" :value="Number(t)" />
           </el-select>
+        </el-form-item>
+        <!-- ★ 选「其他」时给出可自由填写的输入框（落 exam_type_name） -->
+        <el-form-item v-if="form.examType === 5" label="类型名称">
+          <el-input
+            v-model="form.examTypeName"
+            maxlength="50"
+            show-word-limit
+            placeholder="请填写具体类型，如：期末补考 / 技能比武"
+            style="width: 320px"
+          />
         </el-form-item>
         <el-form-item label="考试日期">
           <el-date-picker v-model="form.examDate" type="date" value-format="YYYY-MM-DD" style="width: 160px" />

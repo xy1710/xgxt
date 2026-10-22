@@ -14,7 +14,7 @@ import { assertClassAccess } from '../../middleware/dataScope';
 import { applySyncScope } from '../shared/syncScope';
 import { logApproval, sendNotify, sendNotifyByRole, STUDY_MANAGER_ROLES } from '../shared/flow';
 import { wrap } from '../../middleware/error';
-import { tbl, tblTrx, tblInsTrx, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblInsTrx, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 import { TransferType } from 'shared-types';
 
 /** 本模块只服务大学学段 */
@@ -130,7 +130,7 @@ upgradeRouter.post(
     const maxNo = await maxApplyNo(tbl(db, SRC, 't_class_upgrade_apply', STAGE), 't_class_upgrade_apply', 'SX', ymd);
     const applyNo = buildApplyNo('UPGRADE', seqOfApplyNo(maxNo) + 1);
 
-    const fromStage = (stu.stage as number) ?? 0;
+    const fromStage = readPhaseCode(stu) ?? 0;
     const fromDept = (stu.dept_code as number) ?? 0;
     const id = uuid();
 
@@ -264,7 +264,7 @@ upgradeRouter.post(
       } as never);
 
       const patch: Record<string, unknown> = {
-        stage: apply.to_stage as number,
+        [phaseCodeCol()]: apply.to_stage as number,
         dept_code: apply.to_dept_code as number,
         ...baseUpdate(user),
       };
@@ -284,7 +284,7 @@ upgradeRouter.post(
         //   两者语义也不同（老表这列装的是「升学」，字典 1~5 说的是「岗位交接」）。
         //   → 按开关给对应值：老表模式行为与改写前完全一致，统一表写 6=升学转班。
         //   字典新增 6 这一档是斌哥拍板的，见 shared-types/src/enums.ts 的 CLASS_UPGRADE。
-        transfer_type: USE_UNI_TABLE ? TransferType.CLASS_UPGRADE : ('upgrade' as never),
+        transfer_type: TransferType.CLASS_UPGRADE,
         from_user_id: null,
         from_user_name: (apply.from_class_name as string) ?? null,
         to_user_id: null,

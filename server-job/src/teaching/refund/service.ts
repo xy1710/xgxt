@@ -52,7 +52,7 @@ import {
 } from '../../utils/approval';
 import { applyRefundToFinance } from '../../utils/financeClient';
 // ★ 第 11 批：实训侧退费业务表切读（`t_job_refund` → `t_uni_refund`）
-import { tbl, uniUpdCols } from '../shared/uniTable';
+import { tbl, tblTrx, uniUpdCols } from '../shared/uniTable';
 import type {
   RefundDetail,
   RefundListQuery,
@@ -76,6 +76,14 @@ import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import * as repoJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
+import { assertClassInScope } from '../shared/dataScope';
+
+/* ★ 切读层：审批单 t_job_approval 在 sms_job（学段固定 job），已归一 → 全部切读。
+   ⚠️ 这 3 处 `db(常量)`/`trx(常量)` 形态此前是所有扫描器的盲区（裸扫只认字符串字面量），
+      开关开下 approve 的「惰性补建」查老表查不到 → 每次审批都往统一表重复插一条 DRAFT 单
+      → 「该单还没提交，不能审批」（2026-10-16 由 _e2e-refund-check 开关开跑实锤）。 */
+const APPROVAL_DB = 'sms_job';
+const APPROVAL_STAGE = 'job' as const;
 
 const BIZ = ApprovalBizType.REFUND;
 
@@ -103,9 +111,9 @@ async function visibleStages(user: any): Promise<TeachingStage[]> {
  * ============================================================ */
 
 type Repo = {
-  list: (q: RefundListQuery) => Promise<{ rows: RefundRow[]; total: number }>;
+  list: (q: RefundListQuery, user?: any) => Promise<{ rows: RefundRow[]; total: number }>;
   detail: (id: string) => Promise<RefundRow | null>;
-  studentOptions: (keyword: string, limit: number) => Promise<StudentOption[]>;
+  studentOptions: (keyword: string, limit: number, user?: any) => Promise<StudentOption[]>;
   aggregate: () => Promise<RefundAggregate>;
   insert: (
     conn: any,
@@ -155,7 +163,7 @@ export function toOperator(user: any): Operator {
  */
 async function loadApprovals(ids: string[]): Promise<Record<string, Record<string, any>>> {
   if (!ids.length) return {};
-  const rows = (await db(APPROVAL_TABLE)
+  const rows = (await tbl(db, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE)
     .where({ biz_type: BIZ, is_deleted: false })
     .whereIn('biz_id', ids)
     .orderBy('create_time', 'asc')) as Array<Record<string, any>>;
@@ -224,7 +232,7 @@ export async function list(
   if (stages.length === 1) {
     const stage = stages[0];
     await assertStageView(user, stage);
-    const { rows, total } = await REPOS[stage].list(q);
+    const { rows, total } = await REPOS[stage].list(q, user);
     const ap = await loadApprovals(rows.map((r) => r.id));
     let out = rows.map((r) => withActions(r, ap[r.id], op));
     // ★「只看待我审批」：审批人由**审批单 + 角色**决定（审批单在另一个库），
@@ -240,7 +248,7 @@ export async function list(
   for (const stage of stages) {
     try {
       await assertStageView(user, stage);
-      const { rows, total: t } = await REPOS[stage].list({ ...q, page: 1, size: per });
+      const { rows, total: t } = await REPOS[stage].list({ ...q, page: 1, size: per }, user);
       total += t;
       all.push(...rows);
     } catch {
@@ -271,6 +279,7 @@ export async function detail(id: string, user: any): Promise<RefundDetail> {
   }
   if (!row) throw new BizError(BizCode.REFUND_NOT_FOUND, '退费单不存在');
   await assertStageView(user, row.stage);
+  await assertClassInScope(row.stage, row.classId, user, '该班级退费单');
 
   const ap = await loadApprovals([id]);
   const approval = ap[id];
@@ -309,12 +318,12 @@ export async function studentOptions(
   user: any,
 ): Promise<StudentOption[]> {
   await assertStageView(user, stage);
-  return REPOS[stage].studentOptions(keyword, limit);
+  return REPOS[stage].studentOptions(keyword, limit, user);
 }
 
 export async function classOptions(user: any) {
   const stages = await visibleStages(user);
-  return listClassesOfStages(stages);
+  return listClassesOfStages(stages, user);
 }
 
 /* ============================================================
@@ -423,7 +432,7 @@ async function ensureApproval(
   row: RefundRow,
   op: Operator,
 ): Promise<string> {
-  const existed = (await trx(APPROVAL_TABLE)
+  const existed = (await tblTrx(trx, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE)
     .where({ biz_type: BIZ, biz_id: bizId, is_deleted: false })
     .first()) as Record<string, any> | undefined;
   if (existed) return String(existed.id);
@@ -449,7 +458,7 @@ async function ensureApproval(
       : row.approvalStatus === REFUND_STATUS.PENDING_MANAGER
         ? 1
         : 0;
-  await trx(APPROVAL_TABLE).where({ id }).update({
+  await tblTrx(trx, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE).where({ id }).update({
     status: row.approvalStatus,
     current_step: step,
     current_handler_hint:

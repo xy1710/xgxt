@@ -16,6 +16,8 @@ import type {
 } from '../shared/dto';
 import { EXAM_CONTENT_TYPE_NAME, EXAM_STATUS_NAME, EXAM_TYPE_NAME } from '../shared/dto';
 import { tbl, tblIns } from '../shared/uniTable';
+import { assertExamNotDuplicated } from './uniExamUnique';
+import { applyClassScope } from '../shared/dataScope';
 
 const T = 't_class_exam';
 const F = 't_class_exam_field';
@@ -48,7 +50,8 @@ function mapRow(r: Record<string, any>): ExamRow {
     stageName: '初高部',
     examName: String(r.exam_name ?? ''),
     examType: Number(r.exam_type ?? 0),
-    examTypeName: EXAM_TYPE_NAME[Number(r.exam_type)] ?? '未知',
+    examTypeName: (r.exam_type_name as string) || EXAM_TYPE_NAME[Number(r.exam_type)] || '未知',
+    examTypeCustom: (r.exam_type_name as string) || null,
     examDate: String(r.exam_date ?? '').slice(0, 10),
     classIds: r.class_id ? [String(r.class_id)] : [],
     classNames: String(r.class_name ?? ''),
@@ -56,18 +59,20 @@ function mapRow(r: Record<string, any>): ExamRow {
     contentNames: types.map((t) => EXAM_CONTENT_TYPE_NAME[t] ?? '未知').join(' / '),
     status,
     statusName: EXAM_STATUS_NAME[status] ?? '已提交',
-    creatorName: (r.create_by_name as string) ?? null,
+    creatorName: (r.creator_name as string) || (r.create_by_name as string) || null,
     remark: (r.remark as string) ?? null,
   };
 }
 
-export async function list(q: ExamListQuery): Promise<ExamRow[]> {
+export async function list(q: ExamListQuery, user?: any): Promise<ExamRow[]> {
   const qb = tbl(db, 'sms_class_jh', T, STAGE).where('is_deleted', 0);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.examType) qb.andWhere('exam_type', q.examType);
   if (q.startDate) qb.andWhere('exam_date', '>=', q.startDate);
   if (q.endDate) qb.andWhere('exam_date', '<=', q.endDate);
   if (q.keyword) qb.andWhere('exam_name', 'like', `%${q.keyword}%`);
+  /* ★ 数据范围：班主任只看自己带的班的考试；项目经理/就业按交棒阶段 */
+  if (user && !(await applyClassScope(qb, 'class_id', STAGE, user))) return [];
   const rows = (await qb.orderBy('exam_date', 'desc')) as Array<Record<string, any>>;
   return rows.map(mapRow);
 }
@@ -100,6 +105,14 @@ export async function save(body: ExamSaveBody, userId: string, userName: string)
     | undefined;
   if (!cls) throw new Error('班级不存在');
 
+  /** ★ 同班同日同名查重（任务 #20，见 repo.class.ts 同类注释与迁移 20261016_007） */
+  await assertExamNotDuplicated(db, STAGE, {
+    classIds: [classId],
+    examName: body.examName,
+    examDate: body.examDate,
+    excludeId: body.id,
+  });
+
   const types = (body.contents ?? []).map((c) => Number(c.type));
   const fullMap: Record<string, number> = {};
   for (const c of body.contents ?? []) {
@@ -109,6 +122,8 @@ export async function save(body: ExamSaveBody, userId: string, userName: string)
   const payload = {
     exam_name: body.examName,
     exam_type: body.examType,
+    /* ★ 「其他」时把自定义名称落库（varchar50，见 sql/init/uni-tables.sql） */
+    exam_type_name: body.examType === 5 ? (body.examTypeName || null) : null,
     exam_date: body.examDate,
     class_id: cls.id,
     class_name: cls.class_name,
@@ -129,6 +144,9 @@ export async function save(body: ExamSaveBody, userId: string, userName: string)
     ...payload,
     exam_status: 1, // 草稿
     create_by_name: userName,
+    /* ★ 列表读的是 creator_name（原来只写了 create_by_name） */
+    creator_id: userId,
+    creator_name: userName || null,
     is_deleted: 0,
     create_time: now,
     create_by: userId,

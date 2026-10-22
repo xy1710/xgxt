@@ -20,6 +20,9 @@ import { ok } from '../utils/response';
 import { db } from '../utils/db';
 import { getMyPages } from '../middleware/pagePermission';
 import { PAGE_PERMISSIONS } from '../config/pagePermissions';
+// ★ P3 切读层：本文件跨库读「大学班 t_class_info」与「实训班 t_job_class」，
+//   两表均已归一 → t_uni_class；开关关时跨库表仍带库名前缀，与原实现逐字节等价。
+import { tbl } from '../teaching/shared/uniTable';
 
 export const authRouter = Router();
 
@@ -78,8 +81,14 @@ authRouter.get(
      *    两个库都要捞，否则「多造角色」后登录页下拉只有实训库那一半 */
     const pick = async (idCol: string, nameCol: string) => {
       const map = new Map<string, string>();
-      for (const tbl of ['sms_class.t_class_info', 't_job_class']) {
-        const rows = await db(tbl)
+      // ★ 2026-10-04：大学班在 sms_class.t_class_info、实训班在 sms_job.t_job_class，
+      //   两个库都要捞，否则「多造角色」后登录页下拉只有实训库那一半。
+      //   ⚠️ 当前连接是 sms_job，故 t_class_info 必须带库名前缀（由 tbl() 保证）。
+      for (const src of [
+        { dbName: 'sms_class', table: 't_class_info', stage: 'class' as const },
+        { dbName: 'sms_job', table: 't_job_class', stage: 'job' as const },
+      ]) {
+        const rows = await tbl(db, src.dbName, src.table, src.stage)
           .where('is_deleted', false)
           .whereNotNull(idCol)
           .distinct()
@@ -115,9 +124,12 @@ authRouter.get(
  */
 async function pickProjectManagers(): Promise<Array<{ id: string; name: string }>> {
   const map = new Map<string, string>();
-  // ★ 大学班（sms_class）+ 实训班（t_job_class）两库都捞项目经理
-  for (const tbl of ['sms_class.t_class_info', 't_job_class']) {
-    const pm = await db(tbl)
+  // ★ 大学班（sms_class.t_class_info）+ 实训班（sms_job.t_job_class）两库都捞项目经理
+  for (const src of [
+    { dbName: 'sms_class', table: 't_class_info', stage: 'class' as const },
+    { dbName: 'sms_job', table: 't_job_class', stage: 'job' as const },
+  ]) {
+    const pm = await tbl(db, src.dbName, src.table, src.stage)
       .where('is_deleted', false)
       .whereNotNull('project_manager_id')
       .distinct()

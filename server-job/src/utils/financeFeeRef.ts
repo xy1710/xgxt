@@ -24,13 +24,20 @@
  */
 
 import { db } from './db';
+// ★ 统一表切读层：JH_FEE_TABLE / COMMON_FEE_TABLE 已归一（都映射到 t_uni_fee），
+//   改用 tbl() 路由；FINANCE_FEE_TABLE（sms_finance）未归一，保持裸 db() 访问。
+import { tbl } from '../teaching/shared/uniTable';
 
-/** 财务管理 · 缴费单表（实时的权威源） */
+/** 财务管理 · 缴费单表（实时的权威源）—— sms_finance 未归一，保持裸访问 */
 const FINANCE_FEE_TABLE = 'sms_finance.t_finance_fee';
-/** 初高的缴费台账（兜底副本，由 finance/services/class-sync.ts 推送） */
-const JH_FEE_TABLE = 'sms_class_jh.t_class_fee';
-/** 班级管理（大学部）的缴费同步副本（需求三既有链路） */
-const COMMON_FEE_TABLE = 'sms_common.t_class_fee_sync';
+/** 初高的缴费台账（兜底副本，由 finance/services/class-sync.ts 推送）—— 已归一 */
+const JH_DB = 'sms_class_jh';
+const JH_STAGE = 'jh' as const;
+const JH_FEE_TABLE = 't_class_fee';
+/** 班级管理（大学部）的缴费同步副本（需求三既有链路）—— 已归一 */
+const COMMON_DB = 'sms_common';
+const COMMON_STAGE = 'class' as const;
+const COMMON_FEE_TABLE = 't_class_fee_sync';
 
 /**
  * 部门 —— 与财务 DeptCode 数值一致。
@@ -257,7 +264,7 @@ export async function fetchStudentFeeRecords(
 
   try {
     if (mirror === 'class-jh') {
-      const base = db(JH_FEE_TABLE).where({ student_no: no, is_deleted: false });
+      const base = tbl(db, JH_DB, JH_FEE_TABLE, JH_STAGE).where({ student_no: no, is_deleted: false });
       // 优先用财务推过来的行；一条都没有才退回本地台账（避免与种子数据重复展示）
       const synced = (await base
         .clone()
@@ -296,7 +303,7 @@ export async function fetchStudentFeeRecords(
     }
 
     // 大学部 / 实训：共享副本 sms_common.t_class_fee_sync
-    const rows = (await db(COMMON_FEE_TABLE)
+    const rows = (await tbl(db, COMMON_DB, COMMON_FEE_TABLE, COMMON_STAGE)
       .where({ student_no: no, is_deleted: false })
       .orderBy('pay_date', 'desc')) as Array<Record<string, any>>;
 

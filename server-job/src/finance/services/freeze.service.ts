@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 import { BizCode, StudentStatus, STUDENT_STATUS_NAME, DEPT_NAME } from 'shared-types/finance';
 import { db } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
-import { toDateStr, toTimeStr, freezeFeeByStudent, FEE_TABLE } from './fee.service';
+import { toDateStr, toTimeStr, freezeFeeByStudent, FEE_TABLE, isTempStudentNo } from './fee.service';
 
 export const FREEZE_TABLE = 't_finance_freeze';
 
@@ -51,7 +51,8 @@ export function toFreezeListItem(r: any) {
   return {
     id: r.id,
     studentId: r.student_id,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 未分班（只有 ZX 临时号）→ 学号留空，前端显示「—」
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     studentName: r.student_name,
     classId: r.class_id ?? undefined,
     className: r.class_name ?? undefined,

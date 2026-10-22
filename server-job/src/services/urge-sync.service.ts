@@ -22,9 +22,14 @@
 
 import { db } from '../utils/db';
 import { classSync } from '../utils/classSync';
+// ★ P3 切读层：`t_job_fee_call`（sms_job）**已归一** → 读走 tbl()。
+import { tbl } from '../teaching/shared/uniTable';
 
-/** 催费单表（就业库） */
+/** 催费单表（就业库）—— ★ 已归一 → t_uni_fee */
 const FEE_CALL_TABLE = 't_job_fee_call';
+/** 实训库（本文件的 `db` 就连在这里）+ 学段取值 */
+const DB = 'sms_job';
+const STAGE = 'job' as const;
 
 /** 催缴状态：1 待催缴 / 2 催缴中 / 3 已缴清 */
 const CALL_STATUS_PAID = 3;
@@ -92,7 +97,7 @@ export function feeCallToUrgeItem(row: Record<string, any>): Record<string, unkn
 export async function syncFeeCallToClass(feeCallId: string): Promise<void> {
   if (!feeCallId) return;
   try {
-    const row = (await db(FEE_CALL_TABLE)
+    const row = (await tbl(db, DB, FEE_CALL_TABLE, STAGE)
       .where({ id: feeCallId, is_deleted: false })
       .first()) as Record<string, any> | undefined;
     if (!row) return; // 已作废/已删，没什么可同步的

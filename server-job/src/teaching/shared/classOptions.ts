@@ -15,6 +15,7 @@ import { db as classJhDb } from '../../class-jh/utils/db';
 import { db as classDb } from '../../class/db';
 import { db as jobDb } from '../../utils/db';
 import { tbl } from './uniTable';
+import { visibleClassIds } from './dataScope';
 import type { TeachingStage } from './dto';
 import { TEACHING_STAGE_NAME } from './dto';
 
@@ -59,9 +60,8 @@ const CLASS_TABLE: Record<
  * 取某学段的班级列表
  *
  * ★ 第 4 期步骤 2：改走 `tbl()` 路由（开关开=读统一表）
- *   这个函数被出勤/考试/成绩/退费/宿舍五个域共用，
- *   班级下拉取不到数据 → 五个域的界面同时空掉，
- *   所以它是切读的关键一环，不能漏。
+ * ★ 2026-10-19：可选传 `user` → 按角色数据范围过滤（项目经理只看自己的实训班等）。
+ *    不传 = 不过滤（内部工具/历史调用保持原行为）。
  */
 export async function listClassesByStage(
   stage: TeachingStage | 'emp',
@@ -78,9 +78,18 @@ export async function listClassesByStage(
       .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
     return rows.map(pick);
   }
-  // ★ 2026-10-19：实训与就业部共用 t_job_class、dept 都是 3，靠 stage_key 区分
+  // ★ 实训与就业部共用 t_job_class、dept 都是 3
   const qb = tbl(jobDb, 'sms_job', 't_job_class', stage).where('is_deleted', 0);
-  qb.andWhere('stage_key', stage === 'emp' ? 'emp' : 'job');
+
+  /* ★ 2026-10-22：去掉 stage_key='job' 过滤 —— tbl(...,'job') 已按 edu_stage='job'
+     圈定实训范围；再叠 stage_key 会把「stage_key 为 NULL 的行」（夹具/历史数据）
+     静默排除（exam/dorm 套件的班级下拉用例实测被抓）。 */
+  if (stage === 'emp') {
+    // ★ 2026-10-21：学生档案删掉「就业」学段后，就业部成了 sms_job 的唯一入口，
+    //   班级下拉必须列**整个部门**（dept_code=3）——
+    //   现存 SX2601 的 stage_key 是 'job'，按 stage_key='emp' 过滤会一个班都列不出来。
+    qb.andWhere('dept_code', 3);
+  }
   const rows = (await qb.select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{
     id: string;
     name: string;
@@ -119,10 +128,14 @@ export async function classNamesByIds(
 }
 
 /** 取多个学段的班级，打上学段标签 */
-export async function listClassesOfStages(stages: TeachingStage[]): Promise<ClassOption[]> {
+export async function listClassesOfStages(stages: TeachingStage[], user?: any): Promise<ClassOption[]> {
   const out: ClassOption[] = [];
   for (const s of stages) {
+    /* ★ 班级下拉也要按数据范围过滤（班主任只看到自己带的班）。
+       远端把 listClassesByStage 改成不带 user，这里统一在合并处过滤一次。 */
+    const allow = user ? await visibleClassIds(s, user) : null;
     for (const c of await listClassesByStage(s)) {
+      if (allow && !allow.includes(c.id)) continue;
       out.push({ stage: s, stageName: TEACHING_STAGE_NAME[s], id: c.id, name: c.name });
     }
   }

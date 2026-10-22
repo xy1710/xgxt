@@ -127,7 +127,14 @@
       >
         <!-- 只有可核对的才能勾选，避免财务误操作 -->
         <el-table-column type="selection" width="46" :selectable="isSelectable" />
-        <el-table-column prop="studentNo" label="学号" width="120" />
+        <!--
+          ★ 2026-10-22 用户口径：未分班（咨询阶段交的试学费 / 正式学费）没有学号，
+            财务这里显示「—」，分班建档后才显示真实学号。
+            后端已把 ZX 临时号视为空值返回（toFeeListItem.isTempStudentNo）。
+        -->
+        <el-table-column label="学号" width="120">
+          <template #default="{ row }">{{ dash(row.studentNo) }}</template>
+        </el-table-column>
         <el-table-column prop="studentName" label="姓名" width="90" />
         <el-table-column prop="className" label="班级" width="100">
           <template #default="{ row }">{{ dash(row.className) }}</template>
@@ -247,7 +254,7 @@
     <!-- ============ 详情弹窗 ============ -->
     <el-dialog v-model="detailVisible" title="缴费单详情" width="720px" top="6vh">
       <el-descriptions v-if="detail" :column="2" border size="small">
-        <el-descriptions-item label="学号">{{ detail.studentNo }}</el-descriptions-item>
+        <el-descriptions-item label="学号">{{ dash(detail.studentNo) }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ detail.studentName }}</el-descriptions-item>
         <el-descriptions-item label="班级">{{ dash(detail.className) }}</el-descriptions-item>
         <el-descriptions-item label="部门">{{ dash(detail.deptName) }}</el-descriptions-item>
@@ -419,7 +426,7 @@
                   effect="plain"
                   class="shared-tag"
                 >
-                  {{ s.studentName }}（{{ s.studentNo }}）· {{ s.feeTypeName }}
+                  {{ s.studentName }}（{{ s.studentNo || '—' }}）· {{ s.feeTypeName }}
                 </el-tag>
               </span>
             </div>

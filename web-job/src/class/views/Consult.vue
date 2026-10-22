@@ -159,8 +159,9 @@
       </el-form-item>
       <el-row :gutter="16">
         <el-col :span="12">
+          <!-- ★ 2026-10-22：学号由系统按「LZ+班级编号+序号」生成，接收时不再手填 -->
           <el-form-item label="学号">
-            <el-input v-model="receiveForm.studentNo" placeholder="留空则由系统生成" />
+            <el-input v-model="receiveForm.studentNo" disabled placeholder="按「LZ+班级编号+序号」自动生成" />
           </el-form-item>
         </el-col>
         <el-col :span="12">

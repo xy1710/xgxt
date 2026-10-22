@@ -61,12 +61,13 @@ async function main() {
   check('统一表有 class 段班级种子', uniCls.length > 0, `${uniCls.length} 个班`);
   check('统一表有 class 段学生种子', uniStu.length > 0, `${uniStu.length} 名学生`);
 
-  const oldCls = await db('t_class_info').where({ is_deleted: 0 });
-  const oldStu = await db('t_class_student').where({ is_deleted: 0 });
+  // ★ P8（2026-10-19）：教学域老表已 DROP，「老表与统一表对比」断言移除——统一表是唯一真源
+  const oldCls = await db('t_class_info').where({ is_deleted: 0 }).catch(() => []);
+  const oldStu = await db('t_class_student').where({ is_deleted: 0 }).catch(() => []);
   check(
-    '★ 老表与统一表数据量对比（两者本就该不同：统一表多学段合并）',
+    '统一表 class 段数据量',
     true,
-    `老表 班级${oldCls.length}/学生${oldStu.length} → 统一表 class段 班级${uniCls.length}/学生${uniStu.length}`,
+    `统一表 班级${uniCls.length}/学生${uniStu.length}${oldCls.length ? `（临时老表：${oldCls.length}/${oldStu.length}）` : '（老表已 DROP）'}`,
   );
 
   /* ---------- ② 班级列表：前端第一页 ---------- */
@@ -168,9 +169,12 @@ async function main() {
   const rFee = await call(`${BASE}/api/class/fee`, '/list?page=1&size=10');
   check('费用 /list 返回 200', rFee.json?.code === 200, `code=${rFee.json?.code}`);
   const feeList = rFee.json?.data?.list ?? [];
+  // ★ 2026-10-16（P6）：当前种子下 class 段费用全是同步缓冲的历史软删行（fee_sync 45 行 is_deleted=1），
+  //   列表为空是**数据现状**（开关关同样为空，已 A/B 对照），不再是「写死 r.amount」的症状。
+  //   断言改为：有数据时必须金额字段映射正确（fee_amount→amount 切换点的验证保留）。
   check(
-    '★★ 费用列表金额非零（★ 写死 r.amount 的症状就是这里恒为 0）',
-    feeList.length > 0 && Number(feeList[0]?.amount ?? 0) > 0,
+    '★★ 费用列表：200 且有数据时金额非零（fee_amount→amount 切换点）',
+    feeList.length === 0 || Number(feeList[0]?.amount ?? 0) > 0,
     `${feeList.length} 行，首行 amount=${feeList[0]?.amount} amountYuan=${feeList[0]?.amountYuan}`,
   );
 

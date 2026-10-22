@@ -19,6 +19,7 @@ import {
   mirrorRow,
   req,
   startServices,
+  USE_UNI,
 } from './_e2e-lib.mjs';
 
 /** 把 [table,id][] 聚成 {table: [ids]}，便于一次 whereIn 删干净 */
@@ -43,6 +44,15 @@ const TAG = '【自检】';
   const jobDb = conn(process.env.DB_NAME || 'sms_job');
   // ★ 第 4 期步骤 1：统一表连接
   const uniDb = conn('sms_common');
+  // ★ P6 适配：断言/清理按开关分流（开关开时产品写 t_uni_exam_score）
+  const scoreT = (stage) =>
+    USE_UNI
+      ? uniDb('t_uni_exam_score')
+      : stage === 'class'
+        ? classDb('t_class_grade')
+        : stage === 'jh'
+          ? jhDb('t_class_exam_score')
+          : jobDb('t_job_exam_score');
   const made = { jhClass: null, classCls: null, jobClass: null, students: [], exams: [], scores: [], uni: [] };
 
   /**
@@ -63,6 +73,9 @@ const TAG = '【自检】';
     check('服务就绪（后端 8004 + 前端 5173）', backendReady && frontendReady);
 
     const tokenJh = await login('sunmin'); // 初高：有 classjh:score:view
+    /* ★ 数据范围按责任人过滤后，夹具班必须挂到登录人名下 */
+    const decodeUid = (tk) => { try { return JSON.parse(Buffer.from(String(tk).split('.')[1], 'base64').toString()).userId || ''; } catch { return ''; } };
+    const jhHeadId = decodeUid(tokenJh);
     // ★ 大学/实训的成绩页只授权给校长+管理员 → 用 qiansy(校长)
     const tokenAll = await login('qiansy');
     const tokenAdmin = await login('admin');
@@ -96,6 +109,8 @@ const TAG = '【自检】';
         id: jhClassId,
         class_name: `${TAG}成绩初高班`,
         stage: 201,
+        /* ★ 数据范围按责任人过滤：夹具班必须挂到 sunmin 名下，否则她看不到/不能录 */
+        head_teacher_id: jhHeadId || null,
         head_teacher_name: '自检班主任',
         teacher_name: '自检教员',
         is_deleted: 0,
@@ -234,7 +249,7 @@ const TAG = '【自检】';
       },
     });
     check('初高成绩保存成功', rJh.json?.code === 200, rJh.json?.message || '');
-    const jhRows = (await jhDb('t_class_exam_score').where({ exam_id: jhExam, is_deleted: 0 }).orderBy('student_no'));
+    const jhRows = (await scoreT('jh').where({ exam_id: jhExam, is_deleted: 0 }).orderBy('student_no'));
     check(
       '★ 初高公式：四项求和',
       jhRows.length === 2 && Number(jhRows[0]?.score_total) === 300 && Number(jhRows[1]?.score_total) === 40,
@@ -253,7 +268,7 @@ const TAG = '【自检】';
       body: { stage: 'class', examId: clsExam, rows: [{ studentId: clsStu, writtenScore: 80, interviewScore: 60, examResult: 1 }] },
     });
     check('大学成绩保存成功', rCls.json?.code === 200, rCls.json?.message || '');
-    const clsRows = (await classDb('t_class_grade').where({ exam_id: clsExam, is_deleted: 0 }));
+    const clsRows = (await scoreT('class').where({ exam_id: clsExam, is_deleted: 0 }));
     check(
       '★ 大学公式：笔试×0.5 + 面试×0.5（机试缺失按 0）',
       clsRows.length === 1 && Number(clsRows[0]?.comp_score) === 70,
@@ -266,7 +281,7 @@ const TAG = '【自检】';
       token: tokenAll,
       body: { stage: 'class', examId: clsExam, rows: [{ studentId: clsStu, writtenScore: 80, interviewScore: 60, examResult: 2 }] },
     });
-    const clsRows2 = (await classDb('t_class_grade').where({ exam_id: clsExam, is_deleted: 0 }));
+    const clsRows2 = (await scoreT('class').where({ exam_id: clsExam, is_deleted: 0 }));
     check('★ 大学手选「未通过」也生效', Number(clsRows2[0]?.exam_result) === 2, `exam_result=${clsRows2[0]?.exam_result}（传 2）`);
 
     /* ---------- F. ★ 实训：两次加权 + 笔试均分 ---------- */
@@ -276,7 +291,7 @@ const TAG = '【自检】';
       body: { stage: 'job', examId: jobExam, rows: [{ studentId: jobStuBase, writtenScore: 80, machineScore: 90, interviewScore: 70 }] },
     });
     check('实训成绩保存成功', rJob.json?.code === 200, rJob.json?.message || '');
-    const jobRows = (await jobDb('t_job_exam_score').where({ exam_id: jobExam, is_deleted: 0 }));
+    const jobRows = (await scoreT('job').where({ exam_id: jobExam, is_deleted: 0 }));
     check(
       '★ 实训笔试均分：卷面×0.5 + 机试×0.5',
       jobRows.length === 1 && Number(jobRows[0]?.written_avg) === 85,

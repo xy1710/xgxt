@@ -43,7 +43,10 @@
         empty-text="暂无匹配数据"
       >
         <el-table-column prop="orderNo" label="退费单号" width="130" />
-        <el-table-column prop="studentNo" label="学号" width="115" />
+        <!-- 未分班的学生没有学号，显示「—」（与缴费核对台同口径） -->
+        <el-table-column label="学号" width="115">
+          <template #default="{ row }">{{ dash(row.studentNo) }}</template>
+        </el-table-column>
         <el-table-column prop="studentName" label="姓名" width="90" />
         <el-table-column prop="className" label="班级" width="85">
           <template #default="{ row }">{{ dash(row.className) }}</template>
@@ -118,7 +121,7 @@
               {{ detail.refundStatusName }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="学号">{{ detail.studentNo }}</el-descriptions-item>
+          <el-descriptions-item label="学号">{{ dash(detail.studentNo) }}</el-descriptions-item>
           <el-descriptions-item label="姓名">{{ detail.studentName }}</el-descriptions-item>
           <el-descriptions-item label="班级">{{ dash(detail.className) }}</el-descriptions-item>
           <el-descriptions-item label="部门">{{ dash(detail.deptName) }}</el-descriptions-item>

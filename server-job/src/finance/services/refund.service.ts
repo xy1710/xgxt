@@ -27,7 +27,7 @@ import {
 import { db } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { nextRefundOrderNo, nextBillNoForRefund } from '../utils/orderNo';
-import { toDateStr, toTimeStr } from './fee.service';
+import { toDateStr, toTimeStr, isTempStudentNo } from './fee.service';
 import { REFUND_SOURCE_NAME } from 'shared-types/finance';
 
 export const REFUND_TABLE = 't_finance_refund';
@@ -39,7 +39,8 @@ export function toRefundListItem(r: any) {
     id: r.id,
     orderNo: r.order_no,
     studentId: r.student_id,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 未分班（只有 ZX 临时号）→ 学号留空，前端显示「—」
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     studentName: r.student_name,
     classId: r.class_id ?? undefined,
     className: r.class_name ?? undefined,

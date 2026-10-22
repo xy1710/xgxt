@@ -95,6 +95,9 @@ async function buildRow(db, table, provided) {
 
     const tokenAdmin = await login('admin');
     const tokenJh = await login('sunmin'); // 初高班主任（只有 classjh:exam:view）
+    /* ★ 数据范围按责任人过滤后，夹具班必须挂到登录人名下 */
+    const decodeUid = (tk) => { try { return JSON.parse(Buffer.from(String(tk).split('.')[1], 'base64').toString()).userId || ''; } catch { return ''; } };
+    const jhHeadId = decodeUid(tokenJh);
     // ★ 大学 / 实训的考试页只授权给「校长 + 管理员」，所以用 qiansy（校长）测写入；
     //   zhouj（就业老师，无考试页权限）专门用来验证「无权限被拦」。
     const tokenAll = await login('qiansy'); // 校长：三学段考试权限齐全
@@ -115,6 +118,8 @@ async function buildRow(db, table, provided) {
         id: jhClassId,
         class_name: `${TAG}考试初高班`,
         stage: 201,
+        /* ★ 数据范围按责任人过滤：夹具班必须挂到 sunmin 名下，否则她读不到详情 */
+        head_teacher_id: jhHeadId || null,
         head_teacher_name: '自检班主任',
         teacher_name: '自检教员',
         is_deleted: 0,

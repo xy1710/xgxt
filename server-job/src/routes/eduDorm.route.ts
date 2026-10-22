@@ -35,6 +35,10 @@ import {
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
+// ★ P3 切读层：本文件**跨域只读**的那几张老表已归一 → 走 tbl() / tblTrx()；
+//   `sms_edu` 自己的 6 张表（ROOM / BED / ASSIGN / CHANGE / QUIT / CHECKOUT）
+//   尚未归一（无统一表）→ 保持裸访问，见下方常量区的分组注释。
+import { tbl, tblTrx } from '../teaching/shared/uniTable';
 import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
 // ★ 2026-10-03 合并：教务审批时要能"跨库回写"就业侧的申请单 + 床位
@@ -46,6 +50,12 @@ import { syncEduDormToClass } from '../services/dorm-sync.service';
 
 export const dormRouter = Router();
 
+/**
+ * ★ 分组：以下 6 张常量是 **教务自己** 的表（sms_edu），
+ *   全库**未归一**（sms_edu 域没有统一表）→ 保持裸访问 `db(常量)`。
+ *   注：`CHANGE` / `QUIT` 这两张老表在 `_uni-readiness.mjs` 里是**空表**，
+ *   但「申请单」由实训侧同步写入（`dormBridge`），不能想当然当成死表。
+ */
 const ROOM = 'sms_edu.t_edu_dorm_room';
 const BED = 'sms_edu.t_edu_dorm_bed';
 const CHANGE = 'sms_edu.t_edu_dorm_change_apply';
@@ -53,7 +63,13 @@ const QUIT = 'sms_edu.t_edu_dorm_quit_apply';
 const CHECKOUT = 'sms_edu.t_edu_dorm_checkout';
 const ASSIGN = 'sms_edu.t_edu_dorm_assignment';
 
-// ★ 2026-10-03 合并：实训宿舍（在就业库，只读并进教务总名单）
+/**
+ * ★ 2026-10-03 合并：实训宿舍（在就业库，只读并进教务总名单）
+ *
+ * ★ P3 切读层：这 3 张表（外加下面的 `t_job_dorm_change`）**已归一** →
+ *   读写一律走 `tbl(db, JOB_DB, 表名, JOB_STAGE)` / `tblTrx(trx, …)`，
+ *   不能再直接 `db('t_job_dorm')`（开关开时会绕过统一表）。
+ */
 const JOB_DORM = 't_job_dorm';
 const JOB_BED = 't_job_dorm_bed';
 const JOB_STUDENT = 't_student_base';
@@ -71,8 +87,19 @@ const JOB_STUDENT = 't_student_base';
  * 【床位号要转成「1-上/1-下」】
  *   大学部存的是纯序号，全项目约定是「奇上偶下」：1→1上 / 2→1下 / 3→2上 / 4→2下。
  *   ⚠️ 转换只在查询时做，**不改存量数据** —— 8003 那边也在读这个字段。
+ *
+ * ★ P3 切读层：老写法是「库.表」全限定字符串，`tbl()` 要把「库名 + 表名」分开传，
+ *   所以拆成 CLASS_DB / CLASS_STUDENT 两个常量（与 `src/routes/dorm.route.ts` 同款）。
  */
-const CLASS_STUDENT = 'sms_class.t_class_student';
+const CLASS_STUDENT = 't_class_student';
+const CLASS_DB = 'sms_class';
+/** 大学部在统一表 `edu_stage` 里的取值 */
+const CLASS_STAGE = 'class' as const;
+
+/** ★ 实训/就业侧四张跨域只读表（与 eduDorm 同库：sms_job） */
+const JOB_DB = 'sms_job';
+/** 实训在统一表 `edu_stage` 里的取值 */
+const JOB_STAGE = 'job' as const;
 
 /** 纯数字床位序号 → 「1-上 / 1-下」文本（奇上偶下）。非数字原样返回。 */
 function classBedNoOf(v: any): string {
@@ -343,14 +370,14 @@ dormRouter.get(
      * 斌哥 2026-10-03：教务的「宿舍总名单」里也要能看到实训的名单。
      * 做法同学生档案 —— 查询时并进来，数据仍只存在就业库，这边只读。
      * ========================================================================= */
-    const jobDormQuery = db(JOB_DORM).where('is_deleted', false);
+    const jobDormQuery = tbl(db, JOB_DB, JOB_DORM, JOB_STAGE).where('is_deleted', false);
     if (q.building) jobDormQuery.andWhere('building', q.building);
     if (q.category) jobDormQuery.andWhere('dorm_gender', q.category);
     const jobDorms = await jobDormQuery.clone().select('*').orderBy(['building', 'room_no']);
 
     const jobDormIds = jobDorms.map((d: any) => d.id);
     const jobBeds = jobDormIds.length
-      ? await db(JOB_BED)
+      ? await tbl(db, JOB_DB, JOB_BED, JOB_STAGE)
           .whereIn('dorm_id', jobDormIds)
           .where('is_deleted', false)
           .orderBy(['dorm_id', 'bed_no'])
@@ -361,7 +388,7 @@ dormRouter.get(
     // 就业床位表只存了姓名/学号，班级和班主任要回学生表拿
     const jobStuIds = (jobBeds as any[]).map((b) => b.student_id).filter(Boolean);
     const jobStus = jobStuIds.length
-      ? await db(JOB_STUDENT)
+      ? await tbl(db, JOB_DB, JOB_STUDENT, JOB_STAGE)
           .whereIn('id', jobStuIds)
           .select('id', 'class_name', 'head_teacher_name')
       : [];
@@ -403,7 +430,7 @@ dormRouter.get(
      *    所以这里是「按房间号动态分组」聚合出一间间宿舍。
      * ========================================================================= */
     // 只取「住着人」的学生 —— 没宿舍号的（ dorm_no 为空）不生成房间
-    const classStuQuery = db(CLASS_STUDENT)
+    const classStuQuery = tbl(db, CLASS_DB, CLASS_STUDENT, CLASS_STAGE)
       .where('is_deleted', false)
       .whereNotNull('dorm_no')
       .whereNot('dorm_no', '');
@@ -575,13 +602,13 @@ dormRouter.get(
     const occupiedBeds = Number(bedAgg?.occupied ?? 0);
 
     /* ---- 实训（sms_job，只读并入）---- */
-    const jobDorms = (await db(JOB_DORM).where('is_deleted', false).select('id', 'dorm_gender', 'bed_count')) as any[];
-    const jobBeds = (await db(JOB_BED).where('is_deleted', false).select('dorm_id', 'student_no')) as any[];
+    const jobDorms = (await tbl(db, JOB_DB, JOB_DORM, JOB_STAGE).where('is_deleted', false).select('id', 'dorm_gender', 'bed_count')) as any[];
+    const jobBeds = (await tbl(db, JOB_DB, JOB_BED, JOB_STAGE).where('is_deleted', false).select('dorm_id', 'student_no')) as any[];
 
     /* ---- ★ 2026-10-05 大学部（sms_class，只读并入）----
      * 没有房间表/床位表，「间数」按 dorm_building+dorm_no 组合数算，
      * 「床位数」按学生实际占用的床位数算（拿不到额定人数）。 */
-    const classStus = (await db(CLASS_STUDENT)
+    const classStus = (await tbl(db, CLASS_DB, CLASS_STUDENT, CLASS_STAGE)
       .where('is_deleted', false)
       .whereNotNull('dorm_no')
       .whereNot('dorm_no', '')
@@ -643,7 +670,7 @@ dormRouter.get(
 
     // ② 实训
     {
-      const q = db(JOB_DORM).where('is_deleted', false).distinct('building');
+      const q = tbl(db, JOB_DB, JOB_DORM, JOB_STAGE).where('is_deleted', false).distinct('building');
       if (category) q.andWhere('dorm_gender', category);
       const rows = (await q) as any[];
       for (const r of rows) if (r.building) set.add(str(r.building));
@@ -651,7 +678,7 @@ dormRouter.get(
 
     // ③ ★ 大学部（寝别未知 → 传了类别也给，免得筛不出来）
     {
-      const rows = (await db(CLASS_STUDENT)
+      const rows = (await tbl(db, CLASS_DB, CLASS_STUDENT, CLASS_STAGE)
         .where('is_deleted', false)
         .whereNotNull('dorm_no')
         .whereNot('dorm_no', '')
@@ -1605,10 +1632,11 @@ async function auditJobApply(
   reason: string | undefined,
   operator: any,
 ): Promise<void> {
+  /** 就业侧的换宿申请单（★ 已归一 → 走 tblTrx，见常量区注释） */
   const JOB_CHANGE = 't_job_dorm_change';
 
   await db.transaction(async (trx) => {
-    // ① 改教务这条申请单
+    // ① 改教务这条申请单（sms_edu，未归一 → 保持裸访问）
     await trx(applyTable)
       .where({ id: applyRow.id })
       .update({
@@ -1619,7 +1647,7 @@ async function auditJobApply(
       });
 
     // ② 回写就业侧
-    const jobRow = await trx(JOB_CHANGE)
+    const jobRow = await tblTrx(trx, JOB_DB, JOB_CHANGE, JOB_STAGE)
       .where({ id: applyRow.source_id, is_deleted: false })
       .first();
     if (!jobRow) {
@@ -1628,7 +1656,7 @@ async function auditJobApply(
 
     if (approve) {
       const result = await doApprove(jobRow.approval_id, operator, undefined, trx);
-      await trx(JOB_CHANGE).where({ id: jobRow.id }).update({
+      await tblTrx(trx, JOB_DB, JOB_CHANGE, JOB_STAGE).where({ id: jobRow.id }).update({
         approval_status: result.status,
         update_time: new Date(),
         update_by: operator.userId,
@@ -1639,7 +1667,7 @@ async function auditJobApply(
       }
     } else {
       await doReject(jobRow.approval_id, operator, reason || '教务驳回', trx);
-      await trx(JOB_CHANGE).where({ id: jobRow.id }).update({
+      await tblTrx(trx, JOB_DB, JOB_CHANGE, JOB_STAGE).where({ id: jobRow.id }).update({
         approval_status: ApprovalStatus.REJECTED,
         update_time: new Date(),
         update_by: operator.userId,

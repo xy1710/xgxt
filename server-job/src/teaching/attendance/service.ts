@@ -33,6 +33,7 @@ import type {
 import { TEACHING_STAGE_NAME, TEACHING_STAGES } from '../shared/dto';
 import { getScope } from '../shared/conf';
 import { listClassesOfStages, type ClassOption } from '../shared/classOptions';
+import { assertClassInScope } from '../shared/dataScope';
 import {
   assertStageCode,
   visibleStagesBy,
@@ -40,7 +41,7 @@ import {
 } from '../shared/stageAccess';
 
 type Repo = {
-  list: (q: AttendanceListQuery) => Promise<AttendanceRow[]>;
+  list: (q: AttendanceListQuery, user?: any) => Promise<AttendanceRow[]>;
   detail: (id: string) => Promise<AttendanceDetail | null>;
   board: (classId: string, date: string) => Promise<AttendanceBoard>;
   save: (
@@ -90,7 +91,7 @@ export async function listAttendance(
   }
   if (q.stage) await assertStageView(user, q.stage);
 
-  const parts = await Promise.all(stages.map((s) => REPOS[s].list(q)));
+  const parts = await Promise.all(stages.map((s) => REPOS[s].list(q, user)));
   const merged = parts.flat();
 
   // 统一按日期倒序，同日按班级名
@@ -117,6 +118,7 @@ export async function exportAttendance(q: AttendanceListQuery, user: any): Promi
 export async function getDetail(stage: TeachingStage, id: string, user: any): Promise<AttendanceDetail> {
   await assertStageView(user, stage);
   const d = await REPOS[stage].detail(id);
+  await assertClassInScope(stage, d?.record?.classId, user, "该班级出勤");
   if (!d) throw new BizError(BizCode.ATTENDANCE_NOT_FOUND, '出勤记录不存在');
   return d;
 }
@@ -149,7 +151,7 @@ export async function saveAttendance(body: AttendanceSaveBody, user: any) {
  * ============================================================ */
 
 export async function listClassOptions(user: any): Promise<ClassOption[]> {
-  return listClassesOfStages(await visibleStages(user));
+  return listClassesOfStages(await visibleStages(user), user);
 }
 
 /* ============================================================
@@ -166,7 +168,7 @@ export async function attendanceSummary(
 
   const out: AttendanceSummary[] = [];
   for (const s of stages) {
-    const rows = await REPOS[s].list({ ...q, stage: s, page: 1, size: Number.MAX_SAFE_INTEGER });
+    const rows = await REPOS[s].list({ ...q, stage: s, page: 1, size: Number.MAX_SAFE_INTEGER }, user);
     const targetRate = scopes[s].targetRate;
     const classes = new Set(rows.map((r) => r.classId));
     const avgRate = rows.length

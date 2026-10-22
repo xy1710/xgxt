@@ -27,17 +27,18 @@ import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } 
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
+import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 
 const T = 't_job_student_leave';
 const S = 't_student_base';
 const STAGE = 'job' as const;
 /** ★ 老表所在库（切读路由层 tbl() 的第一个参数） */
 const SRC = 'sms_job';
-/** ★ 老表所在库（切读路由层 tbl() 需要「库名.表名」） */
-const WT = 'sms_job.t_job_student_leave';
 
-/** ★ 班级库（大学部）学生表 —— 跨库全限定名（与实训原实现同款做法） */
-const CLASS_DB_STUDENT = 'sms_class.t_class_student';
+/** ★ 班级库（大学部）学生表 —— 跨库；切读时对应 t_uni_student 的 'class' 分区 */
+const CLASS_DB = 'sms_class';
+const CLASS_TABLE = 't_class_student';
+const CLASS_STAGE = 'class' as const;
 
 /**
  * 行装饰（`classNames` = 复学班 id → 班级名，由调用方批量预取）
@@ -56,7 +57,7 @@ async function decorate(
 
   return {
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     id: String(row.id),
     bizType: biz,
     bizTypeName: LEAVE_BIZ_TYPE_NAME[biz] || '',
@@ -131,8 +132,11 @@ export async function studentOptions(
   keyword: string,
   limit: number,
   opts: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean } = {},
+  user?: any,
 ): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_job', S, STAGE).where('is_deleted', 0);
+  /* ★ 数据范围：项目经理/班主任只能选自己带的班的学生 */
+  if (user && !(await applyClassScope(q, 'class_id', STAGE, user))) return [];
   if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
   if (opts.excludeStatuses?.length) {
     const ex = opts.excludeStatuses;
@@ -176,7 +180,7 @@ export async function findStudent(id: string): Promise<StudentSnapshot | null> {
 }
 
 /** 分页 */
-export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total: number }> {
+export async function list(q: LeaveListQuery, user?: any): Promise<{ rows: LeaveRow[]; total: number }> {
   const base = tbl(db, SRC, T, STAGE).where('is_deleted', 0);
   if (q.keyword) {
     base.andWhere((b) => {
@@ -202,6 +206,9 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
   if (q.endDate) base.andWhere('leave_date', '<=', q.endDate);
   if (q.bizType) base.andWhere('biz_type', await toRawLeaveBiz(STAGE, q.bizType));
   if (q.status) base.andWhere('approval_status', q.status);
+
+  /* ★ 数据范围：只看我负责的班的单据 */
+  if (user) await applyClassScopeKeepNull(base, 'class_id', STAGE, user);
 
   const [{ total }] = (await base.clone().count({ total: '*' })) as Array<{ total: number }>;
   const rows = (await base
@@ -383,8 +390,10 @@ async function applyStudentStatus(conn: any, row: Record<string, any>, operatorI
   await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 
   // ★ 跨库同步（同一事务，要么都成要么都滚）
+  //   ⚠️ 目标表是**大学**的 t_class_student，学段必须是 'class'
+  //      （不是本仓储的 STAGE='job'）—— 切读时要写进 t_uni_student 的 class 分区。
   if (row.student_no) {
-    await conn(CLASS_DB_STUDENT)
+    await tblTrx(conn, CLASS_DB, CLASS_TABLE, CLASS_STAGE)
       .where({ student_no: row.student_no, is_deleted: false })
       .update({ student_status: newStatus, update_time: new Date(), update_by: operatorId });
   }

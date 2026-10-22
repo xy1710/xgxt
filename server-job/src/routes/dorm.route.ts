@@ -91,6 +91,10 @@ import {
 } from '../utils/approval';
 // ★ 2026-10-03：申请单同步到「教务管理 → 宿舍管理 → 申请审批」
 import { syncApplyToEdu, cancelEduApply } from '../utils/dormBridge';
+// ★ P3 切读层：本文件 6 张老表全部已归一，读写走 tbl()/tblTrx()/tblInsTrx()；
+//   两张表以上 join 的查询用 tblAs()（from 侧）+ tblRef()（被 join 侧）。
+//   开关关（默认）时行为与改造前等价。
+import { tbl, tblTrx, tblInsTrx, tblAs, tblRef } from '../teaching/shared/uniTable';
 
 export const dormRouter = Router();
 
@@ -100,6 +104,10 @@ const BED_TABLE = 't_job_dorm_bed';
 const CHANGE_TABLE = 't_job_dorm_change';
 const STUDENT_TABLE = 't_student_base';
 const CLASS_TABLE = 't_job_class';
+
+/** ★ 统一表 edu_stage 取值 / 老表所在库（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /**
  * ★ 班级库（大学部）的学生表 —— 跨库全限定名（2026-10-05 斌哥报「已退宿却还占着床」）
@@ -120,8 +128,14 @@ const CLASS_TABLE = 't_job_class';
  * 【同实例跨库】
  *   三个库在同一个 MySQL 实例 → 用全限定名 + 调用方传的同一个 trx，
  *   「改我们这边 + 改班级库那边」在同一事务里，要么都成、要么都滚。
+ *
+ * ★ P3 切读层：老写法是「库.表」字符串 `sms_class.t_class_student`，
+ *   `tblTrx()` 要把「库名 + 表名」分开传，所以拆成下面两个常量。
  */
-const CLASS_DB_STUDENT = 'sms_class.t_class_student';
+const CLASS_DB = 'sms_class';
+const CLASS_DB_STUDENT = 't_class_student';
+/** 班级库（大学部）的学段 = 大学 */
+const CLASS_DB_STAGE = 'class' as const;
 
 /**
  * 把宿舍信息**同步到班级库**（换宿改地址 / 退宿清空都走这里）
@@ -143,7 +157,7 @@ async function syncDormToClassDB(
   operator: Operator,
 ): Promise<number> {
   if (!studentNo) return 0;
-  const n = await trx(CLASS_DB_STUDENT)
+  const n = await tblTrx(trx, CLASS_DB, CLASS_DB_STUDENT, CLASS_DB_STAGE)
     .where({ student_no: studentNo, is_deleted: false })
     .update({
       ...patch,
@@ -193,11 +207,11 @@ function getOperator(req: any): Operator {
 
 /** 重算某宿舍的已住人数 */
 async function recalcUsedCount(trx: any, dormId: string): Promise<void> {
-  const row = await trx(BED_TABLE)
+  const row = await tblTrx(trx, DB, BED_TABLE, STAGE)
     .where({ dorm_id: dormId, bed_status: DormBedStatus.USED, is_deleted: false })
     .count({ c: '*' })
     .first();
-  await trx(DORM_TABLE).where({ id: dormId }).update({ used_count: Number(row?.c) || 0 });
+  await tblTrx(trx, DB, DORM_TABLE, STAGE).where({ id: dormId }).update({ used_count: Number(row?.c) || 0 });
 }
 
 /** 宿舍行 → 输出结构（含双返回 + 空余床位数）*/
@@ -359,7 +373,7 @@ export async function afterApproved(trx: any, row: any, operator: Operator): Pro
 
   // ---- ① 释放【原】床位 ----
   if (row.old_bed_id) {
-    await trx(BED_TABLE).where({ id: row.old_bed_id, is_deleted: false }).update({
+    await tblTrx(trx, DB, BED_TABLE, STAGE).where({ id: row.old_bed_id, is_deleted: false }).update({
       bed_status: DormBedStatus.FREE,
       student_id: null,
       student_no: null,
@@ -376,12 +390,12 @@ export async function afterApproved(trx: any, row: any, operator: Operator): Pro
     if (!row.new_bed_id) {
       throw new BizError(BizCode.PARAM_ERROR, '调换宿舍缺少新床位信息');
     }
-    const target = await trx(BED_TABLE).where({ id: row.new_bed_id, is_deleted: false }).first();
+    const target = await tblTrx(trx, DB, BED_TABLE, STAGE).where({ id: row.new_bed_id, is_deleted: false }).first();
     if (!target) throw new BizError(BizCode.DORM_BED_NOT_FOUND, '目标床位不存在');
     if (target.bed_status === DormBedStatus.USED) {
       throw new BizError(BizCode.DORM_BED_OCCUPIED, `床位 ${target.dorm_no}-${target.bed_no} 已被占用`);
     }
-    await trx(BED_TABLE).where({ id: row.new_bed_id }).update({
+    await tblTrx(trx, DB, BED_TABLE, STAGE).where({ id: row.new_bed_id }).update({
       bed_status: DormBedStatus.USED,
       student_id: row.student_id,
       student_no: row.student_no,
@@ -393,7 +407,7 @@ export async function afterApproved(trx: any, row: any, operator: Operator): Pro
     });
 
     // ---- ③ 学生主档 → 新宿舍 ----
-    await trx(STUDENT_TABLE).where({ id: row.student_id }).update({
+    await tblTrx(trx, DB, STUDENT_TABLE, STAGE).where({ id: row.student_id }).update({
       dorm_id: row.new_dorm_id,
       dorm_no: row.new_dorm_no,
       update_time: now,
@@ -405,7 +419,7 @@ export async function afterApproved(trx: any, row: any, operator: Operator): Pro
     //   ⚠️ 跨库地址字段在 class 库里是「写在学生行上」的，床位序号沿用新建单时的值；
     //   这里只搬「楼栋+房号」，床位由班级侧后续分配，避免猜错占位。
     const newRoom = isChange
-      ? await trx(DORM_TABLE).where({ id: row.new_dorm_id }).first()
+      ? await tblTrx(trx, DB, DORM_TABLE, STAGE).where({ id: row.new_dorm_id }).first()
       : null;
     if (newRoom) {
       await syncDormToClassDB(
@@ -421,7 +435,7 @@ export async function afterApproved(trx: any, row: any, operator: Operator): Pro
     }
   } else {
     // ---- 退宿：③ 学生主档清空宿舍 ----
-    await trx(STUDENT_TABLE).where({ id: row.student_id }).update({
+    await tblTrx(trx, DB, STUDENT_TABLE, STAGE).where({ id: row.student_id }).update({
       dorm_id: null,
       dorm_no: null,
       update_time: now,
@@ -514,13 +528,13 @@ dormRouter.get(
     const q = (req as any).validated;
     const operator = getOperator(req);
 
-    const base = db(`${BED_TABLE} as b`)
+    const base = tblAs(db, DB, BED_TABLE, STAGE, 'b')
       .where('b.is_deleted', false)
       .whereNotNull('b.student_id')
-      .leftJoin(`${STUDENT_TABLE} as s`, 'b.student_id', 's.id')
-      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
+      .leftJoin(`${tblRef(DB, STUDENT_TABLE)} as s`, 'b.student_id', 's.id')
+      .leftJoin(`${tblRef(DB, CLASS_TABLE)} as c`, 's.class_id', 'c.id')
       // 楼栋在宿舍主档上（床位表只有宿舍号）
-      .leftJoin(`${DORM_TABLE} as d`, 'b.dorm_id', 'd.id');
+      .leftJoin(`${tblRef(DB, DORM_TABLE)} as d`, 'b.dorm_id', 'd.id');
 
     if (q.dormId) base.andWhere('b.dorm_id', q.dormId);
     if (q.classId) base.andWhere('s.class_id', q.classId);
@@ -611,7 +625,7 @@ dormRouter.get(
   validate(dormListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated;
-    const base = db(DORM_TABLE).where('is_deleted', false);
+    const base = tbl(db, DB, DORM_TABLE, STAGE).where('is_deleted', false);
 
     if (q.keyword) {
       base.andWhere((b: any) => {
@@ -626,7 +640,7 @@ dormRouter.get(
     if (q.deptCode !== undefined) base.andWhere('dept_code', q.deptCode);
     if (q.onlyFree) base.andWhereRaw('used_count < bed_count');
 
-    const [{ c: total }] = await base.clone().count({ c: '*' });
+    const [{ c: total }] = (await base.clone().count({ c: '*' })) as Array<{ c: number }>;
     const rows = await base
       .clone()
       .orderBy([{ column: 'building', order: 'asc' }, { column: 'room_no', order: 'asc' }])
@@ -647,10 +661,10 @@ dormRouter.get(
   validate(z.object({ id: z.string().min(1, '宿舍ID必传') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated;
-    const row = await db(DORM_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, DORM_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_NOT_FOUND, '宿舍不存在');
 
-    const beds = await db(BED_TABLE)
+    const beds = await tbl(db, DB, BED_TABLE, STAGE)
       .where({ dorm_id: id, is_deleted: false })
       .orderBy('bed_no', 'asc');
 
@@ -683,14 +697,14 @@ dormRouter.post(
     const operator = getOperator(req);
 
     // 编号唯一
-    const dup = await db(DORM_TABLE).where({ dorm_no: body.dormNo, is_deleted: false }).first();
+    const dup = await tbl(db, DB, DORM_TABLE, STAGE).where({ dorm_no: body.dormNo, is_deleted: false }).first();
     if (dup) throw new BizError(BizCode.DORM_NO_DUPLICATE, `宿舍编号 ${body.dormNo} 已存在`);
 
     const id = randomUUID();
     const now = new Date();
 
     await db.transaction(async (trx) => {
-      await trx(DORM_TABLE).insert({
+      await tblInsTrx(trx, DB, DORM_TABLE, STAGE, {
         id,
         create_time: now,
         create_by: operator.userId,
@@ -722,7 +736,7 @@ dormRouter.post(
           remark: null,
         });
       }
-      await trx(BED_TABLE).insert(beds);
+      await tblInsTrx(trx, DB, BED_TABLE, STAGE, beds);
     });
 
     res.json(ok({ id, dormNo: body.dormNo }));
@@ -743,10 +757,10 @@ dormRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(DORM_TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, DORM_TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_NOT_FOUND, '宿舍不存在');
 
-    const dup = await db(DORM_TABLE)
+    const dup = await tbl(db, DB, DORM_TABLE, STAGE)
       .where({ dorm_no: body.dormNo, is_deleted: false })
       .whereNot('id', body.id)
       .first();
@@ -758,7 +772,7 @@ dormRouter.post(
 
     const now = new Date();
     await db.transaction(async (trx) => {
-      await trx(DORM_TABLE).where({ id: body.id }).update({
+      await tblTrx(trx, DB, DORM_TABLE, STAGE).where({ id: body.id }).update({
         dorm_no: body.dormNo,
         building: body.building,
         room_no: body.roomNo,
@@ -788,11 +802,11 @@ dormRouter.post(
             remark: null,
           });
         }
-        if (beds.length) await trx(BED_TABLE).insert(beds);
+        if (beds.length) await tblInsTrx(trx, DB, BED_TABLE, STAGE, beds);
       }
 
       // 编号变了要同步床位上的宿舍编号快照
-      await trx(BED_TABLE).where({ dorm_id: body.id }).update({ dorm_no: body.dormNo });
+      await tblTrx(trx, DB, BED_TABLE, STAGE).where({ dorm_id: body.id }).update({ dorm_no: body.dormNo });
     });
 
     res.json(ok(null));
@@ -811,7 +825,7 @@ dormRouter.post(
     const { id } = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(DORM_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, DORM_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_NOT_FOUND, '宿舍不存在');
     if (row.used_count > 0) {
       throw new BizError(BizCode.PARAM_ERROR, `该宿舍还住着 ${row.used_count} 人，不能删除`);
@@ -819,8 +833,8 @@ dormRouter.post(
 
     const now = new Date();
     await db.transaction(async (trx) => {
-      await trx(DORM_TABLE).where({ id }).update({ is_deleted: true, update_time: now, update_by: operator.userId });
-      await trx(BED_TABLE).where({ dorm_id: id }).update({ is_deleted: true, update_time: now, update_by: operator.userId });
+      await tblTrx(trx, DB, DORM_TABLE, STAGE).where({ id }).update({ is_deleted: true, update_time: now, update_by: operator.userId });
+      await tblTrx(trx, DB, BED_TABLE, STAGE).where({ dorm_id: id }).update({ is_deleted: true, update_time: now, update_by: operator.userId });
     });
 
     res.json(ok(null));
@@ -835,7 +849,7 @@ dormRouter.post(
 dormRouter.get(
   '/buildings',
   wrap(async (_req, res) => {
-    const rows = await db(DORM_TABLE)
+    const rows = await tbl(db, DB, DORM_TABLE, STAGE)
       .where('is_deleted', false)
       .distinct('building')
       .orderBy('building', 'asc');
@@ -866,8 +880,8 @@ dormRouter.get(
   ),
   wrap(async (req, res) => {
     const q = (req as any).validated;
-    const base = db(`${BED_TABLE} as b`)
-      .join(`${DORM_TABLE} as d`, 'b.dorm_id', 'd.id')
+    const base = tblAs(db, DB, BED_TABLE, STAGE, 'b')
+      .join(`${tblRef(DB, DORM_TABLE)} as d`, 'b.dorm_id', 'd.id')
       .where('b.is_deleted', false)
       .andWhere('d.is_deleted', false)
       .andWhere('b.bed_status', DormBedStatus.FREE)
@@ -884,7 +898,7 @@ dormRouter.get(
     //   · dorm_gender = 0 表示「不限」，两边都能选
     let gender: number | undefined = q.dormGender;
     if (q.studentId) {
-      const stu = await db(STUDENT_TABLE).where({ id: q.studentId, is_deleted: false }).first();
+      const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: q.studentId, is_deleted: false }).first();
       if (stu?.gender) gender = stu.gender;
     }
     if (gender !== undefined) {
@@ -954,9 +968,9 @@ dormRouter.get(
         ? [...ALLOW_INITIATE_STATUS, StudentStatus.SUSPENDED]
         : ALLOW_INITIATE_STATUS;
 
-    const query = db(`${STUDENT_TABLE} as s`)
-      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
-      .leftJoin(`${BED_TABLE} as b`, function (this: any) {
+    const query = tblAs(db, DB, STUDENT_TABLE, STAGE, 's')
+      .leftJoin(`${tblRef(DB, CLASS_TABLE)} as c`, 's.class_id', 'c.id')
+      .leftJoin(`${tblRef(DB, BED_TABLE)} as b`, function (this: any) {
         this.on('b.student_id', '=', 's.id')
           .andOn('b.bed_status', '=', db.raw('?', [DormBedStatus.USED]))
           .andOn('b.is_deleted', '=', db.raw('?', [false]));
@@ -1066,8 +1080,8 @@ dormRouter.get(
     const q = (req as any).validated;
     const operator = getOperator(req);
 
-    const base = db(`${CHANGE_TABLE} as l`)
-      .join('t_job_approval as a', 'l.approval_id', 'a.id')
+    const base = tblAs(db, DB, CHANGE_TABLE, STAGE, 'l')
+      .join(`${tblRef(DB, 't_job_approval')} as a`, 'l.approval_id', 'a.id')
       .where('l.is_deleted', false)
       .andWhere('a.is_deleted', false);
 
@@ -1123,7 +1137,7 @@ dormRouter.get(
     const { id } = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(CHANGE_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, CHANGE_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_CHANGE_NOT_FOUND, '宿舍调换/退宿申请单不存在');
 
     const appr = row.approval_id ? await getApproval(row.approval_id) : null;
@@ -1142,7 +1156,7 @@ dormRouter.get(
     }));
 
     // 该学生的历史宿舍变动
-    const history = await db(CHANGE_TABLE)
+    const history = await tbl(db, DB, CHANGE_TABLE, STAGE)
       .where({ student_id: row.student_id, is_deleted: false })
       .whereNot('id', id)
       .orderBy('create_time', 'desc')
@@ -1214,7 +1228,7 @@ dormRouter.post(
     }
 
     // ② 学生必须存在且在可发起状态
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     // ★ 2026-10-03：退宿允许【休学】学生（他可能还占着床位没退），调换仍不允许
     const allowInitiate =
@@ -1231,8 +1245,8 @@ dormRouter.post(
     }
 
     // ④ 不能有未完成的同类型申请
-    const dup = await db(`${CHANGE_TABLE} as l`)
-      .join('t_job_approval as a', 'l.approval_id', 'a.id')
+    const dup = await tblAs(db, DB, CHANGE_TABLE, STAGE, 'l')
+      .join(`${tblRef(DB, 't_job_approval')} as a`, 'l.approval_id', 'a.id')
       .where('l.student_id', stu.id)
       .andWhere('l.is_deleted', false)
       .whereNotIn('a.status', [ApprovalStatus.APPROVED, ApprovalStatus.REJECTED, ApprovalStatus.CANCELED])
@@ -1246,7 +1260,7 @@ dormRouter.post(
     }
 
     // ⑤ 找学生当前床位
-    const oldBed = await db(BED_TABLE)
+    const oldBed = await tbl(db, DB, BED_TABLE, STAGE)
       .where({ student_id: stu.id, bed_status: DormBedStatus.USED, is_deleted: false })
       .first();
 
@@ -1255,7 +1269,7 @@ dormRouter.post(
 
     if (isChange) {
       if (!body.newBedId) throw new BizError(BizCode.PARAM_ERROR, '调换宿舍必须选择新床位');
-      newBed = await db(BED_TABLE).where({ id: body.newBedId, is_deleted: false }).first();
+      newBed = await tbl(db, DB, BED_TABLE, STAGE).where({ id: body.newBedId, is_deleted: false }).first();
       if (!newBed) throw new BizError(BizCode.DORM_BED_NOT_FOUND, '目标床位不存在');
       if (newBed.bed_status === DormBedStatus.USED) {
         throw new BizError(BizCode.DORM_BED_OCCUPIED, `床位 ${newBed.dorm_no}-${newBed.bed_no} 已被占用`);
@@ -1263,7 +1277,7 @@ dormRouter.post(
       if (oldBed && oldBed.id === newBed.id) {
         throw new BizError(BizCode.DORM_SAME_BED, '新床位与当前床位相同，无需调换');
       }
-      const targetDorm = await db(DORM_TABLE).where({ id: newBed.dorm_id, is_deleted: false }).first();
+      const targetDorm = await tbl(db, DB, DORM_TABLE, STAGE).where({ id: newBed.dorm_id, is_deleted: false }).first();
       if (!targetDorm || targetDorm.dorm_status === DormStatus.DISABLED) {
         throw new BizError(BizCode.DORM_DISABLED, '目标宿舍已停用，不能选');
       }
@@ -1279,7 +1293,7 @@ dormRouter.post(
 
     // ⑥ 班级信息
     let cls: any = null;
-    if (stu.class_id) cls = await db(CLASS_TABLE).where({ id: stu.class_id, is_deleted: false }).first();
+    if (stu.class_id) cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: stu.class_id, is_deleted: false }).first();
 
     const changeDate = body.changeDate || today();
     const id = randomUUID();
@@ -1302,7 +1316,7 @@ dormRouter.post(
         trx,
       );
 
-      await trx(CHANGE_TABLE).insert({
+      await tblInsTrx(trx, DB, CHANGE_TABLE, STAGE, {
         id,
         create_time: now,
         create_by: operator.userId,
@@ -1346,14 +1360,14 @@ dormRouter.post(
       //   以前前端传了 submit，但后端 schema 没这个字段，被静默丢掉 → 还得再点一次「提交审批」。
       if (body.submit) {
         await submitApproval(approvalId, operator, trx);
-        await trx(CHANGE_TABLE).where({ id }).update({
+        await tblTrx(trx, DB, CHANGE_TABLE, STAGE).where({ id }).update({
           approval_status: ApprovalStatus.PENDING_MANAGER,
           update_time: new Date(),
           update_by: operator.userId,
         });
 
         // 同一事务里同步进教务申请表（之后由教务在「教务管理 → 宿舍管理 → 申请审批」审批）
-        const created = await trx(CHANGE_TABLE).where({ id }).first();
+        const created = await tblTrx(trx, DB, CHANGE_TABLE, STAGE).where({ id }).first();
         await syncApplyToEdu(trx, created, operator);
       }
     });
@@ -1379,12 +1393,12 @@ dormRouter.post(
     const { id } = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(CHANGE_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, CHANGE_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_CHANGE_NOT_FOUND, '申请单不存在');
 
     await db.transaction(async (trx) => {
       await submitApproval(row.approval_id, operator, trx);
-      await trx(CHANGE_TABLE).where({ id }).update({
+      await tblTrx(trx, DB, CHANGE_TABLE, STAGE).where({ id }).update({
         approval_status: ApprovalStatus.PENDING_MANAGER,
         update_time: new Date(),
         update_by: operator.userId,
@@ -1418,7 +1432,7 @@ dormRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(CHANGE_TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, CHANGE_TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_CHANGE_NOT_FOUND, '申请单不存在');
 
     let finished = false;
@@ -1429,7 +1443,7 @@ dormRouter.post(
       finished = result.finished;
       nextStatus = result.status;
 
-      await trx(CHANGE_TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, CHANGE_TABLE, STAGE).where({ id: row.id }).update({
         approval_status: nextStatus,
         update_time: new Date(),
         update_by: operator.userId,
@@ -1467,12 +1481,12 @@ dormRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(CHANGE_TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, CHANGE_TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_CHANGE_NOT_FOUND, '申请单不存在');
 
     await db.transaction(async (trx) => {
       await doReject(row.approval_id, operator, body.reason, trx);
-      await trx(CHANGE_TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, CHANGE_TABLE, STAGE).where({ id: row.id }).update({
         approval_status: ApprovalStatus.REJECTED,
         update_time: new Date(),
         update_by: operator.userId,
@@ -1495,12 +1509,12 @@ dormRouter.post(
     const { id } = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(CHANGE_TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, CHANGE_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.DORM_CHANGE_NOT_FOUND, '申请单不存在');
 
     await db.transaction(async (trx) => {
       await doCancel(row.approval_id, operator, undefined, trx);
-      await trx(CHANGE_TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, CHANGE_TABLE, STAGE).where({ id: row.id }).update({
         approval_status: ApprovalStatus.CANCELED,
         update_time: new Date(),
         update_by: operator.userId,
@@ -1525,8 +1539,8 @@ dormRouter.get(
   wrap(async (req, res) => {
     const operator = getOperator(req);
 
-    const base = db(`${CHANGE_TABLE} as l`)
-      .join('t_job_approval as a', 'l.approval_id', 'a.id')
+    const base = tblAs(db, DB, CHANGE_TABLE, STAGE, 'l')
+      .join(`${tblRef(DB, 't_job_approval')} as a`, 'l.approval_id', 'a.id')
       .where('l.is_deleted', false)
       .andWhere('a.is_deleted', false);
 
@@ -1591,8 +1605,8 @@ dormRouter.get(
     const q = (req as any).validated;
     const operator = getOperator(req);
 
-    const query = db(`${STUDENT_TABLE} as s`)
-      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
+    const query = tblAs(db, DB, STUDENT_TABLE, STAGE, 's')
+      .leftJoin(`${tblRef(DB, CLASS_TABLE)} as c`, 's.class_id', 'c.id')
       .where('s.is_deleted', false)
       .whereNull('s.dorm_id') // ★ 没有宿舍
       .andWhere('s.student_status', StudentStatus.TRAINING); // ★ 实训中
@@ -1604,7 +1618,7 @@ dormRouter.get(
     const _pm3 = hasRole(_r3, RoleCode.PROJECT_MANAGER);
     const _head3 = hasRole(_r3, RoleCode.TEACH_HEAD);
     if (!_adm3 && _pm3) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ project_manager_id: operator.userId, is_deleted: false })
         // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
         // .whereNot('class_status', ClassStatus.GRADUATED)
@@ -1613,7 +1627,7 @@ dormRouter.get(
       if (ids.length === 0) query.whereRaw('1 = 0');
       else query.whereIn('s.class_id', ids);
     } else if (!_adm3 && _head3 && !_pm3) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ head_teacher_id: operator.userId, is_deleted: false })
         .select('id');
       query.whereIn(
@@ -1684,7 +1698,7 @@ dormRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     if (stu.dorm_id) {
       throw new BizError(BizCode.STUDENT_HAS_DORM, '该学生已有宿舍，不能重复分派');
@@ -1701,12 +1715,12 @@ dormRouter.post(
         throw new BizError(BizCode.NO_OPERATION_PERMISSION, '该学生没有班级，无法分派宿舍');
       }
       const mine = _pm4
-        ? await db(CLASS_TABLE)
+        ? await tbl(db, DB, CLASS_TABLE, STAGE)
             .where({ id: stu.class_id, project_manager_id: operator.userId, is_deleted: false })
             // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
             // .whereNot('class_status', ClassStatus.GRADUATED)
             .first()
-        : await db(CLASS_TABLE)
+        : await tbl(db, DB, CLASS_TABLE, STAGE)
             .where({ id: stu.class_id, head_teacher_id: operator.userId, is_deleted: false })
             .first();
       if (!mine) {
@@ -1718,13 +1732,13 @@ dormRouter.post(
     }
 
     // 床位校验
-    const bed = await db(BED_TABLE).where({ id: body.bedId, is_deleted: false }).first();
+    const bed = await tbl(db, DB, BED_TABLE, STAGE).where({ id: body.bedId, is_deleted: false }).first();
     if (!bed) throw new BizError(BizCode.DORM_BED_NOT_FOUND, '床位不存在');
     if (bed.bed_status === DormBedStatus.USED) {
       throw new BizError(BizCode.DORM_BED_OCCUPIED, `床位 ${bed.dorm_no} ${bed.bed_no} 已被占用`);
     }
 
-    const dorm = await db(DORM_TABLE).where({ id: bed.dorm_id, is_deleted: false }).first();
+    const dorm = await tbl(db, DB, DORM_TABLE, STAGE).where({ id: bed.dorm_id, is_deleted: false }).first();
     if (!dorm) throw new BizError(BizCode.DORM_NOT_FOUND, '宿舍不存在');
     if (dorm.dorm_status === DormStatus.DISABLED) {
       throw new BizError(BizCode.DORM_DISABLED, '该宿舍已停用，不能分派');
@@ -1743,7 +1757,7 @@ dormRouter.post(
     const now = new Date();
     await db.transaction(async (trx) => {
       // ① 占用床位
-      await trx(BED_TABLE).where({ id: bed.id }).update({
+      await tblTrx(trx, DB, BED_TABLE, STAGE).where({ id: bed.id }).update({
         bed_status: DormBedStatus.USED,
         student_id: stu.id,
         student_no: stu.student_no || null,
@@ -1754,7 +1768,7 @@ dormRouter.post(
         update_by: operator.userId,
       });
       // ② 学生主档写入宿舍
-      await trx(STUDENT_TABLE).where({ id: stu.id }).update({
+      await tblTrx(trx, DB, STUDENT_TABLE, STAGE).where({ id: stu.id }).update({
         dorm_id: bed.dorm_id,
         dorm_no: bed.dorm_no,
         update_time: now,

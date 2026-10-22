@@ -3,9 +3,10 @@
     <!-- 说明条 -->
     <el-alert class="tsv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        学生按<b>部门</b>归类：初高部 / 大学部（另有实训 / 教务来源）。
+        学生按<b>部门</b>归类：初高部 / 大学部 / 就业部。
         「全部部门」= 当前账号可见数据合并后<b>按学号去重</b>
-        <span class="muted">（同学号保留阶段更靠后的那条：就业 &gt; 大学 &gt; 初高 &gt; 教务）</span>
+        <span class="muted">（同学号保留阶段更靠后的那条：就业部 &gt; 大学 &gt; 初高）</span>
+        ；<b>阶段</b>筛选实时跟随「系统设置 · 阶段方案」。
       </template>
     </el-alert>
 
@@ -57,9 +58,21 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 130px" @change="load(1)">
-          <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
+      <el-form-item v-if="schemeStageFilterOptions.length" label="阶段">
+        <el-select
+          v-model="query.schemeStage"
+          clearable
+          placeholder="全部"
+          style="width: 160px"
+          @change="load(1)"
+          @visible-change="(v: boolean) => v && refreshMeta()"
+        >
+          <el-option
+            v-for="p in schemeStageFilterOptions"
+            :key="p.value"
+            :label="p.label"
+            :value="p.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
@@ -118,7 +131,8 @@
         <template #default="{ row }">{{ row.className || '—' }}</template>
       </el-table-column>
       <el-table-column label="阶段" min-width="95">
-        <template #default="{ row }">{{ row.phaseName || '—' }}</template>
+        <!-- ★ 2026-10-21：有阶段方案时段列显示方案阶段名，否则退回阶段码名称 -->
+        <template #default="{ row }">{{ row.schemeStageName || row.phaseName || '—' }}</template>
       </el-table-column>
       <el-table-column label="状态" width="90" align="center">
         <template #default="{ row }">
@@ -192,7 +206,7 @@
               <el-descriptions-item label="年龄">{{ detail.base.age ?? '—' }}</el-descriptions-item>
               <el-descriptions-item label="身份证">{{ detail.profile.idCard || '—' }}</el-descriptions-item>
               <el-descriptions-item label="班级">{{ detail.base.className || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="阶段">{{ detail.base.phaseName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="阶段">{{ detail.base.schemeStageName || detail.base.phaseName || '—' }}</el-descriptions-item>
               <el-descriptions-item label="状态">
                 <el-tag :type="statusTag(detail.base.studentStatus)" size="small">
                   {{ detail.base.studentStatusName }}
@@ -400,7 +414,59 @@
             </el-table>
           </el-tab-pane>
 
-          <!-- ⑥ 校园网账号（系统生成，可修改） -->
+          <!-- ⑥ 缴费记录（★ 2026-10-21 新增：同步财务管理「账单明细」，只读） -->
+          <el-tab-pane label="缴费记录" name="pay">
+            <div v-if="payments.totalCount" class="tsv-pay-sum">
+              共 <b>{{ payments.totalCount }}</b> 笔 · 合计
+              <b>{{ formatAmount(payments.totalAmount) }}</b>
+              <span v-if="payments.latestDate"> · 最近缴费 {{ payments.latestDate }}</span>
+            </div>
+            <el-alert
+              v-if="payments.note"
+              :title="payments.note"
+              type="info"
+              :closable="false"
+              show-icon
+            />
+            <el-collapse v-model="payOpen" class="tsv-pay">
+              <el-collapse-item v-for="g in payments.groups" :key="g.key" :name="g.key">
+                <template #title>
+                  <span class="tsv-pay-title">{{ g.name }}</span>
+                  <span class="tsv-pay-meta">
+                    {{ g.count }} 笔 · {{ formatAmount(g.amount) }}
+                    <template v-if="g.latestDate"> · 最近 {{ g.latestDate }}</template>
+                  </span>
+                </template>
+                <el-table v-if="g.records.length" :data="g.records" border size="small">
+                  <el-table-column prop="billNo" label="账单号" min-width="120" />
+                  <el-table-column prop="feeTypeName" label="费用类型" width="90" />
+                  <el-table-column label="金额" width="110" align="right">
+                    <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
+                  </el-table-column>
+                  <el-table-column prop="date" label="缴费日期" width="105" />
+                  <el-table-column label="凭证号" width="120">
+                    <template #default="{ row }">{{ row.voucherNo || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作人" width="100">
+                    <template #default="{ row }">{{ row.operatorName || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="备注" min-width="120">
+                    <template #default="{ row }">{{ row.remark || '—' }}</template>
+                  </el-table-column>
+                </el-table>
+                <div v-else class="tsv-pay-empty">暂无{{ g.name }}</div>
+              </el-collapse-item>
+            </el-collapse>
+            <el-alert
+              class="tsv-sec"
+              type="info"
+              :closable="false"
+              show-icon
+              title="数据实时取自「财务管理 · 账单明细」，此处只读；如有出入请到财务模块核对缴费单"
+            />
+          </el-tab-pane>
+
+          <!-- ⑦ 校园网账号（系统生成，可修改） -->
           <el-tab-pane v-if="detail.net" label="校园网账号" name="net">
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item label="上网账号">{{ detail.net.netAccount || '—' }}</el-descriptions-item>
@@ -573,8 +639,14 @@
     <el-dialog v-model="editVisible" :title="form.id ? '编辑学生' : '新增学生'" width="720px" top="5vh">      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <el-row :gutter="12">
           <el-col :span="8">
+            <!-- ★ 2026-10-22：学号由系统按「LZ+班级编号+序号」生成，不接受手填；
+                 编辑时只读展示（生成后终身不变，升云/升实训也不改） -->
             <el-form-item label="学号">
-              <el-input v-model="form.studentNo" placeholder="留空则自动生成" />
+              <el-input
+                v-model="form.studentNo"
+                disabled
+                :placeholder="form.id ? '' : '按「LZ+班级编号+序号」自动生成'"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -610,7 +682,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="班级">
+            <el-form-item label="班级" prop="classId">
               <el-select
                 v-model="form.classId"
                 clearable
@@ -721,14 +793,6 @@
         </el-row>
 
         <el-alert
-          v-if="form.stage === 'edu'"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="教务来源：把状态改成「休学 / 退学」会自动冻结该生名下缴费记录；改回在读自动解冻（只解冻系统冻结的）"
-        />
-        <el-alert
-          v-else
           type="info"
           :closable="false"
           show-icon
@@ -858,6 +922,7 @@ import {
   upgradeToUniversity,
   type StudentDetail,
   type StudentExtras,
+  type StudentPayments,
   type StudentRow,
   type StudentStage,
   type StudentStageMeta,
@@ -867,44 +932,50 @@ import {
   type UpgradeTargetClass,
 } from '@/teaching/api/student';
 import { http } from '@/api/request';
+// ★ 2026-10-21：缴费记录的金额口径与财务模块一致（分 → ¥x,xxx.xx）
+import { formatAmount } from '@/finance/utils/finance';
 // ★ 2026-10-20 试学闭环：班主任「转正式（发起补费）」与「退学」
 import { fetchTrialPlan, trialSupplement, trialQuit, type TrialPlan } from '@/teaching/api/trial';
 
 /* ---------------- 部门（2026-10-16 批注：学段改叫部门，判权仍不依赖旧路由） ---------------- */
-const STAGE_ORDER: StudentStage[] = ['jh', 'class', 'job', 'emp', 'edu'];
-/** 部门名：初高 → 初高部、大学 → 大学部；就业 / 教务 不是部门，保持原名 */
+/**
+ * ★ 2026-10-21 用户口径：学生档案里删除「就业」「教务」，保留就业部
+ *
+ *   下拉里原来的 5 项有 3 项不是真部门：
+ *     · 就业   = 实训那 5 个学生（U26011~U26015），和「就业部」是同一批人
+ *     · 就业部 = 真部门（dept_code=3）
+ *     · 教务   = sms_edu 库里的学生副本，教务宿舍模块在用，但档案里没必要再列一遍
+ *   现在部门下拉只按**真实部门**（DEPT_NAME 的 1/2/3）生成，一个部门一项。
+ */
+const STAGE_ORDER: StudentStage[] = ['jh', 'class', 'emp'];
 const STAGE_LABEL: Record<StudentStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '就业',
   emp: '就业部',
-  edu: '教务',
 };
 
-/** 部门 code（与「新增/编辑学生」表单里的部门同一套：1 初高部 / 2 大学部） */
-const DEPT_CODE_OF_STAGE: Partial<Record<StudentStage, number>> = {
-  jh: DeptCode.JUNIOR_SENIOR,
-  class: DeptCode.UNIVERSITY,
-  // ★ 2026-10-19：实训与就业部都归「就业部」，部门已经分不开它们，
-  //   所以这两个学段的筛选按**学段**过滤（s:job / s:emp），不按 dept_code。
+/** 部门 code → 承载它的学段（部门下拉按这个顺序生成） */
+const STAGE_OF_DEPT: Record<number, StudentStage> = {
+  [DeptCode.JUNIOR_SENIOR]: 'jh',
+  [DeptCode.UNIVERSITY]: 'class',
+  // ★ 就业部：sms_job 里 dept_code=3 的学生（含 stage_key=job 的那 5 个实训学生）
+  [DeptCode.EMPLOYMENT]: 'emp',
 };
 
 const stageOptions = computed(() => visibleStageOptions('student', STAGE_ORDER, STAGE_LABEL));
 
 /**
  * 部门筛选下拉
- *   · 初高部 / 大学部 → 按 dept_code 过滤（后端 list / summary 都认这个参数）
- *   · 就业 / 教务 没有部门概念 → 退回按学段来源过滤，别把它们从入口里弄丢
+ *   只列当前账号**看得见**的学段对应的真实部门，值统一用 dept_code
+ *   （后端 list / summary 都认这个参数，一个口径到底）。
  */
-type DeptFilter = '' | `d:${number}` | `s:${StudentStage}`;
-const deptFilterOptions = computed(() =>
-  stageOptions.value.map((s) => {
-    const code = DEPT_CODE_OF_STAGE[s.value as StudentStage];
-    return code
-      ? { value: `d:${code}` as DeptFilter, label: DEPT_NAME[code] || s.label }
-      : { value: `s:${s.value}` as DeptFilter, label: s.label };
-  }),
-);
+type DeptFilter = '' | `d:${number}`;
+const deptFilterOptions = computed<Array<{ value: DeptFilter; label: string }>>(() => {
+  const visible = new Set(stageOptions.value.map((s) => s.value));
+  return [DeptCode.JUNIOR_SENIOR, DeptCode.UNIVERSITY, DeptCode.EMPLOYMENT]
+    .filter((code) => visible.has(STAGE_OF_DEPT[code]))
+    .map((code) => ({ value: `d:${code}` as DeptFilter, label: DEPT_NAME[code] || '' }));
+});
 
 /**
  * 行上的「部门」显示口径
@@ -934,9 +1005,7 @@ const JOB_STATUS_CODES = [6, 7, 8, 9, 10];
 const STATUS_BY_STAGE: Record<StudentStage, number[]> = {
   jh: JH_STATUS_CODES,
   class: JH_STATUS_CODES, // ★ 批注：与初高部保持一致
-  job: JOB_STATUS_CODES,
   emp: JOB_STATUS_CODES,
-  edu: JH_STATUS_CODES,
 };
 function statusAllowed(stage: StudentStage, s: number): boolean {
   return (STATUS_BY_STAGE[stage] || []).includes(s);
@@ -956,10 +1025,11 @@ const summary = ref<StudentSummary>({
 });
 
 const query = reactive({
-  /** 部门筛选：'' = 全部；`d:1` 初高部 / `d:2` 大学部；`s:job` / `s:edu` = 就业 / 教务来源 */
+  /** 部门筛选：'' = 全部；`d:1` 初高部 / `d:2` 大学部 / `d:3` 就业部 */
   dept: '' as DeptFilter,
   classId: '',
-  phaseCode: undefined as number | undefined,
+  /** 阶段方案阶段：'' = 全部；`scheme:<id>` 某个方案阶段；`none` = 班级没绑方案 */
+  schemeStage: '' as string,
   studentStatus: undefined as number | undefined,
   keyword: '',
   unassigned: false,
@@ -970,9 +1040,8 @@ const query = reactive({
 /** 当前筛选对应的学段（班级 / 阶段 / 状态 都按它联动；未选部门 = 全部） */
 const activeStage = computed<StudentStage | ''>(() => {
   const [kind, v] = String(query.dept || '').split(':');
-  if (kind === 'd') return Number(v) === DeptCode.JUNIOR_SENIOR ? 'jh' : 'class';
-  if (kind === 's') return v as StudentStage;
-  return '';
+  if (kind !== 'd') return '';
+  return STAGE_OF_DEPT[Number(v)] ?? '';
 });
 
 /* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
@@ -987,25 +1056,42 @@ const classSelectOptions = computed(() =>
   activeStage.value ? classOptions.value.filter((c) => c.stage === activeStage.value) : classOptions.value,
 );
 
-/** 「阶段」筛选项：选了部门用该部门的；没选则取并集（去重） */
-const phaseOptions = computed(() => {
-  const list = activeStage.value
-    ? meta.value.filter((m) => m.stage === activeStage.value)
-    : meta.value;
-  const seen = new Map<number, string>();
-  for (const m of list) for (const p of m.phaseOptions) if (!seen.has(p.value)) seen.set(p.value, p.label);
-  return [...seen.entries()].map(([value, label]) => ({ value, label }));
+/**
+ * 「阶段」筛选项 —— ★ 2026-10-21 改读「系统设置 · 阶段方案」
+ *
+ *   原来取的是写死的阶段码（101~107 / 201~204 / 301），跟系统里配的方案没关系，
+ *   方案改了筛选不动。现在：
+ *     · 选项 = 方案下的阶段（后端 meta.schemeStageOptions 实时读表）
+ *     · 选部门时只列该部门的方案阶段；不选部门时全部方案阶段都列（带方案名区分）
+ *     · 结尾固定一项「未设置」—— 班级没绑方案的学生归到这里，
+ *       否则他们从任何阶段都筛不出来，等于凭空消失
+ */
+const schemeStageFilterOptions = computed<Array<{ value: string; label: string }>>(() => {
+  const list = activeStage.value ? meta.value.filter((m) => m.stage === activeStage.value) : meta.value;
+  const seen = new Map<string, string>();
+  for (const m of list) {
+    for (const p of m.schemeStageOptions || []) {
+      if (seen.has(p.id)) continue;
+      const base = activeStage.value ? p.name : `${p.name}（${p.schemeName}）`;
+      seen.set(p.id, p.studyMonths ? `${base} · 学制${p.studyMonths}月` : base);
+    }
+  }
+  return [
+    ...[...seen.entries()].map(([id, label]) => ({ value: `scheme:${id}`, label })),
+    { value: 'none', label: '未设置（班级未绑方案）' },
+  ];
 });
 
 function params() {
-  // 部门筛选：初高部 / 大学部 走 deptCode（后端 list 与 summary 都认）；
-  // 就业 / 教务 没有部门，仍按学段来源过滤。
+  // 部门 = dept_code 口径（初高 1 / 大学 2 / 就业部 3），后端 list 与 summary 都认
   const [kind, v] = String(query.dept || '').split(':');
+  // 阶段 = 方案阶段明细 ID；`none` 表示只看没绑方案的
+  const [sk, sv] = String(query.schemeStage || '').split(':');
   return {
-    stage: kind === 's' ? (v as StudentStage) : undefined,
     deptCode: kind === 'd' ? Number(v) : undefined,
+    schemeStageId: sk === 'scheme' ? sv : undefined,
+    noScheme: query.schemeStage === 'none' || undefined,
     classId: query.classId || undefined,
-    phaseCode: query.phaseCode,
     studentStatus: query.studentStatus,
     keyword: query.keyword || undefined,
     unassigned: query.unassigned || undefined,
@@ -1033,7 +1119,7 @@ async function load(p = query.page) {
 /** 切部门：阶段 / 状态 / 班级都是部门内口径，必须清掉再查 */
 function onDeptChange() {
   query.classId = '';
-  query.phaseCode = undefined;
+  query.schemeStage = '';
   query.studentStatus = undefined;
   load(1);
 }
@@ -1041,7 +1127,7 @@ function onDeptChange() {
 function reset() {
   query.dept = '';
   query.classId = '';
-  query.phaseCode = undefined;
+  query.schemeStage = '';
   query.studentStatus = undefined;
   query.keyword = '';
   query.unassigned = false;
@@ -1080,6 +1166,20 @@ async function openDetail(row: StudentRow) {
 
 /** 调宿 / 退宿记录（宿舍签） */
 const dormChangeRows = computed(() => detailExtras.value?.dormChanges || []);
+
+/**
+ * ★ 2026-10-21：缴费记录（财务账单明细同步，只读）
+ *   默认展开「学费」一组 —— 那是家长最关心的，其它三类点开看。
+ */
+const payOpen = ref<string[]>(['tuition']);
+const EMPTY_PAYMENTS: StudentPayments = {
+  groups: [],
+  totalCount: 0,
+  totalAmount: 0,
+  latestDate: null,
+  note: null,
+};
+const payments = computed<StudentPayments>(() => detailExtras.value?.payments ?? EMPTY_PAYMENTS);
 /** 技术考试成绩（examType ≠ 2 质素考核） */
 const techScoreRows = computed(
   () => (detailExtras.value?.scores || []).filter((s) => s.examType !== 2),
@@ -1139,6 +1239,19 @@ const formAge = ref<number | null>(null);
 const rules: FormRules = {
   studentName: [{ required: true, message: '姓名必填', trigger: 'blur' }],
   gender: [{ required: true, message: '性别必填', trigger: 'change' }],
+  // ★ 2026-10-22：学号按班级编号生成，没班级就没有学号 → 新增时班级必填
+  //   （编辑历史学生时放宽：老数据可能本来就没班级，不能因此改不了别的字段）
+  classId: [
+    {
+      // required 只负责显示红星，真正的判断在 validator 里（编辑时允许为空）
+      required: true,
+      validator: (_r, v: string, cb) => {
+        if (form.id || v) cb();
+        else cb(new Error('请选择班级（学号按班级编号生成）'));
+      },
+      trigger: 'change',
+    },
+  ],
   idCard: [
     {
       validator: (_r, v: string, cb) => {
@@ -1209,8 +1322,8 @@ const planOptionsAll = computed<StagePlanOption[]>(
 function onFormDeptChange(v: number | undefined) {
   if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
   else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
-  // 就业部同时覆盖「就业」(job) 与「就业部」(emp) 学段：已属于其中之一时不改学段
-  else if (v === DeptCode.EMPLOYMENT && form.stage !== 'job' && form.stage !== 'emp') {
+  // 就业部 = 学段 emp（学生档案里已没有「就业/job」这个学段）
+  else if (v === DeptCode.EMPLOYMENT && form.stage !== 'emp') {
     form.stage = 'emp';
   }
   // 学段变了：阶段 / 班级按新学段重选
@@ -1303,7 +1416,7 @@ const formPhaseOptions = computed(() => {
   // 就业部覆盖「实训 / 就业部」两个学段，部门编码都是 3
   const dept =
     form.deptCode ??
-    (form.stage === 'jh' ? 1 : form.stage === 'class' ? 2 : form.stage === 'job' || form.stage === 'emp' ? 3 : undefined);
+    (form.stage === 'jh' ? 1 : form.stage === 'class' ? 2 : 3);
   const seen = new Map<number, string>();
   for (const pl of planOptionsAll.value) {
     if (dept && pl.deptCode !== dept) continue;
@@ -1779,6 +1892,18 @@ async function loadAux() {
   }
 }
 
+/**
+ * ★ 2026-10-21：阶段方案改了不用刷页面 —— 每次展开「阶段」下拉先拉一次 meta，
+ *   选项即时反映系统设置里新增 / 改名的阶段。
+ */
+async function refreshMeta() {
+  try {
+    meta.value = await getStudentMeta();
+  } catch {
+    /* 拉不到就沿用旧选项，不打断筛选 */
+  }
+}
+
 onMounted(async () => {
   await loadAux();
   // 宿舍号/床位号下拉的数据源（宿舍管理）；失败不阻塞页面
@@ -1931,6 +2056,36 @@ async function doTrialQuit() {
   border-left: 3px solid var(--el-color-primary);
   padding-left: 8px;
   margin: 10px 0 8px;
+}
+
+/* 缴费记录签（2026-10-21 新增） */
+.tsv-pay-sum {
+  font-size: 13px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border-radius: 4px;
+}
+.tsv-pay-sum b {
+  color: var(--el-color-danger, #f56c6c);
+}
+.tsv-pay :deep(.el-collapse-item__header) {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+}
+.tsv-pay-title {
+  font-weight: 600;
+  min-width: 130px;
+}
+.tsv-pay-meta {
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 12px;
+}
+.tsv-pay-empty {
+  padding: 10px 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #909399);
 }
 .muted {
   color: var(--el-text-color-secondary);

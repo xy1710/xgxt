@@ -167,6 +167,11 @@ CREATE TABLE `t_finance_fee` (
   `is_in_bill` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否已归集账单明细',
   `remark` varchar(500) DEFAULT NULL COMMENT '备注',
   `source_module` int DEFAULT NULL COMMENT '来源模块 1咨询模块 2教务模块 3财务自建',
+  -- ★ 2026-10-22 补：合计单的费用项明细（JSON 数组）。
+  --   财务建单（fee.service.ts addFee）会写这一列，缺它 → 每次建单报
+  --   「数据库字段不存在（可能是迁移脚本没跑）」，市场咨询发起收缴全军覆没。
+  --   咨询侧 t_consult_fee_order / t_consult_installment_plan 本来就有这一列。
+  `item_detail` text DEFAULT NULL COMMENT '合计单的费用项明细（JSON：feeType/feeTypeName/amount）',
   PRIMARY KEY (`id`),
   KEY `idx_fee_student_id` (`student_id`),
   KEY `idx_fee_student_no` (`student_no`),

@@ -16,6 +16,7 @@
  */
 
 import { http } from '@/api/request';
+import type { TeachingStage } from './attendance';
 
 export type ClassStage = 'jh' | 'class' | 'job' | 'emp';
 
@@ -292,7 +293,12 @@ export function getSchemeOptions() {
   return http.get<SchemeOption[]>('/api/teaching/class/scheme-options');
 }
 
-/** 生成班级编号（只有实训有；其它学段返回 null，前端应隐藏入口） */
+/**
+ * 生成班级编号（只有实训/就业部有；其它学段返回 null）
+ *
+ * ★ 2026-10-22 用户口径：班级表单去掉「生成」按钮，编号改手工填写 + 必填，
+ *   所以本函数**当前没有任何页面调用**（后端 /gen-code 仍在，保留给脚本/联调）。
+ */
 export function genClassCode(stage: ClassStage) {
   return http.get<{ classCode: string | null }>('/api/teaching/class/gen-code', { stage });
 }
@@ -368,10 +374,12 @@ export const CLASS_STATUS_TAG: Record<number, string> = {
   4: 'danger',
 };
 
+// ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
+//   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   emp: '就业部',
 };
 
@@ -383,3 +391,37 @@ export const DEPT_OPTIONS = [
   // ★ 2026-10-19 批注：新增就业部（独立学段，班级/学生共用 sms_job）
   { value: 3, label: '就业部' },
 ];
+
+/* ============================================================
+ * 学生换班（末班 / 升班）· 成绩管理行操作用
+ *   末班：成绩不达标 → 转到进度相同或更慢的班重修
+ *   升班：成绩达标   → 跳到进度更快的班
+ *   进度 = 班级阶段码 stage_code
+ * ============================================================ */
+
+export interface TransferTarget {
+  id: string;
+  name: string;
+  stageCode: number | null;
+  headTeacherName: string | null;
+}
+
+export function listTransferTargets(p: {
+  stage: TeachingStage;
+  fromClassId: string;
+  mode: 'repeat' | 'promote';
+}) {
+  return http.get<TransferTarget[]>('/api/teaching/class-transfer/targets', p);
+}
+
+export function transferStudentToClass(body: {
+  stage: TeachingStage;
+  studentId: string;
+  fromClassId: string;
+  toClassId: string;
+  mode: 'repeat' | 'promote';
+  reason?: string | null;
+  examId?: string | null;
+}) {
+  return http.post<{ ok: true; toClassName: string }>('/api/teaching/class-transfer/do', body);
+}

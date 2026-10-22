@@ -28,6 +28,8 @@ import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 import { applyRepeatEffect, createRepeatFlow } from './student.route';
 import { createQuitRefund } from './refund.route';
+// ★ P4 切读层：本文件各表均已归一，裸 db() 全部走 tbl()/tblIns()；开关关时逐字节等价。
+import { tbl, tblIns, phaseCodeCol, readPhaseCode } from '../../teaching/shared/uniTable';
 
 export const flowRouter = Router();
 export const repeatRouter = Router();
@@ -38,6 +40,9 @@ const REPEAT_TABLE = 't_class_repeat';
 const STUDENT_TABLE = 't_class_student';
 const CLASS_TABLE = 't_class_info';
 const HANDOVER_TABLE = 't_class_handover';
+
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /** 「已同意」需施加的学生/班级副作用（按 flowType） */
 const FLOW_STATUS_APPROVED = SuspendStatus.APPROVED; // 3
@@ -104,7 +109,7 @@ async function writeFlowLog(
   rejectReason?: string,
 ): Promise<void> {
   const now = new Date();
-  await db(LOG_TABLE).insert({
+  await tblIns(db, DB, LOG_TABLE, STAGE, {
     id: randomUUID(),
     flow_id: flowId,
     node_name: nodeName,
@@ -142,7 +147,7 @@ flowRouter.get(
   validate(listSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.flowType) query.andWhere('flow_type', q.flowType);
     if (q.flowStatus) query.andWhere('flow_status', q.flowStatus);
     if (q.classId) query.andWhere('class_id', q.classId);
@@ -155,7 +160,7 @@ flowRouter.get(
       });
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -178,10 +183,10 @@ flowRouter.get(
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
-    const flow = await db(TABLE).where({ id, is_deleted: false }).first();
+    const flow = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!flow) throw new BizError(BizCode.FLOW_NOT_FOUND, '流程不存在');
 
-    const logs = await db(LOG_TABLE).where({ flow_id: id, is_deleted: false }).orderBy('approve_time', 'asc');
+    const logs = await tbl(db, DB, LOG_TABLE, STAGE).where({ flow_id: id, is_deleted: false }).orderBy('approve_time', 'asc');
     res.json(
       ok({
         ...toFlow(flow),
@@ -261,12 +266,12 @@ flowRouter.post(
 
     // ---- 情形 A：推进已有流程 1→2 ----
     if (body.id) {
-      const flow = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+      const flow = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
       if (!flow) throw new BizError(BizCode.FLOW_NOT_FOUND, '流程不存在');
       if (flow.flow_status !== SuspendStatus.DRAFT) {
         throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '仅「待提交」流程可提交');
       }
-      await db(TABLE).where({ id: body.id }).update({
+      await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
         flow_status: SuspendStatus.PENDING_MANAGER,
         suspend_status: SuspendStatus.PENDING_MANAGER,
         current_node_name: '待经理审批',
@@ -283,7 +288,7 @@ flowRouter.post(
       throw new BizError(BizCode.PARAM_ERROR, '请传 id（推进已有流程），或 flowType + studentId（新建流程）');
     }
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     if (stu.pending_flow_type) {
       throw new BizError(BizCode.DUPLICATE_SUBMIT, '该学生已有审批中的流程，请勿重复提交');
@@ -291,7 +296,7 @@ flowRouter.post(
 
     const now = new Date();
     const flowId = randomUUID();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id: flowId,
       flow_type: body.flowType,
       student_id: stu.id,
@@ -316,7 +321,7 @@ flowRouter.post(
       resume_date: body.resumeDate ?? null,
       from_class_id: body.fromClassId ?? stu.class_id ?? null,
       to_class_id: body.toClassId ?? null,
-      from_stage: body.fromStage ?? stu.stage ?? null,
+      from_stage: body.fromStage ?? readPhaseCode(stu) ?? null,
       to_stage: body.toStage ?? null,
       transfer_reason: body.transferReason ?? null,
       handover_role: body.handoverRole ?? null,
@@ -338,7 +343,7 @@ flowRouter.post(
       create_by: req.user?.userId || 'system',
     });
 
-    await db(STUDENT_TABLE).where({ id: stu.id }).update({
+    await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: stu.id }).update({
       pending_flow_type: body.flowType,
       update_time: now,
       update_by: req.user?.userId || 'system',
@@ -363,7 +368,7 @@ async function applyFlowSideEffects(flow: any, user?: { userId?: string; userNam
   switch (flow.flow_type) {
     case FlowType.SUSPEND: {
       // 休学：学生 → 6，清 pending
-      await db(STUDENT_TABLE).where({ id: flow.student_id }).update({
+      await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: flow.student_id }).update({
         student_status: StudentStatus.SUSPENDED,
         pending_flow_type: null,
         update_time: now,
@@ -374,29 +379,29 @@ async function applyFlowSideEffects(flow: any, user?: { userId?: string; userNam
     case FlowType.RESUME: {
       // 复学：学生 → 5，切班级/阶段，清 pending，恢复餐宿费标记
       const cls = flow.resume_class_id
-        ? await db(CLASS_TABLE).where({ id: flow.resume_class_id, is_deleted: false }).first()
+        ? await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: flow.resume_class_id, is_deleted: false }).first()
         : null;
-      await db(STUDENT_TABLE).where({ id: flow.student_id }).update({
+      await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: flow.student_id }).update({
         student_status: StudentStatus.STUDYING,
         class_id: cls?.id ?? flow.resume_class_id ?? null,
         class_name: cls?.class_name ?? null,
-        stage: cls?.stage ?? flow.to_stage ?? null,
+        [phaseCodeCol()]: readPhaseCode(cls) ?? flow.to_stage ?? null,
         pending_flow_type: null,
         update_time: now,
         update_by: uid || 'system',
       });
-      await db(TABLE).where({ id: flow.id }).update({ is_meal_dorm_restored: true, update_time: now });
+      await tbl(db, DB, TABLE, STAGE).where({ id: flow.id }).update({ is_meal_dorm_restored: true, update_time: now });
       break;
     }
     case FlowType.TRANSFER: {
       // 转班：切班级/阶段，清 pending
       const toCls = flow.to_class_id
-        ? await db(CLASS_TABLE).where({ id: flow.to_class_id, is_deleted: false }).first()
+        ? await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: flow.to_class_id, is_deleted: false }).first()
         : null;
-      await db(STUDENT_TABLE).where({ id: flow.student_id }).update({
+      await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: flow.student_id }).update({
         class_id: toCls?.id ?? flow.to_class_id ?? null,
         class_name: toCls?.class_name ?? null,
-        stage: toCls?.stage ?? flow.to_stage ?? null,
+        [phaseCodeCol()]: readPhaseCode(toCls) ?? flow.to_stage ?? null,
         pending_flow_type: null,
         update_time: now,
         update_by: uid || 'system',
@@ -405,14 +410,14 @@ async function applyFlowSideEffects(flow: any, user?: { userId?: string; userNam
     }
     case FlowType.QUIT: {
       // 退学：学生 → 7，清 pending
-      await db(STUDENT_TABLE).where({ id: flow.student_id }).update({
+      await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: flow.student_id }).update({
         student_status: StudentStatus.QUIT,
         pending_flow_type: null,
         update_time: now,
         update_by: uid || 'system',
       });
       // ★ F-01：退学审批通过 → 自动生成「待提交」退费单，衔接「教务核算 → 财务退款」
-      const quitStu = await db(STUDENT_TABLE).where({ id: flow.student_id, is_deleted: false }).first();
+      const quitStu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: flow.student_id, is_deleted: false }).first();
       if (quitStu) {
         await createQuitRefund(quitStu, {
           feeType: flow.refund_fee_type ?? 1,
@@ -428,10 +433,10 @@ async function applyFlowSideEffects(flow: any, user?: { userId?: string; userNam
       // 换人：更新班级岗位 + 生成交接记录
       if (flow.class_id && flow.to_user_id) {
         const isHead = flow.handover_role === HandoverRole.HEAD_TEACHER;
-        await db(CLASS_TABLE)
+        await tbl(db, DB, CLASS_TABLE, STAGE)
           .where({ id: flow.class_id })
           .update(isHead ? { head_teacher_id: flow.to_user_id, update_time: now } : { teacher_id: flow.to_user_id, update_time: now });
-        await db(HANDOVER_TABLE).insert({
+        await tblIns(db, DB, HANDOVER_TABLE, STAGE, {
           id: randomUUID(),
           class_id: flow.class_id,
           class_name: flow.class_name ?? null,
@@ -451,7 +456,7 @@ async function applyFlowSideEffects(flow: any, user?: { userId?: string; userNam
     }
     case FlowType.AGREEMENT: {
       // 就业协议：存档到学生（只读展示）
-      await db(STUDENT_TABLE).where({ id: flow.student_id }).update({
+      await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: flow.student_id }).update({
         agreement_status: flow.agreement_status ?? AgreementStatus.SIGNED,
         pending_flow_type: null,
         update_time: now,
@@ -484,7 +489,7 @@ flowRouter.post(
   validate(z.object({ id: z.string().min(1, '必须传 id'), remark: z.string().max(500).optional() })),
   wrap(async (req, res) => {
     const body = (req as any).validated as { id: string; remark?: string };
-    const flow = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const flow = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!flow) throw new BizError(BizCode.FLOW_NOT_FOUND, '流程不存在');
     if (![SuspendStatus.DRAFT, SuspendStatus.PENDING_MANAGER].includes(flow.flow_status)) {
       throw new BizError(
@@ -497,7 +502,7 @@ flowRouter.post(
     await applyFlowSideEffects(flow, req.user);
 
     const now = new Date();
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       flow_status: FLOW_STATUS_APPROVED,
       suspend_status: FLOW_STATUS_APPROVED,
       current_node_name: '已同意',
@@ -538,7 +543,7 @@ flowRouter.post(
   validate(z.object({ id: z.string().min(1, '必须传 id'), rejectReason: z.string().min(1, '驳回原因必填') })),
   wrap(async (req, res) => {
     const body = (req as any).validated as { id: string; rejectReason: string };
-    const flow = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const flow = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!flow) throw new BizError(BizCode.FLOW_NOT_FOUND, '流程不存在');
     if (![SuspendStatus.DRAFT, SuspendStatus.PENDING_MANAGER].includes(flow.flow_status)) {
       throw new BizError(
@@ -548,7 +553,7 @@ flowRouter.post(
     }
 
     const now = new Date();
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       flow_status: FLOW_STATUS_REJECTED,
       suspend_status: FLOW_STATUS_REJECTED,
       current_node_name: '已驳回',
@@ -562,7 +567,7 @@ flowRouter.post(
 
     // 清空学生 pending_flow_type（审批期间学生状态未变，仅挂起标记）
     if (flow.student_id) {
-      await db(STUDENT_TABLE).where({ id: flow.student_id }).update({
+      await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: flow.student_id }).update({
         pending_flow_type: null,
         update_time: now,
         update_by: req.user?.userId || 'system',
@@ -608,13 +613,13 @@ repeatRouter.get(
   validate(repeatListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof repeatListSchema>;
-    const query = db(REPEAT_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, REPEAT_TABLE, STAGE).where('is_deleted', false);
     if (q.studentId) query.andWhere('student_id', q.studentId);
     if (q.classId) query.andWhere((qb) => qb.where('from_class_id', q.classId).orWhere('to_class_id', q.classId));
     if (q.startDate) query.andWhere('repeat_time', '>=', `${q.startDate} 00:00:00`);
     if (q.endDate) query.andWhere('repeat_time', '<=', `${q.endDate} 23:59:59`);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')

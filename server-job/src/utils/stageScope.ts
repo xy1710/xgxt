@@ -27,6 +27,19 @@
 
 import { RoleCode, ClassStatus, hasRole } from 'shared-types';
 import { db } from './db';
+// ★ P3 切读层：本文件访问的 3 张表（t_job_class / sms_class.t_class_info /
+//   t_student_base）都已归一 → 走 tbl()；下面那句「拼列限定名」必须跟着换成
+//   统一表名，否则开关开时 SQL 里会出现一个**不存在的表别名**
+//   （如 `t_job_dorm.id`，而 FROM 已经是 `t_uni_dorm_building`）→ Unknown column。
+import { tbl, tblRef, uniDb } from '../teaching/shared/uniTable';
+
+/** 实训/就业阶段（本文件里全部走 sms_job） */
+const JOB_DB = 'sms_job';
+const JOB_STAGE = 'job' as const;
+
+/** 大学部阶段（班级库） */
+const CLASS_DB = 'sms_class';
+const CLASS_STAGE = 'class' as const;
 
 /** 实训/就业阶段的班级 ID 前缀标记（我们库用 t_job_class） */
 export type Stage = 'university' | 'training' | 'all';
@@ -75,12 +88,14 @@ export function stageOfRoles(roles: string[] | undefined): Stage {
  */
 export async function myTrainingClassIds(user: {
   userId: string;
+  userIds?: string[];
   roles: string[];
 }): Promise<string[] | null> {
   const stage = stageOfRoles(user.roles);
   if (stage === 'all') return null;
   if (stage === 'university') return [];   // 班主任不看实训 → 空
-  if (!user.userId) return [];
+  const ids = user.userIds && user.userIds.length ? user.userIds : [user.userId].filter(Boolean);
+  if (!ids.length) return [];
 
   // ★ 2026-10-08：改用 hasRole（别名感知）—— 项目经理在权限库里是 RM_PROJECT，
   //   原来直接 includes(RoleCode.PROJECT_MANAGER) 恒 false，
@@ -90,18 +105,24 @@ export async function myTrainingClassIds(user: {
   if (!isPM && !isJob) return [];          // 其他角色不在实训侧兜任何数据
 
   try {
-    const rows = (await db('t_job_class')
-      .where('is_deleted', 0)
-      .andWhere((q: any) => {
-        if (isPM) {
+    /* ★ 2026-10-21：就业部（emp）是独立学段，与实训共用 t_uni_class、
+     *   dept 都是 3，只查 edu_stage='job' 会把就业老师自己带的就业班排除掉
+     *   → 就业日志 / 复盘 列表恒空。这里按角色分开取：
+     *     项目经理 → 实训(job) 未结业的班
+     *     就业老师 → 实训已交棒 + 就业部(emp) 的班
+     */
+    const rows = isJob
+      ? ((await uniDb('t_uni_class')
+          .where('is_deleted', 0)
+          .whereIn('edu_stage', ['job', 'emp'])
+          .whereIn('employment_teacher_id', ids)
+          .select('id')) as Array<{ id: string }>)
+      : ((await tbl(db, JOB_DB, 't_job_class', JOB_STAGE)
+          .where('is_deleted', 0)
+          .whereIn('project_manager_id', ids)
           // 未结业的班归项目经理；已结业（转就业）= 已交棒给就业指导老师
-          q.where('project_manager_id', user.userId)
-            .andWhereNot('class_status', ClassStatus.GRADUATED);
-        } else {
-          q.where('employment_teacher_id', user.userId);
-        }
-      })
-      .select('id')) as Array<{ id: string }>;
+          .andWhereNot('class_status', ClassStatus.GRADUATED)
+          .select('id')) as Array<{ id: string }>);
     return rows.map((r) => r.id);
   } catch {
     // 查不到按「没有班」处理（数据范围最保守）
@@ -124,7 +145,7 @@ export async function myUniversityClassIds(user: {
   if (stage === 'training') return [];    // 项目经理不看大学 → 空
   if (!user.userId) return [];
   try {
-    const rows = (await db('sms_class.t_class_info')
+    const rows = (await tbl(db, CLASS_DB, 't_class_info', CLASS_STAGE)
       .where('is_deleted', 0)
       .andWhere((q: any) => {
         q.where('head_teacher_id', user.userId)
@@ -154,7 +175,7 @@ export async function myUniversityClassIds(user: {
  * ============================================================ */
 
 /** 从 req 里取出 { userId, roles }（各路由都有 getOperator，形状一样） */
-export function operatorOf(req: any): { userId: string; roles: string[] } {
+export function operatorOf(req: any): { userId: string; userIds: string[]; roles: string[] } {
   const u = req?.user || {};
   /**
    * ★ 2026-10-15 修复：业务表责任人列（t_job_class.employment_teacher_id、
@@ -165,10 +186,17 @@ export function operatorOf(req: any): { userId: string; roles: string[] } {
    *   缺失时退回 userId（保持兼容）。
    */
   const effectiveUserId = u.businessUserId || u.userId || '';
-  return { userId: effectiveUserId, roles: u.roles || [] };
+  /* ★ 2026-10-21：班级表里的责任人列，历史上两种写法都用过（门户 UUID / 权限库 U_xxx），
+     所以范围过滤必须**两个都比**，否则一边的数据永远查不出来。 */
+  const userIds = [...new Set([u.businessUserId, u.userId].map((x: any) => String(x || '')).filter(Boolean))];
+  return { userId: effectiveUserId, userIds, roles: u.roles || [] };
 }
 
-/** 学生主档表（唯一同时挂着 class_id / dorm_id / student_id 的表） */
+/**
+ * 学生主档表（唯一同时挂着 class_id / dorm_id / student_id 的表）
+ *
+ * ★ P3 切读层：在 sms_job（实训库）→ 已归一，子查询走 `tbl(db, JOB_DB, …)`。
+ */
 const STUDENT_TABLE = 't_student_base';
 
 /**
@@ -193,8 +221,23 @@ const STUDENT_TABLE = 't_student_base';
 export type TrainingScopeVia = 'direct' | 'student' | 'dorm';
 
 export interface TrainingScopeOpts {
-  /** 被查的表（带别名就写别名，如 'cs'） */
+  /**
+   * 被查的表（带别名就写别名，如 'cs'）。
+   *
+   * ⚠️ 传别名时**不要**再传 `dbName` —— 别名不是老表名，切读层翻译不了它。
+   */
   table: string;
+  /**
+   * ★ P3 切读层：被查表所在的库（已归一表必填，如 'sms_job'）。
+   *
+   * 【为什么需要它】
+   *   下面要把 `table` 拼成**列限定名**（`${table}.class_id`），
+   *   而切读打开后外层 FROM 已经是统一表名（`t_uni_class_student` 等）
+   *   → 继续拼老表名会得到 `Unknown column 't_job_class_student.class_id'`。
+   *   传了 `dbName` 后由 `tblRef()` 翻译：开关开 → 统一表名；开关关 → 老表名。
+   *   ⚠️ 不传 = 原样使用（别名 / 未归一表），开关关时行为与改造前一字不差。
+   */
+  dbName?: string;
   /**
    * 被查表里用来「挂住」目标的列名：
    *   via=direct  → 默认 class_id
@@ -212,6 +255,17 @@ export interface TrainingScopeOpts {
    *   开启后条件变成：`<关联列> IN (我班...) OR create_by = 本人`。
    */
   ownCreatedBy?: boolean;
+}
+
+/**
+ * 被查表在 SQL 里的「实际限定名」——即外层 FROM 中那张表的名字
+ *
+ *   · 传了 dbName（已归一表）→ `tblRef()`：开关开返回统一表名，开关关返回原表名
+ *   · 没传（别名如 'cs' / 未归一表）→ 原样返回
+ * → 开关关这条默认路径拼出来的 SQL 与改造前**逐字节相同**。
+ */
+function refOf(opts: { table: string; dbName?: string }): string {
+  return opts.dbName ? tblRef(opts.dbName, opts.table) : opts.table;
 }
 
 /**
@@ -246,15 +300,19 @@ export async function applyTrainingScope(
   if (!ids) return;             // null = 不限，上面已 return，这里是防御
 
   const via = opts.via || 'direct';
-  const col = `${opts.table}.${opts.column || defaultColumnOf(via)}`;
+  const col = `${refOf(opts)}.${opts.column || defaultColumnOf(via)}`;
 
-  /** 按关联方式把「我负责的范围」条件挂到给定的 query builder 上 */
+  /** 按关联方式把「我负责的范围」条件挂到给定的 query builder 上
+   *  ★ 保留远端重构（applyReach 供多处复用），但子查询必须走 tbl() 切读 ——
+   *    远端写的是 db(STUDENT_TABLE)，P8 后老表已 DROP，那样查不到学生。 */
   const applyReach = (b: any) => {
     if (via === 'student') {
       // 本表存 student_id → 换成一串「我班上的学生 id」
       b.whereIn(
         col,
-        db(STUDENT_TABLE).select('id').whereIn('class_id', ids).where('is_deleted', 0),
+        // ★ 2026-10-21：ids 已经是「我的班」，不能再按 edu_stage='job' 过滤 ——
+        //   否则就业部(emp)的学生查不出来，就业老师的日志/复盘列表恒空。
+        uniDb('t_uni_student').select('id').whereIn('class_id', ids).where('is_deleted', 0),
       );
       return;
     }
@@ -262,7 +320,7 @@ export async function applyTrainingScope(
       // 本表是房间 → 用「我班学生住过的房间 id」反查
       b.whereIn(
         col,
-        db(STUDENT_TABLE)
+        uniDb('t_uni_student')
           .select('dorm_id')
           .whereIn('class_id', ids)
           .whereNotNull('dorm_id')
@@ -294,6 +352,7 @@ export async function applyTrainingScope(
   }
 
   applyReach(query);
+
 }
 
 /** 各关联方式下，被查表默认用哪一列去挂目标 */
@@ -317,7 +376,7 @@ function defaultColumnOf(via: TrainingScopeVia): string {
 export async function applyUniversityScope(
   query: any,
   req: any,
-  opts: { table: string; column?: string },
+  opts: { table: string; dbName?: string; column?: string },
 ): Promise<void> {
   const op = operatorOf(req);
   const stage = stageOfRoles(op.roles);
@@ -336,6 +395,6 @@ export async function applyUniversityScope(
     return;
   }
   if (ids) {
-    query.whereIn(`${opts.table}.${opts.column || 'class_id'}`, ids);
+    query.whereIn(`${refOf(opts)}.${opts.column || 'class_id'}`, ids);
   }
 }

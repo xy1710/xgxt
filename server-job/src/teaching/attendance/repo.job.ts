@@ -26,8 +26,9 @@ import type {
   AttendanceRow,
   AttendanceSaveBody,
 } from '../shared/dto';
-import { NEED_REASON_STATUSES, UNIFIED_STATUS_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { NEED_REASON_STATUSES, UnifiedAttendanceStatus, UNIFIED_STATUS_NAME } from '../shared/dto';
+import { tbl, tblAs, tblInsTrx, tblRef, tblTrx } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
 
 const TABLE = 't_job_attendance';
 const SUMMARY = 't_job_attendance_summary';
@@ -61,7 +62,7 @@ function mapRow(r: Record<string, any>): AttendanceRow {
   return {
     id: String(r.id),
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     classId: String(r.class_id ?? ''),
     className: String(r.class_name ?? ''),
     attendanceDate: fmtDate(r.attend_date),
@@ -76,10 +77,18 @@ function mapRow(r: Record<string, any>): AttendanceRow {
   };
 }
 
-/** 当天在班学生（花名册 status=1） */
+/**
+ * 当天在班学生（花名册 status=1）
+ *
+ * ⚠️ 唯一一处 **join** —— 两张表（花名册 + 学生）都在 sms_job，
+ *    归一后两张都落 sms_common，所以 qualify 走 `tblAs` + `tblRef`：
+ *      · `tblAs`  → from 侧：开关开时自动换成 uniDb + `cs.edu_stage` 条件
+ *        （别名限定不能省：两张表都有 edu_stage，不带前缀会 ambiguous）
+ *      · `tblRef` → 被 join 侧：只换表名，连接由 from 侧那条链决定
+ */
 async function roster(classId: string, runner: any = db) {
-  return (await runner(`${CS_TABLE} as cs`)
-    .leftJoin(`${STUDENT_TABLE} as s`, 'cs.student_id', 's.id')
+  return (await tblAs(runner, 'sms_job', CS_TABLE, STAGE, 'cs')
+    .leftJoin(`${tblRef('sms_job', STUDENT_TABLE)} as s`, 'cs.student_id', 's.id')
     .where('cs.class_id', classId)
     .andWhere('cs.status', CS_IN)
     .andWhere('cs.is_deleted', 0)
@@ -87,29 +96,56 @@ async function roster(classId: string, runner: any = db) {
     .orderBy('cs.student_no', 'asc')) as Array<Record<string, any>>;
 }
 
-export async function list(q: AttendanceListQuery): Promise<AttendanceRow[]> {
-  const qb = db(SUMMARY).where('is_deleted', 0);
+export async function list(q: AttendanceListQuery, user?: any): Promise<AttendanceRow[]> {
+  const qb = tbl(db, 'sms_job', SUMMARY, STAGE).where('is_deleted', 0);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.startDate) qb.andWhere('attend_date', '>=', q.startDate);
   if (q.endDate) qb.andWhere('attend_date', '<=', q.endDate);
+  /* 角色数据范围：项目经理只看自己未结业的实训班；就业老师只看自己接手的班 */
+  if (user && !(await applyClassScope(qb, 'class_id', STAGE, user))) return [];
   const rows = (await qb.orderBy('attend_date', 'desc')) as Array<Record<string, any>>;
   return rows.map(mapRow);
 }
 
 export async function detail(id: string): Promise<AttendanceDetail | null> {
-  const rec = (await db(SUMMARY).where({ id, is_deleted: 0 }).first()) as
+  const rec = (await tbl(db, 'sms_job', SUMMARY, STAGE).where({ id, is_deleted: 0 }).first()) as
     | Record<string, any>
     | undefined;
   if (!rec) return null;
-  const raw = (await db(TABLE)
+  const raw = (await tbl(db, 'sms_job', TABLE, STAGE)
     .where({ class_id: rec.class_id, attend_date: fmtDate(rec.attend_date), is_deleted: 0 })
     .orderBy('student_no')) as Array<Record<string, any>>;
+  const map = new Map(raw.map((d) => [String(d.student_id), d]));
 
+  /* ★ 2026-10-19：详情要能看到「该班全部学生」。
+     实训的明细表按「逐人登记」写，但补录/中途入班时仍可能缺行 ——
+     按在班名册铺一遍，缺记录的按「出勤」显示；名册外的历史明细追加在末尾。 */
+  const students = await roster(rec.class_id);
   const details: AttendanceDetailRow[] = [];
+  const seen = new Set<string>();
+  for (const s of students) {
+    const sid = String(s.student_id);
+    seen.add(sid);
+    const d = map.get(sid);
+    const status = d
+      ? ((await toUnifiedStatus(STAGE, Number(d.attend_status))) ?? 0)
+      : UnifiedAttendanceStatus.PRESENT;
+    details.push({
+      studentId: sid,
+      studentNo: ((d?.student_no ?? s.student_no) as string) ?? null,
+      studentName: ((d?.student_name ?? s.student_name) as string) ?? null,
+      status,
+      statusName: UNIFIED_STATUS_NAME[status] ?? '未知',
+      reason: (d?.reason as string) ?? null,
+      phone: (s.phone as string) ?? null,
+    });
+  }
   for (const d of raw) {
+    const sid = String(d.student_id ?? '');
+    if (seen.has(sid)) continue;
     const status = (await toUnifiedStatus(STAGE, Number(d.attend_status))) ?? 0;
     details.push({
-      studentId: String(d.student_id ?? ''),
+      studentId: sid,
       studentNo: (d.student_no as string) ?? null,
       studentName: (d.student_name as string) ?? null,
       status,
@@ -141,7 +177,7 @@ export async function save(body: AttendanceSaveBody, userId: string) {
 
   const summaryId = await db.transaction(async (trx) => {
     // ① 现存记录（用于 upsert 与"按提交的为准"清理）
-    const existing = (await trx(TABLE)
+    const existing = (await tblTrx(trx, 'sms_job', TABLE, STAGE)
       .where({ class_id: body.classId, attend_date: date, is_deleted: 0 })
       .select('id', 'student_id')) as Array<Record<string, any>>;
     const existMap = new Map(existing.map((r) => [String(r.student_id), String(r.id)]));
@@ -150,7 +186,7 @@ export async function save(body: AttendanceSaveBody, userId: string) {
     // 提交里没有、但库里有的 → 逻辑删除（学生当天转班等情况）
     const stale = existing.filter((r) => !submitted.has(String(r.student_id)));
     if (stale.length) {
-      await trx(TABLE)
+      await tblTrx(trx, 'sms_job', TABLE, STAGE)
         .whereIn(
           'id',
           stale.map((r) => String(r.id)),
@@ -178,9 +214,9 @@ export async function save(body: AttendanceSaveBody, userId: string) {
       };
       const id = existMap.get(r.studentId);
       if (id) {
-        await trx(TABLE).where({ id }).update(payload);
+        await tblTrx(trx, 'sms_job', TABLE, STAGE).where({ id }).update(payload);
       } else {
-        await trx(TABLE).insert({
+        await tblInsTrx(trx, 'sms_job', TABLE, STAGE, {
           id: randomUUID(),
           ...payload,
           is_deleted: 0,
@@ -192,7 +228,7 @@ export async function save(body: AttendanceSaveBody, userId: string) {
 
     // ③ 用【当天全部在班学生】重算汇总（口径A：应到 = 全部在班学生）
     const all = (await roster(body.classId, trx)).length || rows.length;
-    const saved = (await trx(TABLE)
+    const saved = (await tblTrx(trx, 'sms_job', TABLE, STAGE)
       .where({ class_id: body.classId, attend_date: date, is_deleted: 0 })
       .select('attend_status')) as Array<Record<string, any>>;
     const actualCount = saved.filter((r) =>
@@ -201,7 +237,7 @@ export async function save(body: AttendanceSaveBody, userId: string) {
     const absentCount = all - actualCount;
     const rate = all > 0 ? Math.round((actualCount / all) * 10000) / 100 : 0;
 
-    const sumExisting = (await trx(SUMMARY)
+    const sumExisting = (await tblTrx(trx, 'sms_job', SUMMARY, STAGE)
       .where({ class_id: body.classId, attend_date: date })
       .first()) as Record<string, any> | undefined;
     const sumPayload = {
@@ -217,11 +253,11 @@ export async function save(body: AttendanceSaveBody, userId: string) {
       update_by: userId,
     };
     if (sumExisting) {
-      await trx(SUMMARY).where({ id: sumExisting.id }).update(sumPayload);
+      await tblTrx(trx, 'sms_job', SUMMARY, STAGE).where({ id: sumExisting.id }).update(sumPayload);
       return String(sumExisting.id);
     }
     const newId = randomUUID();
-    await trx(SUMMARY).insert({
+    await tblInsTrx(trx, 'sms_job', SUMMARY, STAGE, {
       id: newId,
       class_id: body.classId,
       attend_date: date,
@@ -232,7 +268,7 @@ export async function save(body: AttendanceSaveBody, userId: string) {
     return newId;
   });
 
-  const sum = (await db(SUMMARY).where({ id: summaryId }).first()) as Record<string, any>;
+  const sum = (await tbl(db, 'sms_job', SUMMARY, STAGE).where({ id: summaryId }).first()) as Record<string, any>;
   return {
     id: summaryId,
     shouldCount: Number(sum?.should_count ?? 0),
@@ -249,7 +285,7 @@ export async function board(classId: string, date: string): Promise<AttendanceBo
   if (!cls) throw new Error('班级不存在');
 
   const students = await roster(classId);
-  const records = (await db(TABLE)
+  const records = (await tbl(db, 'sms_job', TABLE, STAGE)
     .where({ class_id: classId, attend_date: date, is_deleted: 0 })
     .select('student_id', 'attend_status', 'reason')) as Array<Record<string, any>>;
   const map = new Map(records.map((r) => [String(r.student_id), r]));
@@ -269,7 +305,7 @@ export async function board(classId: string, date: string): Promise<AttendanceBo
 
   return {
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     classId,
     className: String(cls.class_name ?? ''),
     attendanceDate: date,

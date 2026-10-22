@@ -141,6 +141,17 @@ export enum BizCode {
   /** 到期时间不能早于今天 */
   FEE_DUE_DATE_INVALID = 40028,
 
+  // ---- 400xx 考试管理 ----
+  /**
+   * 同一班级同一天已有同名考试。
+   *
+   * ★ 2026-10-16（任务 #20）新增：`t_uni_exam.uk_exam` 唯一索引**已废弃**
+   *   （它违反「唯一索引不能凭空加」铁律⑧，且会让「开关关/开关开」行为不一致），
+   *   改由应用层「先查后写」查重，命中时抛本码。
+   *   详见 `src/teaching/exam/uniExamUnique.ts`。
+   */
+  EXAM_DUPLICATE = 40031,
+
   // ---- 500xx 系统错误 ----
   INTERNAL_ERROR = 50001,
   DB_ERROR = 50002,

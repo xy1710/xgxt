@@ -16,7 +16,7 @@ import { wrap } from '../../middleware/error';
 //   合并版里两边在同一进程、同一个 db 连接，所以直接函数调用复用接收逻辑，
 //   不用绕 HTTP、不用管内部令牌、不用等 8003 那边推。
 import { processHandoff } from '../../../routes/upgrade.route';
-import { tbl, tblTrx, tblIns, tblInsTrx, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblIns, tblInsTrx, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 // ★ 第 4 期第 4 批：transfer_type 语义拆分（方案 B）需要这两个枚举
 //   TransferType  = 「为什么换」（事由）→ 岗位交接统一填 1=调岗
 //   ClassPostType = 「换的是哪个岗位」→ 写进新列 post_transfer_type
@@ -40,7 +40,7 @@ function toClassItem(row: Record<string, unknown>): Record<string, unknown> {
   return {
     ...c,
     classStatusName: ClassStatusName[st] ?? '未知',
-    stageName: stageNameOf(row.stage as number),
+    stageName: stageNameOf(readPhaseCode(row)),
     attendanceRate: row.attendance_rate !== null && row.attendance_rate !== undefined
       ? Number(row.attendance_rate)
       : null,
@@ -88,7 +88,7 @@ classRouter.get(
     });
     if (query.className) base.where('class_name', 'like', `%${query.className}%`);
     if (query.deptCode) base.where('dept_code', query.deptCode);
-    if (query.stage) base.where('stage', query.stage);
+    if (query.stage) base.where(phaseCodeCol(), query.stage);
     if (query.classStatus) base.where('class_status', query.classStatus);
     if (query.headTeacherId) base.where('head_teacher_id', query.headTeacherId);
     if (query.keyword) base.where('class_name', 'like', `%${query.keyword}%`);
@@ -237,7 +237,7 @@ classRouter.post(
       ...baseInsert(user, id),
       class_name: b.className,
       dept_code: b.deptCode,
-      stage: b.stage,
+      [phaseCodeCol()]: b.stage,
       head_teacher_id: b.headTeacherId ?? null,
       head_teacher_name: b.headTeacherName ?? null,
       teacher_id: b.teacherId ?? null,
@@ -277,7 +277,7 @@ classRouter.put(
     const map: Array<[string, string]> = [
       ['className', 'class_name'],
       ['deptCode', 'dept_code'],
-      ['stage', 'stage'],
+      ['stage', phaseCodeCol()],
       ['headTeacherId', 'head_teacher_id'],
       ['headTeacherName', 'head_teacher_name'],
       ['teacherId', 'teacher_id'],
@@ -297,13 +297,13 @@ classRouter.put(
         await tblTrx(trx, SRC, 't_class_info', STAGE).where({ id: b.classId }).update({ ...patch, ...baseUpdate(user) });
       }
       // 学习阶段与班级阶段保持一致：班级阶段一改，班内学员的学习阶段同步跟改
-      if (patch.stage !== undefined) {
+      if (patch[phaseCodeCol()] !== undefined) {
         await tblTrx(trx, SRC, 't_class_student', STAGE)
           .where({ class_id: b.classId, is_deleted: 0 })
-          .update({ stage: patch.stage as number, ...baseUpdate(user) });
+          .update({ [phaseCodeCol()]: patch[phaseCodeCol()] as number, ...baseUpdate(user) });
       }
     });
-    return ok(res, { classId: b.classId, stage: patch.stage ?? null }, '保存成功');
+    return ok(res, { classId: b.classId, stage: patch[phaseCodeCol()] ?? null }, '保存成功');
   }),
 );
 
@@ -445,26 +445,18 @@ classRouter.post(
         ...baseInsert(user),
         class_id: b.classId,
         class_name: cls.class_name as string,
-        transfer_type: USE_UNI_TABLE ? TransferType.REASSIGN : b.transferType,
+        transfer_type: TransferType.REASSIGN,
         transfer_time: now(),
         reason: b.reason ?? `更换${target.label}`,
       };
 
-      if (USE_UNI_TABLE) {
-        /* 岗位另存新列（迁移 20261011_001）；不适用时留 NULL 是诚实的表达 */
-        transferRow.post_transfer_type = postType[b.transferType];
-        /* 岗位交接的「人」写 old_ / new_ 系列 12 列，不碰被借用走的 from_user_ / to_user_ */
-        transferRow[uc.old[0]] = fromUserId;
-        transferRow[uc.old[1]] = fromUserName;
-        transferRow[uc.neo[0]] = b.toUserId;
-        transferRow[uc.neo[1]] = toUserName;
-      } else {
-        /* 老表原样：4 列都是「负责人ID / 负责人姓名」语义 */
-        transferRow.from_user_id = fromUserId;
-        transferRow.from_user_name = fromUserName;
-        transferRow.to_user_id = b.toUserId;
-        transferRow.to_user_name = toUserName;
-      }
+      /* 岗位另存新列（迁移 20261011_001）；不适用时留 NULL 是诚实的表达 */
+      transferRow.post_transfer_type = postType[b.transferType];
+      /* 岗位交接的「人」写 old_ / new_ 系列 12 列，不碰被借用走的 from_user_ / to_user_ */
+      transferRow[uc.old[0]] = fromUserId;
+      transferRow[uc.old[1]] = fromUserName;
+      transferRow[uc.neo[0]] = b.toUserId;
+      transferRow[uc.neo[1]] = toUserName;
 
       await tblInsTrx(trx, SRC, 't_class_transfer', STAGE, transferRow as never);
     });
@@ -648,7 +640,7 @@ classRouter.post(
     if (!cls) throw Errors.classNotFound();
     assertClassAccess(user, b.classId, '该班级');
 
-    const fromStage = Number(cls.stage);
+    const fromStage = Number(readPhaseCode(cls));
     const toStage = nextStageOf(fromStage);
     if (toStage === null) {
       throw Errors.param(
@@ -662,12 +654,12 @@ classRouter.post(
     await db.transaction(async (trx) => {
       await tblTrx(trx, SRC, 't_class_info', STAGE)
         .where({ id: b.classId })
-        .update({ stage: toStage, ...baseUpdate(user) });
+        .update({ [phaseCodeCol()]: toStage, ...baseUpdate(user) });
 
       // 班内学员的学习阶段与班级保持一致
       count = await tblTrx(trx, SRC, 't_class_student', STAGE)
         .where({ class_id: b.classId, is_deleted: 0 })
-        .update({ stage: toStage, ...baseUpdate(user) });
+        .update({ [phaseCodeCol()]: toStage, ...baseUpdate(user) });
 
       await tblInsTrx(trx, SRC, 't_class_stage_log', STAGE, {
         ...baseInsert(user),
@@ -838,7 +830,7 @@ classRouter.post(
       throw Errors.param('选择的「就业指导老师」在系统账号里不存在，请重新选择');
     }
 
-    const stage = Number(cls.stage);
+    const stage = Number(readPhaseCode(cls));
     if (!isLastStage(stage)) {
       throw Errors.param(
         `仅处于第六阶段（最后阶段）的班级可升实训，当前为「${stageNameOf(stage)}」`,

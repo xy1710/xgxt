@@ -20,7 +20,7 @@ import {
   RefundStatus,
   StudentStatus,
 } from 'shared-types/finance';
-import { toDateStr, FEE_TABLE } from './fee.service';
+import { toDateStr, FEE_TABLE, isTempStudentNo } from './fee.service';
 import { REFUND_TABLE } from './refund.service';
 import { FREEZE_TABLE } from './freeze.service';
 
@@ -36,7 +36,8 @@ export function toBillListItem(r: any) {
     sourceId: r.source_id,
     sourceNo: r.source_no ?? undefined,
     studentId: r.student_id,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 未分班（只有 ZX 临时号）→ 学号留空，前端显示「—」
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     studentName: r.student_name,
     classId: r.class_id ?? undefined,
     className: r.class_name ?? undefined,
@@ -90,13 +91,25 @@ export function buildBillQuery(q: any) {
  *    3) 点某个分组 → 展开该组【每一笔】缴费记录：类型 + 金额 + 日期 + 凭证号 + 「查看凭证」
  * ============================================================ */
 
-/** 四类分组的定义（key 与前端 BillFeeGroupKey 对齐） */
+/** 五类分组的定义（key 与前端 BillFeeGroupKey 对齐） */
 const BILL_GROUPS: { key: string; name: string; types: number[] }[] = [
   // ⚠️ 试学费(5) 并入学费组：原型里「正式学费」「试学学费」都挂在「学费缴费记录」下
-  { key: 'tuition', name: '学费缴费记录', types: [FeeType.TUITION, FeeType.TRIAL_FEE] },
+  //
+  // ★ 2026-10-22 用户口径：学费组包含三类 —— 正式学费(1)、补费(8)、试学费(5)
+  //    补费(SUPPLEMENT) 原先是试学转正尾款/差额补收，金额老师自定义；
+  //    它属于学费性质，必须进「学费缴费记录」，否则账单会「计入总额但不进四列」，
+  //    导致四项之和 ≠ 总额，对账时对不上。
+  {
+    key: 'tuition',
+    name: '学费缴费记录',
+    types: [FeeType.TUITION, FeeType.SUPPLEMENT, FeeType.TRIAL_FEE],
+  },
   { key: 'meal', name: '餐费缴费记录', types: [FeeType.MEAL] },
   { key: 'dorm', name: '住宿费缴费记录', types: [FeeType.ACCOMMODATION] },
   { key: 'insurance', name: '保险费缴费记录', types: [FeeType.INSURANCE] },
+  // ★ 2026-10-22 用户口径：押金(6) + 校服(7) 单独成组，统一叫「杂费」
+  //    这两类不并入学费（不是学费性质），也不再无处可归。
+  { key: 'other', name: '杂费缴费记录', types: [FeeType.DEPOSIT, FeeType.UNIFORM] },
 ];
 
 /** 空分组（没有记录时也要返回，保证前端四列不缺格） */
@@ -252,6 +265,85 @@ export async function listBillStudents(q: any): Promise<{ rows: any[]; total: nu
   const rows = list.slice(start, start + q.size);
 
   return { rows, total };
+}
+
+/**
+ * ★ 2026-10-21 学生档案 · 缴费记录（只读）
+ *
+ * 【为什么按学号查，不按学生 ID】
+ *   学生在学段间流动（初高 → 大学 → 就业部）时每段的 student_id 都不一样，
+ *   但学号不变。按 id 查会漏掉「上一段缴的钱」，按学号才是「这个人的全部缴费」。
+ *
+ * 【为什么复用 BILL_GROUPS】
+ *   与财务「账单明细 · 按学员归集」用同一套分组（学费含试学费 / 餐费 / 住宿费 /
+ *   保险费），两个页面看到的金额与笔数才对得上，不会各算一套。
+ *
+ * 💡 只取 bill_type=1（缴费）。退费是另一本账，不混进「缴了多少」。
+ */
+export async function listPaymentsByStudentNo(studentNo: string) {
+  const no = String(studentNo || '').trim();
+  const emptyGroups = () =>
+    BILL_GROUPS.map((g) => ({
+      key: g.key,
+      name: g.name,
+      count: 0,
+      amount: 0,
+      latestDate: null as string | null,
+      records: [] as any[],
+    }));
+  const empty = (note: string | null) => ({
+    groups: emptyGroups(),
+    totalCount: 0,
+    totalAmount: 0,
+    latestDate: null as string | null,
+    note,
+  });
+
+  if (!no) return empty('该生没有学号，无法关联财务账单');
+
+  const bills: any[] = await db(BILL_TABLE)
+    .where({ is_deleted: false, bill_type: 1, student_no: no })
+    .orderBy('bill_date', 'desc')
+    .orderBy('bill_no', 'desc');
+
+  if (!bills.length) return empty('财务账单明细里还没有该学号的缴费记录');
+
+  const groups = emptyGroups();
+  const byKey = new Map(groups.map((g) => [g.key, g]));
+  let totalAmount = 0;
+  let latestDate: string | null = null;
+
+  for (const b of bills) {
+    const type = Number(b.fee_type);
+    const g = BILL_GROUPS.find((x) => x.types.includes(type));
+    if (!g) continue; // 押金等未归类的类型不进四类汇总（与财务账单明细同口径）
+
+    const row = byKey.get(g.key)!;
+    const amount = Number(b.amount) || 0;
+    const date = toDateStr(b.bill_date) || '';
+    row.count += 1;
+    row.amount += amount;
+    if (date && (!row.latestDate || date > row.latestDate)) row.latestDate = date;
+    row.records.push({
+      billNo: b.bill_no,
+      feeTypeName: FEE_TYPE_NAME[type] || '',
+      amount,
+      date,
+      voucherNo: b.voucher_no ?? null,
+      operatorName: b.operator_name ?? null,
+      remark: b.remark ?? null,
+    });
+    totalAmount += amount;
+    if (date && (!latestDate || date > latestDate)) latestDate = date;
+  }
+
+  return {
+    groups,
+    totalCount: bills.length,
+    totalAmount,
+    latestDate,
+    note: null as string | null,
+  };
 }
 
 /**

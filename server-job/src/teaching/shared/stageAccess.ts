@@ -30,7 +30,17 @@ export const STAGE_MODULE: Record<TeachingStage, string> = {
 
 /** 账号被授权的门户模块；空 = 无模块信息、不拦（与全站口径一致，避免把菜单整片打没） */
 
-export type StageCodeMap = Record<TeachingStage, string>;
+/**
+ * 学段 → 权限码
+ *
+ * ★ 2026-10-15：支持**多码任一**（`string | string[]`）——
+ *   同一个学段在不同角色下可能对应不同的权限码，例如「学生档案」的 job 学段：
+ *     · 就业老师持有 `job:empArchive:view`（就业信息档案）
+ *     · 项目经理持有 `job:classStudent:view`（实训-班级学生）
+ *   两者业务上都能进这个页面，所以该学段要写成数组、任一命中即可。
+ *   （单码写法保持不变，兼容既有各域。）
+ */
+export type StageCodeMap = Record<TeachingStage, string | string[]>;
 
 /**
  * 校验账号对「某学段的某页面」有没有访问权
@@ -53,7 +63,7 @@ export async function assertStageCode(
 export async function assertStageCodeEx<S extends string>(
   user: any,
   stage: S,
-  codes: Record<S, string>,
+  codes: Record<S, string | string[]>,
   label: string,
   nameOf: (s: S) => string,
   moduleOf: (s: S) => string,
@@ -68,7 +78,10 @@ export async function assertStageCodeEx<S extends string>(
     );
   }
   const allowed = await getUserPagePermissions(user.roles || []);
-  if (!allowed.includes(codes[stage])) {
+  /* ★ 2026-10-15：该学段可以配多个等价权限码，**任一命中**即放行 */
+  const need = codes[stage];
+  const needList = Array.isArray(need) ? need : [need];
+  if (!needList.some((c) => allowed.includes(c))) {
     throw new BizError(
       BizCode.NO_OPERATION_PERMISSION,
       `没有「${nameOf(stage)}·${label}」的访问权限`,
@@ -80,7 +93,7 @@ export async function assertStageCodeEx<S extends string>(
 export async function visibleStagesEx<S extends string>(
   user: any,
   stages: S[],
-  codes: Record<S, string>,
+  codes: Record<S, string | string[]>,
   label: string,
   nameOf: (s: S) => string,
   moduleOf: (s: S) => string,

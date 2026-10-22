@@ -103,6 +103,17 @@ export function errorHandler(
 function translateDbError(err: any): string | null {
   if (!err || !err.code) return null;
 
+  /* ★ 2026-10-19：P8 之后教学域老表已 DROP，这条报错的真正常见原因不再是
+       「没跑迁移」，而是「某处仓储漏切读、还在查老表」。把表名带出来，
+       排查时一眼能定位到是哪个域。 */
+  if (err.code === 'ER_NO_SUCH_TABLE') {
+    const table = /Table '([^']+)' doesn't exist/i.exec(String(err.sqlMessage || err.message || ''))?.[1];
+    return (
+      `数据表不存在${table ? `：${table}` : ''} —— ` +
+      '教学域老表已 DROP，请检查是否有代码漏切读（应走 t_uni_*）；若确实是统一表缺失，再执行 npm run migrate'
+    );
+  }
+
   const map: Record<string, string> = {
     ER_DUP_ENTRY: '数据已存在，请勿重复添加',
     ER_NO_REFERENCED_ROW_2: '关联的数据不存在',
@@ -110,7 +121,6 @@ function translateDbError(err: any): string | null {
     ER_ACCESS_DENIED_ERROR: '数据库账号或密码错误',
     ECONNREFUSED: '无法连接数据库，请检查数据库是否启动',
     ER_BAD_FIELD_ERROR: '数据库字段不存在（可能是迁移脚本没跑）',
-    ER_NO_SUCH_TABLE: '数据表不存在（请先执行 npm run migrate）',
     ER_DATA_TOO_LONG: '输入的内容太长了',
   };
 

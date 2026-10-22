@@ -24,7 +24,7 @@ import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 // 升实训单独一个文件（跨库搬迁逻辑较重，且不参与班级仓储的适配器分发）
 import * as trainingSvc from './training';
-import type { ClassListQuery, ClassStage } from '../shared/dto';
+import type { ClassListQuery, ClassStage, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
 
@@ -283,7 +283,12 @@ teachingClassRouter.get(
   }),
 );
 
-/** 10. 生成班级编号（只有实训有；其它学段返回 null，前端应隐藏入口） */
+/**
+ * 10. 生成班级编号（只有实训/就业部有；其它学段返回 null）
+ *
+ * ★ 2026-10-22 用户口径：班级表单**去掉生成按钮**，编号一律手工填写 + 必填，
+ *   所以界面已不再调用本接口。保留接口只为脚本/历史联调可用，别再往前端接。
+ */
 teachingClassRouter.get(
   '/gen-code',
   wrap(async (req, res) => {

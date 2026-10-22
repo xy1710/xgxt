@@ -42,7 +42,10 @@
         empty-text="暂无匹配数据"
       >
         <el-table-column type="index" label="序号" width="60" align="center" />
-        <el-table-column prop="studentNo" label="学号" width="115" />
+        <!-- 未分班的学生没有学号，显示「—」（与缴费核对台同口径） -->
+        <el-table-column label="学号" width="115">
+          <template #default="{ row }">{{ dash(row.studentNo) }}</template>
+        </el-table-column>
         <el-table-column prop="studentName" label="姓名" width="90" />
         <el-table-column prop="className" label="班级" width="85">
           <template #default="{ row }">{{ dash(row.className) }}</template>

@@ -42,12 +42,14 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
+import { assertClassCodeAvailable } from '../shared/classCode';
 
 const T = 't_job_class';
 const ROSTER_T = 't_job_class_student';
 const STUDENT_T = 't_student_base';
 const STAGE = 'job' as const;
-const STAGE_NAME = '实训';
+const STAGE_NAME = '就业部';
 
 /** 实训阶段：1 一阶段 2 二阶段 3 三阶段 */
 const PHASE_NAME: Record<number, string> = {
@@ -75,6 +77,14 @@ function numOrNull(v: unknown): number | null {
 }
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
+
+/**
+ * ★ 2026-10-22：班级编号唯一性校验 → **三部门全局唯一**
+ *   （学号 = LZ + 班级编号 + 序号，跨部门重号会生成同一串学号）
+ */
+async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
+  await assertClassCodeAvailable(code, { stage: STAGE, id: excludeId });
+}
 
 /** 行 → 统一结构 */
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
@@ -149,9 +159,10 @@ async function applyScope(qb: any, user: any): Promise<void> {
 function buildBase(q: ClassListQuery) {
   // ★ 2026-10-19：实训与就业部共用这张表、dept 都是就业部(3)，
   //   靠 stage_key 区分（实训='job'，就业部='emp'）
-  const qb = tbl(db, 'sms_job', T, STAGE)
-    .where('is_deleted', false)
-    .andWhere('stage_key', 'job');
+  /* ★ 2026-10-21：不再按 stage_key 过滤 —— edu_stage 已经把 job/emp 分开了，
+     多这一层会把「没写 stage_key 的历史行 / 迁移行」直接从列表里吞掉
+     （实训班在列表里消失、按 id 做状态流转也查不到）。stage_key 列保留，仅作标注。 */
+  const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', false);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.classStatus) qb.andWhere('class_status', q.classStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
@@ -208,6 +219,8 @@ export const repo: ClassRepo = {
   async list(q, user) {
     const qb = buildBase(q);
     await applyScope(qb, user);
+    /* ★ 交棒模型：项目经理只看未结业的实训班，就业老师只看已结业的班 */
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) return [];
     const rows = (await qb.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     return rows.map((r) => mapRow(r, counts.get(String(r.id)) ?? 0));
@@ -258,6 +271,24 @@ export const repo: ClassRepo = {
     set('remark', body.remark);
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
+    /**
+     * ★ 2026-10-22 修：编辑时编号改不了
+     *
+     * 原来 `class_code` 只在**新增**分支写，编辑分支的 payload 里根本没有这一列 ——
+     * 前端把新编号传上来，SQL 里没有它，保存成功但编号没变（用户看到的就是「改不了」）。
+     *
+     * ⚠️ 只在 body.classCode !== undefined 时处理：
+     *    班级交接（service.ts handover）也走 save()，它不带编号字段；
+     *    若在这里无条件要求必填，交接会被「班级编号必填」拦死。
+     *    表单提交时 route 会把空串转成 null（= 有人清空了），null 照样报必填。
+     */
+    if (body.classCode !== undefined) {
+      const code = String(body.classCode ?? '').trim();
+      if (!code) throw new Error('班级编号必填');
+      await assertClassCodeUnique(code, body.id);
+      payload.class_code = code;
+    }
+
     if (body.id) {
       // 修改时也走状态机
       if (body.classStatus !== undefined) {
@@ -293,10 +324,7 @@ export const repo: ClassRepo = {
       String(body.className || '').trim() ||
       `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const deptCode = Number(body.deptCode ?? 3);
-    const dupCode = (await tbl(db, 'sms_job', T, STAGE).where({ class_code: classCode, is_deleted: false }).first()) as
-      | Record<string, any>
-      | undefined;
-    if (dupCode) throw new Error(`班级编号「${classCode}」已存在`);
+    await assertClassCodeAvailable(classCode);
     const dupName = (await tbl(db, 'sms_job', T, STAGE)
       .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
@@ -398,6 +426,9 @@ export const repo: ClassRepo = {
   async summary(q, user) {
     const qb = buildBase(q);
     await applyScope(qb, user);
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) {
+      return { stage: STAGE, stageName: STAGE_NAME, total: 0, openCount: 0, closedCount: 0, graduatingCount: 0, graduatedCount: 0, studentCount: 0 };
+    }
     const rows = (await qb.select('id', 'class_status')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     let studentCount = 0;

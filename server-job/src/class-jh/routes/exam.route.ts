@@ -25,6 +25,10 @@ import { nameOf, namesOf } from '../utils/enumName';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件四张表（t_class_exam / t_class_exam_score / t_class_exam_field /
+//   t_class_info）以及内联的 t_class_student 均已归一，
+//   全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblIns } from '../../teaching/shared/uniTable';
 
 export const examRouter = Router();
 export const examScoreRouter = Router();
@@ -33,6 +37,11 @@ const EXAM_TABLE = 't_class_exam';
 const SCORE_TABLE = 't_class_exam_score';
 const FIELD_TABLE = 't_class_exam_field';
 const CLASS_TABLE = 't_class_info';
+const STUDENT_TABLE = 't_class_student';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务初高） */
+const STAGE = 'jh' as const;
+const DB = 'sms_class_jh';
 
 /** 及格线比例（自动判定 examResult 用） */
 const PASS_RATIO = 0.6;
@@ -134,7 +143,7 @@ examRouter.get(
   validate(examListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof examListSchema>;
-    const query = db(EXAM_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, EXAM_TABLE, STAGE).where('is_deleted', false);
     if (q.examType) query.andWhere('exam_type', q.examType);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.startDate) query.andWhere('exam_date', '>=', q.startDate);
@@ -143,7 +152,7 @@ examRouter.get(
     if (q.keyword) query.andWhere('exam_name', 'like', `%${q.keyword}%`);
     // 班主任/教员筛选：按班级归属反查
     if (q.headTeacherId || q.teacherId) {
-      const cq = db(CLASS_TABLE).where('is_deleted', false);
+      const cq = tbl(db, DB, CLASS_TABLE, STAGE).where('is_deleted', false);
       if (q.headTeacherId) cq.andWhere('head_teacher_id', q.headTeacherId);
       if (q.teacherId) cq.andWhere('teacher_id', q.teacherId);
       const classRows = await cq.select('id');
@@ -155,7 +164,7 @@ examRouter.get(
       query.whereIn('class_id', ids);
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -178,11 +187,11 @@ examRouter.get(
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
-    const exam = await db(EXAM_TABLE).where({ id, is_deleted: false }).first();
+    const exam = await tbl(db, DB, EXAM_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!exam) throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在');
 
-    const fields = await db(FIELD_TABLE).where({ exam_id: id, is_deleted: false }).orderBy('sort_no', 'asc');
-    const scores = await db(SCORE_TABLE).where({ exam_id: id, is_deleted: false }).select('*');
+    const fields = await tbl(db, DB, FIELD_TABLE, STAGE).where({ exam_id: id, is_deleted: false }).orderBy('sort_no', 'asc');
+    const scores = await tbl(db, DB, SCORE_TABLE, STAGE).where({ exam_id: id, is_deleted: false }).select('*');
 
     const totalCount = scores.length;
     const passCount = scores.filter((s: any) => s.exam_result === ExamResult.PASS).length;
@@ -233,12 +242,12 @@ examRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof examSaveSchema>;
 
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '考试班级不存在');
 
     const id = randomUUID();
     const now = new Date();
-    await db(EXAM_TABLE).insert({
+    await tblIns(db, DB, EXAM_TABLE, STAGE, {
       id,
       exam_name: body.examName,
       exam_type: body.examType,
@@ -270,11 +279,11 @@ async function saveFields(
   now: Date,
   userId?: string,
 ): Promise<void> {
-  await db(FIELD_TABLE).where({ exam_id: examId, is_deleted: false }).update({ is_deleted: true, update_time: now });
+  await tbl(db, DB, FIELD_TABLE, STAGE).where({ exam_id: examId, is_deleted: false }).update({ is_deleted: true, update_time: now });
   if (!fields || !fields.length) return;
   let i = 0;
   for (const f of fields) {
-    await db(FIELD_TABLE).insert({
+    await tblIns(db, DB, FIELD_TABLE, STAGE, {
       id: randomUUID(),
       exam_id: examId,
       field_name: f.fieldName,
@@ -300,17 +309,17 @@ examRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof examSaveSchema> & { id: string };
 
-    const exam = await db(EXAM_TABLE).where({ id: body.id, is_deleted: false }).first();
+    const exam = await tbl(db, DB, EXAM_TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!exam) throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在');
     if (exam.exam_status === ExamStatus.SUBMITTED) {
       throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '考试已提交，不可修改');
     }
 
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '考试班级不存在');
 
     const now = new Date();
-    await db(EXAM_TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, EXAM_TABLE, STAGE).where({ id: body.id }).update({
       exam_name: body.examName,
       exam_type: body.examType,
       exam_date: body.examDate,
@@ -342,13 +351,13 @@ examRouter.post(
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
-    const exam = await db(EXAM_TABLE).where({ id, is_deleted: false }).first();
+    const exam = await tbl(db, DB, EXAM_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!exam) throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在');
     if (exam.exam_status !== ExamStatus.DRAFT) {
       throw new BizError(BizCode.ILLEGAL_STATE_TRANSITION, '仅草稿状态可提交');
     }
 
-    await db(EXAM_TABLE).where({ id }).update({
+    await tbl(db, DB, EXAM_TABLE, STAGE).where({ id }).update({
       exam_status: ExamStatus.SUBMITTED,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -377,7 +386,7 @@ examScoreRouter.get(
   validate(scoreListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof scoreListSchema>;
-    const query = db(SCORE_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, SCORE_TABLE, STAGE).where('is_deleted', false);
     if (q.examId) query.andWhere('exam_id', q.examId);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.keyword) {
@@ -386,7 +395,7 @@ examScoreRouter.get(
       });
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -429,7 +438,7 @@ examScoreRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof scoreSaveSchema>;
 
-    const exam = await db(EXAM_TABLE).where({ id: body.examId, is_deleted: false }).first();
+    const exam = await tbl(db, DB, EXAM_TABLE, STAGE).where({ id: body.examId, is_deleted: false }).first();
     if (!exam) throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在');
 
     // 满分合计（用于自动判定）
@@ -440,7 +449,7 @@ examScoreRouter.post(
     let saved = 0;
 
     for (const item of body.scores) {
-      const stu = await db('t_class_student').where({ id: item.studentId, is_deleted: false }).first();
+      const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: item.studentId, is_deleted: false }).first();
       if (!stu) continue;
 
       const parts = [item.scoreWritten, item.scoreMachine, item.scoreInterview, item.scoreOther];
@@ -456,7 +465,7 @@ examScoreRouter.post(
       // upsert：按 exam_id + student_id (+ score_teacher_id)
       const whereKey: any = { exam_id: body.examId, student_id: item.studentId, is_deleted: false };
       if (item.scoreTeacherId) whereKey.score_teacher_id = item.scoreTeacherId;
-      const existed = await db(SCORE_TABLE).where(whereKey).first();
+      const existed = await tbl(db, DB, SCORE_TABLE, STAGE).where(whereKey).first();
 
       const payload = {
         exam_id: body.examId,
@@ -479,9 +488,9 @@ examScoreRouter.post(
       };
 
       if (existed) {
-        await db(SCORE_TABLE).where({ id: existed.id }).update({ ...payload, update_time: now, update_by: req.user?.userId || 'system' });
+        await tbl(db, DB, SCORE_TABLE, STAGE).where({ id: existed.id }).update({ ...payload, update_time: now, update_by: req.user?.userId || 'system' });
       } else {
-        await db(SCORE_TABLE).insert({ id: randomUUID(), ...payload, is_deleted: false, create_time: now, create_by: req.user?.userId || 'system' });
+        await tblIns(db, DB, SCORE_TABLE, STAGE, { id: randomUUID(), ...payload, is_deleted: false, create_time: now, create_by: req.user?.userId || 'system' });
       }
       saved += 1;
     }
@@ -508,10 +517,10 @@ examScoreRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof approveSchema>;
 
-    const exam = await db(EXAM_TABLE).where({ id: body.examId, is_deleted: false }).first();
+    const exam = await tbl(db, DB, EXAM_TABLE, STAGE).where({ id: body.examId, is_deleted: false }).first();
     if (!exam) throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在');
 
-    const q = db(SCORE_TABLE).where({ exam_id: body.examId, is_deleted: false });
+    const q = tbl(db, DB, SCORE_TABLE, STAGE).where({ exam_id: body.examId, is_deleted: false });
     if (body.studentId) q.andWhere('student_id', body.studentId);
     const rows = await q.select('id', 'student_id');
     if (!rows.length) throw new BizError(BizCode.EXAM_NOT_FOUND, '未找到对应成绩记录');

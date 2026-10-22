@@ -13,6 +13,10 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { getNumberSetting } from '../utils/setting';
 import { checkPermission } from '../middleware/auth';
+// ★ P4 切读层：本文件六张初高表（t_class_student / t_class_attendance / t_class_fee /
+//   t_class_flow / t_class_refund / t_class_dorm_apply）均已归一，全部走 tbl() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl } from '../../teaching/shared/uniTable';
 
 export const statsRouter = Router();
 
@@ -22,6 +26,10 @@ const FEE_TABLE = 't_class_fee';
 const FLOW_TABLE = 't_class_flow';
 const REFUND_TABLE = 't_class_refund';
 const DORM_APPLY_TABLE = 't_class_dorm_apply';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务初高） */
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /* ============================================================
  * 工作台统计
@@ -33,14 +41,14 @@ statsRouter.get(
   checkPermission('class:student:view'),
   wrap(async (_req, res) => {
     // 1) 在读学生数（试学/预在读/正式在读）
-    const [{ readingStudentCount }] = await db(STUDENT_TABLE)
+    const [{ readingStudentCount }] = (await tbl(db, DB, STUDENT_TABLE, STAGE)
       .where('is_deleted', false)
       .whereIn('student_status', [StudentStatus.TRIAL, StudentStatus.PRE_STUDY, StudentStatus.STUDYING])
-      .count({ readingStudentCount: '*' });
+      .count({ readingStudentCount: '*' })) as Array<{ readingStudentCount: number }>;
 
     // 2) 今日出勤率（取今日台账平均）
     const today = new Date().toISOString().slice(0, 10);
-    const attRows = await db(ATTENDANCE_TABLE)
+    const attRows = await tbl(db, DB, ATTENDANCE_TABLE, STAGE)
       .where({ attendance_date: today, is_deleted: false })
       .select('attendance_rate');
     const todayAttendanceRate = attRows.length
@@ -54,7 +62,7 @@ statsRouter.get(
     //    ★ 2026-10-20：未结清补上「逾期(4)」—— 与催费列表的 UNPAID_STATUSES 同口径，
     //      否则列表里标着紧急、首页这个数字却不含这些行。
     const remindDays = await getNumberSetting('feeRemindDays');
-    const feeRows = await db(FEE_TABLE)
+    const feeRows = await tbl(db, DB, FEE_TABLE, STAGE)
       .where('is_deleted', false)
       .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE, PayStatus.FROZEN])
       .select('expire_date');
@@ -69,11 +77,11 @@ statsRouter.get(
     }).length;
 
     // 5) 待办
-    const [{ pendingFlow }] = await db(FLOW_TABLE)
+    const [{ pendingFlow }] = (await tbl(db, DB, FLOW_TABLE, STAGE)
       .where('is_deleted', false)
       .whereIn('flow_status', [SuspendStatus.DRAFT, SuspendStatus.PENDING_MANAGER])
-      .count({ pendingFlow: '*' });
-    const [{ pendingRefund }] = await db(REFUND_TABLE)
+      .count({ pendingFlow: '*' })) as Array<{ pendingFlow: number }>;
+    const [{ pendingRefund }] = (await tbl(db, DB, REFUND_TABLE, STAGE)
       .where('is_deleted', false)
       .whereIn('refund_status', [
         RefundStatus.PENDING_MANAGER,
@@ -81,10 +89,10 @@ statsRouter.get(
         RefundStatus.PENDING_PRINCIPAL,
         RefundStatus.PENDING_FINANCE,
       ])
-      .count({ pendingRefund: '*' });
-    const [{ pendingDormApply }] = await db(DORM_APPLY_TABLE)
+      .count({ pendingRefund: '*' })) as Array<{ pendingRefund: number }>;
+    const [{ pendingDormApply }] = (await tbl(db, DB, DORM_APPLY_TABLE, STAGE)
       .where({ is_deleted: false, apply_status: ApplyStatus.PENDING })
-      .count({ pendingDormApply: '*' });
+      .count({ pendingDormApply: '*' })) as Array<{ pendingDormApply: number }>;
 
     // ★ 2026-10-16 修：待办跳转路径改为第 1 期合并入口 /teaching/<域>。
     //   原来的裸路径（/approval 等）在老路由下线后只会落到 404 占位页；

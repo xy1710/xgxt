@@ -34,6 +34,9 @@ const COLS = [
  * @param { import("knex").Knex } knex
  */
 exports.up = async function (knex) {
+  /* ★ P8 之后这些老表已 DROP（统一表是 t_uni_*）：表不在就跳过，
+     否则 npm run migrate 会断在 hasColumn 上。 */
+  if (!(await knex.schema.hasTable(TABLE))) return;
   const pending = [];
   for (const [name, def] of COLS) {
     // eslint-disable-next-line no-await-in-loop

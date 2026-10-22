@@ -64,11 +64,13 @@ export function anyStageAccessible(
  *   会「有权限却看不到学段」—— 所以保留 `stageAccessible` 整条作为兜底，
  *   两者任一为真即通过。**行为与合并前完全一致，不会让任何人突然看不到页面。**
  */
-export function stageAccessibleByCode(pageCode?: string, fallbackPath?: string): boolean {
+export function stageAccessibleByCode(pageCode?: StageCode, fallbackPath?: string): boolean {
+  // ★ 2026-10-15：多码任一（数组时任一命中即通过），单码写法行为不变
+  const codes = Array.isArray(pageCode) ? pageCode : pageCode ? [pageCode] : [];
   // ① 权限码（主判权，与后端同一套口径，且不依赖路由存活）
-  if (pageCode && hasPerm(pageCode)) return true;
+  if (codes.some((c) => hasPerm(c))) return true;
   // ② 旧 path 完整判定兜底（权限树没配全时用；旧路由真下线后可删这段）
-  if (fallbackPath && stageAccessible(fallbackPath, pageCode)) return true;
+  if (fallbackPath && codes.some((c) => stageAccessible(fallbackPath, c))) return true;
   return false;
 }
 
@@ -84,16 +86,38 @@ export function stageAccessibleByCode(pageCode?: string, fallbackPath?: string):
  *   结果永远是 false，等于白跑一趟；更糟的是会让人以为「还在兜底其实早没了」。
  *
  *   **保留 path 的 4 条**：就业·信息档案 / 就业基地宿舍 / 教务·学生档案 / 教务·宿舍
- *   —— 这些域本期**没有合并**，页面和路由都还在，是当前唯一可用的兜底。
+ *   —— 这些域本期**没有合并，页面和路由都还在**，是当前唯一可用的兜底。
+ *
+ * ★ 2026-10-19（P7 收尾）：其中「就业·信息档案 `/archive/basic-info`」与
+ *   「就业基地宿舍 `/archive/dorm-assign`」两个页面已下线（统一页已覆盖），
+ *   对应 path 已置 null；仍保留兜底的只剩「教务·学生档案 `/edu/student`」
+ *   与「教务·宿舍」两条。别再把已删路由写回 path —— 那只会让兜底永远为 false。
  */
+/**
+ * ★ 2026-10-15：判权改为支持**多码任一**（`string | string[]`）
+ *
+ * 【为什么】
+ *   同一个学段在不同角色下可能对应不同的权限码 —— 后端 `stageAccess.ts` 的
+ *   `StageCodeMap` 已支持数组（任一命中即放行），前端必须**跟着一起改**，
+ *   否则会出现「后端说你有权限、前端却说没有」→ 学段下拉里看不到该学段。
+ *
+ *   实测踩到的坑：学生档案的 job 学段，
+ *     · 就业老师持有 `job:empArchive:view`（就业信息档案）
+ *     · 项目经理持有 `job:classStudent:view`（实训-班级学生）
+ *   业务上「**项目经理 = 实训阶段的班主任**」，两者都能进这个页面。
+ *   后端 `service.ts` 已写成双码，前端这里原先只认 `job:empArchive:view`
+ *   → `stageVisible('student','job')` 对项目经理恒 false
+ *   → 学段下拉没有「实训」，「全部」视图也不去查 job → 项目经理看不到学生档案。
+ */
+type StageCode = string | string[];
+
 export const STAGE_ACCESS = {
   student: {
     jh: { code: 'classjh:student:view', path: null },
     class: { code: 'class:student:view', path: null },
-    job: { code: 'job:empArchive:view', path: '/archive/basic-info' },
-    // ★ 2026-10-19：就业部（独立学段，沿用就业模块的档案权限）
+    // ★ 2026-10-21：学生档案删掉「就业」「教务」两个学段，只留就业部
+    //   （就业部的数据 = sms_job 里 dept_code=3 的学生，沿用就业模块的档案权限）
     emp: { code: 'job:empArchive:view', path: null },
-    edu: { code: 'edu:student:view', path: '/edu/student' },
   },
   class: {
     jh: { code: 'classjh:classInfo:view', path: null },
@@ -153,7 +177,7 @@ export type StageDomain = keyof typeof STAGE_ACCESS;
  * @param stage  学段，如 'jh' / 'class' / 'job' / 'edu'
  */
 export function stageVisible(domain: StageDomain, stage: string): boolean {
-  const m = (STAGE_ACCESS[domain] as Record<string, { code: string; path: string | null }>)[stage];
+  const m = (STAGE_ACCESS[domain] as Record<string, { code: StageCode; path: string | null }>)[stage];
   if (!m) return false;
   // path 为 null = 该学段的旧路由已下线，没有兜底，只能靠权限码
   return stageAccessibleByCode(m.code, m.path ?? undefined);

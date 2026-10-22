@@ -19,7 +19,7 @@ import type {
   ScoreUpdateBody,
 } from '../shared/dto';
 import { EXAM_RESULT_NAME, TEACHING_STAGE_NAME } from '../shared/dto';
-import { tbl, phaseCodeCol } from '../shared/uniTable';
+import { tbl, tblIns, phaseCodeCol } from '../shared/uniTable';
 import {
   CLASS_STATUS_GRADUATED,
   composeRepeatReason,
@@ -34,6 +34,7 @@ const STU = 't_class_student';
 const CLS = 't_class_info';
 const RPT = 't_class_repeat';
 const STAGE = 'jh' as const;
+const DB = 'sms_class_jh';
 
 const num = (v: unknown): number | null =>
   v === null || v === undefined || v === '' ? null : Number(v);
@@ -87,7 +88,8 @@ async function mapRow(
     examName: meta?.examName ?? '',
     examDate: r.exam_date ? String(r.exam_date).slice(0, 10) : null,
     classId: (r.class_id as string) ?? null,
-    className: meta?.className ?? null,
+    /* ★ 原来写死 null → 列表「班级」列恒为空（筛选却按 class_id 有值，所以能搜到） */
+    className: (r.class_name as string) || null,
     studentId: String(r.student_id),
     studentNo: (r.student_no as string) ?? null,
     studentName: (r.student_name as string) ?? null,
@@ -104,7 +106,7 @@ async function mapRow(
 }
 
 export async function list(q: ScoreListQuery): Promise<ScoreRow[]> {
-  const qb = db(S).where('is_deleted', 0);
+  const qb = tbl(db, DB, S, STAGE).where('is_deleted', 0);
   if (q.examId) qb.andWhere('exam_id', q.examId);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.studentId) qb.andWhere('student_id', q.studentId);
@@ -123,7 +125,7 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
   const students = (await tbl(db, 'sms_class_jh', STU, STAGE).where({ class_id: clsId, is_deleted: 0 }).orderBy('student_no')) as Array<
     Record<string, any>
   >;
-  const scores = (await db(S).where({ exam_id: examId, is_deleted: 0 })) as Array<Record<string, any>>;
+  const scores = (await tbl(db, DB, S, STAGE).where({ exam_id: examId, is_deleted: 0 })) as Array<Record<string, any>>;
   const smap = new Map(scores.map((s) => [String(s.student_id), s]));
   const fullTotal = await fullTotalOf(examId);
 
@@ -159,6 +161,26 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
   };
 }
 
+/** ★ 各分数项的本场满分（初高存在 content_full_score 这个 JSON 里） */
+const FIELD_OF_CONTENT: Record<number, string> = { 1: 'written', 2: 'machine', 3: 'interview', 4: 'other' };
+export async function contentFull(examId: string): Promise<Record<string, number>> {
+  const e = (await tbl(db, 'sms_class_jh', E, STAGE).where({ id: examId, is_deleted: 0 }).first()) as
+    | Record<string, any>
+    | undefined;
+  if (!e?.content_full_score) return {};
+  try {
+    const obj = JSON.parse(String(e.content_full_score)) as Record<string, number>;
+    const out: Record<string, number> = {};
+    for (const [t, v] of Object.entries(obj)) {
+      const f = FIELD_OF_CONTENT[Number(t)];
+      if (f && v !== null && v !== undefined) out[f] = Number(v);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function save(body: ScoreSaveBody, userId: string) {
   const exam = (await tbl(db, 'sms_class_jh', E, STAGE).where({ id: body.examId, is_deleted: 0 }).first()) as
     | Record<string, any>
@@ -185,7 +207,7 @@ export async function save(body: ScoreSaveBody, userId: string) {
     };
     const { totalScore, examResult } = await calcScores(STAGE, vals, fullTotal);
 
-    const existed = (await db(S)
+    const existed = (await tbl(db, DB, S, STAGE)
       .where({ exam_id: body.examId, student_id: r.studentId, is_deleted: 0 })
       .first()) as Record<string, any> | undefined;
 
@@ -203,15 +225,17 @@ export async function save(body: ScoreSaveBody, userId: string) {
     };
 
     if (existed) {
-      await db(S).where({ id: existed.id }).update(payload);
+      await tbl(db, DB, S, STAGE).where({ id: existed.id }).update(payload);
     } else {
       const stu = stuMap.get(r.studentId);
-      await db(S).insert({
+      // ★ 必须用 tblIns：统一表 edu_stage NOT NULL 无默认
+      await tblIns(db, DB, S, STAGE, {
         id: randomUUID(),
         exam_id: body.examId,
         exam_type: exam.exam_type,
         exam_date: exam.exam_date,
         class_id: exam.class_id,
+        class_name: (exam.class_name as string) ?? null,
         student_id: r.studentId,
         student_no: (stu?.student_no as string) ?? '',
         student_name: (stu?.student_name as string) ?? '',

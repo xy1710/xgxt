@@ -26,6 +26,10 @@ import { BizError } from '../middleware/errorHandler';
 import { sendNotice, NOTICE_TYPE } from '../utils/notice';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
 import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
+// ★ P3 切读层：本文件五张表（t_job_exam_score / t_student_base / t_job_class /
+//   t_job_class_student / t_job_exam）都已归一，全部走 tbl()/tblTrx()/tblInsTrx() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl, tblInsTrx, tblTrx } from '../teaching/shared/uniTable';
 
 export const examScoreRouter = Router();
 
@@ -42,6 +46,10 @@ const CS_LEFT = 2;
 /** 考试表（成绩管理页的「考试下拉」要用） */
 const EXAM_TABLE = 't_job_exam';
 
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
+
 /* ============================================================
  * 考试下拉选项（给「成绩管理」页选考试用）
  *    GET /api/job/exam-score/exam-options
@@ -55,7 +63,7 @@ const EXAM_TABLE = 't_job_exam';
 examScoreRouter.get(
   '/exam-options',
   wrap(async (_req, res) => {
-    const rows = await db(EXAM_TABLE)
+    const rows = await tbl(db, DB, EXAM_TABLE, STAGE)
       .where('is_deleted', false)
       .select('id', 'exam_name', 'exam_type', 'exam_time', 'class_ids', 'class_names', 'content_types')
       .orderBy('exam_time', 'desc')
@@ -151,8 +159,8 @@ examScoreRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
-    await applyTrainingScope(query, req, { table: TABLE });
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
+    await applyTrainingScope(query, req, { table: TABLE, dbName: DB });
 
     // ★ 数据范围：班主任只能看【自己带的班】的成绩（斌哥 2026-09-30）
     //   口径与宿舍/催费一致 —— 以**班级表**的 head_teacher_id 为准
@@ -160,7 +168,7 @@ examScoreRouter.get(
     //   校长/管理员不受限，看全部。
     const myRoles = req.user?.roles || [];
     if (myRoles.includes(RoleCode.TEACH_HEAD) && !myRoles.includes(RoleCode.SYS_ADMIN)) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ head_teacher_id: req.user?.userId || '', is_deleted: false })
         .select('id');
       // 一个班都没有 → 传空数组，结果自然是空的（不会误放开成"看全部"）
@@ -188,7 +196,7 @@ examScoreRouter.get(
       });
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -201,7 +209,7 @@ examScoreRouter.get(
     const studentIds = rows.map((r: any) => r.student_id);
     const repeatMap: Record<string, number> = {};
     if (studentIds.length > 0) {
-      const students = await db(STUDENT_TABLE)
+      const students = await tbl(db, DB, STUDENT_TABLE, STAGE)
         .whereIn('id', studentIds)
         .select('id', 'repeat_count');
       students.forEach((s: any) => {
@@ -256,7 +264,7 @@ examScoreRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const exists = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!exists) {
       throw new BizError(BizCode.SCORE_NOT_FOUND, '成绩记录不存在或已被删除');
     }
@@ -280,7 +288,7 @@ examScoreRouter.put(
     const operatorId = req.user?.userId || 'system';
     const operatorName = req.user?.userName || '系统';
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       paper_score: paper,
       machine_score: machine,
       interview_score: interview,
@@ -296,7 +304,7 @@ examScoreRouter.put(
     });
 
     // 返回最新记录，前端可直接刷新那一行
-    const row = await db(TABLE).where({ id: body.id }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).first();
 
     res.json(ok({
       scoreId: row.id,
@@ -358,7 +366,7 @@ examScoreRouter.post(
     const body = (req as any).validated as z.infer<typeof repeatSchema>;
 
     // ---- 成绩记录 ----
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) {
       throw new BizError(BizCode.SCORE_NOT_FOUND, '成绩记录不存在或已被删除');
     }
@@ -369,13 +377,13 @@ examScoreRouter.post(
     }
 
     // ---- 学生主档（转班以主档的当前班级为准，不用成绩表里的快照）----
-    const stu = await db(STUDENT_TABLE).where({ id: row.student_id, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: row.student_id, is_deleted: false }).first();
     if (!stu) {
       throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或已被删除');
     }
 
     // ---- 目标班级 ----
-    const targetCls = await db(CLASS_TABLE)
+    const targetCls = await tbl(db, DB, CLASS_TABLE, STAGE)
       .where({ id: body.targetClassId, is_deleted: false })
       .first();
     if (!targetCls) {
@@ -403,7 +411,7 @@ examScoreRouter.post(
 
     await db.transaction(async (trx) => {
       // ① 成绩表：标记未通过（末班）
-      await trx(TABLE).where({ id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id }).update({
         exam_result: 2,
         update_time: now,
         update_by: operatorId,
@@ -411,10 +419,10 @@ examScoreRouter.post(
 
       // ② 原班花名册：改成"已离班 + 末班转出"
       if (stu.class_id) {
-        const curCls = await trx(CLASS_TABLE).where({ id: stu.class_id }).first();
+        const curCls = await tblTrx(trx, DB, CLASS_TABLE, STAGE).where({ id: stu.class_id }).first();
         leftFromClassName = curCls?.class_name || stu.class_name || null;
 
-        await trx(CS_TABLE)
+        await tblTrx(trx, DB, CS_TABLE, STAGE)
           .where({ class_id: stu.class_id, student_id: stu.id, status: CS_IN, is_deleted: false })
           .update({
             status: CS_LEFT,
@@ -426,17 +434,17 @@ examScoreRouter.post(
           });
 
         // 重算原班人数
-        const [{ cnt: oldCnt }] = await trx(CS_TABLE)
+        const [{ cnt: oldCnt }] = (await tblTrx(trx, DB, CS_TABLE, STAGE)
           .where({ class_id: stu.class_id, status: CS_IN, is_deleted: false })
-          .count({ cnt: '*' });
-        await trx(CLASS_TABLE)
+          .count({ cnt: '*' })) as Array<{ cnt: number }>;
+        await tblTrx(trx, DB, CLASS_TABLE, STAGE)
           .where({ id: stu.class_id })
           .update({ student_count: Number(oldCnt), update_time: now });
       }
 
       // ③ 目标班花名册：新增"末班转入"
       //    先看是否已有"在班"记录（防重复）
-      const already = await trx(CS_TABLE)
+      const already = await tblTrx(trx, DB, CS_TABLE, STAGE)
         .where({
           class_id: body.targetClassId,
           student_id: stu.id,
@@ -446,7 +454,7 @@ examScoreRouter.post(
         .first();
 
       if (!already) {
-        await trx(CS_TABLE).insert({
+        await tblInsTrx(trx, DB, CS_TABLE, STAGE, {
           id: randomUUID(),
           create_time: now,
           create_by: operatorId,
@@ -466,15 +474,15 @@ examScoreRouter.post(
       }
 
       // 重算目标班人数
-      const [{ cnt: newCnt }] = await trx(CS_TABLE)
+      const [{ cnt: newCnt }] = (await tblTrx(trx, DB, CS_TABLE, STAGE)
         .where({ class_id: body.targetClassId, status: CS_IN, is_deleted: false })
-        .count({ cnt: '*' });
-      await trx(CLASS_TABLE)
+        .count({ cnt: '*' })) as Array<{ cnt: number }>;
+      await tblTrx(trx, DB, CLASS_TABLE, STAGE)
         .where({ id: body.targetClassId })
         .update({ student_count: Number(newCnt), update_time: now });
 
       // ④⑤ 学生主档：改班级 + 末班次数 +1
-      await trx(STUDENT_TABLE)
+      await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .where({ id: stu.id })
         .update({
           class_id: body.targetClassId,
@@ -490,7 +498,7 @@ examScoreRouter.post(
           update_by: operatorId,
         });
 
-      const stuAfter = await trx(STUDENT_TABLE)
+      const stuAfter = await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .where({ id: stu.id })
         .select('repeat_count')
         .first();
@@ -574,7 +582,7 @@ examScoreRouter.post(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) {
       throw new BizError(BizCode.SCORE_NOT_FOUND, '成绩记录不存在或已被删除');
     }
@@ -585,7 +593,7 @@ examScoreRouter.post(
     }
 
     // ⚠️ 防减成负数
-    const stu = await db(STUDENT_TABLE).where({ id: row.student_id }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: row.student_id }).first();
     if (!stu) {
       throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或已被删除');
     }
@@ -604,7 +612,7 @@ examScoreRouter.post(
     let rollbackClass = false;
 
     // ---- 先找「原班」：最近一条末班转出的花名册记录 ----
-    const leftRecord = await db(CS_TABLE)
+    const leftRecord = await tbl(db, DB, CS_TABLE, STAGE)
       .where({
         student_id: row.student_id,
         status: CS_LEFT,
@@ -619,20 +627,20 @@ examScoreRouter.post(
 
     await db.transaction(async (trx) => {
       // ① 成绩表：改回「未判断」，而不是「通过」（老师可能还要重新判断）
-      await trx(TABLE).where({ id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id }).update({
         exam_result: null,
         update_time: now,
         update_by: operatorId,
       });
 
       // ② 学生主档：末班次数 -1
-      await trx(STUDENT_TABLE)
+      await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .where({ id: row.student_id })
         .decrement('repeat_count', 1);
 
       // ---- ③④⑤ 回退班级（只在找得到原班时才做）----
       if (originClassId) {
-        const originCls = await trx(CLASS_TABLE)
+        const originCls = await tblTrx(trx, DB, CLASS_TABLE, STAGE)
           .where({ id: originClassId, is_deleted: false })
           .first();
 
@@ -641,7 +649,7 @@ examScoreRouter.post(
 
           // ③ 当前班（末班目标班）花名册：把「末班转入」那条撤掉
           if (stu.class_id) {
-            await trx(CS_TABLE)
+            await tblTrx(trx, DB, CS_TABLE, STAGE)
               .where({
                 class_id: stu.class_id,
                 student_id: stu.id,
@@ -659,7 +667,7 @@ examScoreRouter.post(
           }
 
           // ④ 原班花名册：把「末班转出」那条恢复成在班
-          await trx(CS_TABLE)
+          await tblTrx(trx, DB, CS_TABLE, STAGE)
             .where({ id: leftRecord.id })
             .update({
               status: CS_IN,
@@ -671,7 +679,7 @@ examScoreRouter.post(
             });
 
           // ⑤ 学生主档：班级 + 三负责人字段一起回退
-          await trx(STUDENT_TABLE)
+          await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
             .where({ id: stu.id })
             .update({
               class_id: originCls.id,
@@ -691,17 +699,17 @@ examScoreRouter.post(
           // ⑥ 重算两个班的人数
           for (const cid of [stu.class_id, originCls.id]) {
             if (!cid) continue;
-            const [{ cnt }] = await trx(CS_TABLE)
+            const [{ cnt }] = (await tblTrx(trx, DB, CS_TABLE, STAGE)
               .where({ class_id: cid, status: CS_IN, is_deleted: false })
-              .count({ cnt: '*' });
-            await trx(CLASS_TABLE)
+              .count({ cnt: '*' })) as Array<{ cnt: number }>;
+            await tblTrx(trx, DB, CLASS_TABLE, STAGE)
               .where({ id: cid })
               .update({ student_count: Number(cnt), update_time: now });
           }
         }
       }
 
-      const after = await trx(STUDENT_TABLE)
+      const after = await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .where({ id: row.student_id })
         .select('repeat_count')
         .first();

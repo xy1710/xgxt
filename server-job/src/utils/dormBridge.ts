@@ -36,13 +36,19 @@
 import { randomUUID } from 'crypto';
 import { DormChangeBizType, ApplyStatus } from 'shared-types';
 import { today } from './date';
+// ★ 统一表切读层：本文件**只有** t_job_dorm 已归一（→ t_uni_dorm_room）；
+//   sms_edu 的两张申请表未归一，继续走裸 trx(table)（见下方同步/撤回函数）。
+import { tblTrx } from '../teaching/shared/uniTable';
 
-/** 教务侧申请表（按业务类型选） */
+/** 教务侧申请表（按业务类型选）—— sms_edu 未归一，保持裸表名访问 */
 export const EDU_CHANGE_APPLY = 'sms_edu.t_edu_dorm_change_apply';
 export const EDU_QUIT_APPLY = 'sms_edu.t_edu_dorm_quit_apply';
 
-/** 我们的宿舍主档（拿楼栋 / 房间号用） */
+/** 我们的宿舍主档（拿楼栋 / 房间号用）—— 已归一，走 tblTrx 路由 */
 const JOB_DORM = 't_job_dorm';
+/** ★ t_job_dorm 的库名与学段（实训） */
+const JOB_DB = 'sms_job';
+const JOB_STAGE = 'job' as const;
 
 export function eduApplyTableOf(bizType: number): string {
   return bizType === DormChangeBizType.CHANGE ? EDU_CHANGE_APPLY : EDU_QUIT_APPLY;
@@ -62,10 +68,10 @@ export async function syncApplyToEdu(trx: any, jobRow: any, operator: any): Prom
 
   // 拿新旧宿舍的楼栋 / 房间号（我们表里存的是 dorm_no 快照，教务要拆成 building + room）
   const oldDorm = jobRow.old_dorm_id
-    ? await trx(JOB_DORM).where({ id: jobRow.old_dorm_id }).first()
+    ? await tblTrx(trx, JOB_DB, JOB_DORM, JOB_STAGE).where({ id: jobRow.old_dorm_id }).first()
     : null;
   const newDorm = jobRow.new_dorm_id
-    ? await trx(JOB_DORM).where({ id: jobRow.new_dorm_id }).first()
+    ? await tblTrx(trx, JOB_DB, JOB_DORM, JOB_STAGE).where({ id: jobRow.new_dorm_id }).first()
     : null;
 
   const common = {

@@ -75,10 +75,12 @@ const DOMAIN_OF_KEY: Record<string, StageDomain> = {
 const STAGE_ORDER = ['jh', 'class', 'job', 'edu'] as const;
 
 /** 学段 key → 中文名（与各统一页的 STAGE_LABEL 保持一致） */
+// ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
+//   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
 const STAGE_LABEL: Record<string, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   edu: '教务',
   就业: '就业',
 };

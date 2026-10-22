@@ -160,6 +160,7 @@ export const LEAVE_DEPARTMENTS_DEFAULT: LeaveDepartment[] = [
   { code: 'jh', name: '初高中', stage: 'jh' },
   { code: 'class', name: '大学', stage: 'class' },
   { code: 'job', name: '就业', stage: 'job' },
+
 ];
 
 /**

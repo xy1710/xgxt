@@ -29,12 +29,38 @@ import type {
 import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScopeKeepNull } from '../shared/dataScope';
+// ★ 2026-10-21 学号新规：LZ + J/T(初/高) + 班号(3位) + 班内序号(3位, 每班从001独立)
+import { nextStudentNoForClass } from '../shared/studentNo';
 
 const T = 't_class_student';
 const CLASS_TABLE = 't_class_info';
 const FLOW_TABLE = 't_class_flow';
 const REPEAT_TABLE = 't_class_repeat';
 const STAGE = 'jh' as const;
+/** 初高库（本仓储全部表都在这里） */
+const DB = 'sms_class_jh';
+
+/**
+ * ★ 2026-10-21：按「阶段方案阶段」筛选
+ *
+ * 学生表只存阶段码（int），方案阶段在**班级**上（scheme_stage_id），
+ * 所以只能按学生所在班级关联 —— 不能拿学生自己的 stage 去比，两套编码没有映射关系。
+ */
+function applySchemeFilter(qb: any, q: StudentListQuery): void {
+  const classOf = () => tbl(db, 'sms_class_jh', CLASS_TABLE, STAGE);
+  if (q.schemeStageId) {
+    qb.whereIn('class_id', classOf().where('scheme_stage_id', q.schemeStageId).select('id'));
+  }
+  if (q.noScheme) {
+    qb.andWhere((b: any) => {
+      b.whereNull('class_id').orWhereNotIn(
+        'class_id',
+        classOf().whereNotNull('scheme_stage_id').whereNot('scheme_stage_id', '').select('id'),
+      );
+    });
+  }
+}
 
 function str(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
@@ -68,6 +94,8 @@ function mapRow(r: Record<string, any>): StudentRow {
     className: str(r.class_name),
     phaseCode: phase,
     phaseName: phase === null ? '' : (STAGE_NAME[phase] ?? ''),
+    // 由 service 层按班级统一回填（见 attachSchemeStageNames）
+    schemeStageName: null,
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -110,7 +138,7 @@ function bedText(room: string | null, bed: string | null): string | null {
 
 async function applyScope(qb: any, user: any): Promise<void> {
   const scope = buildClassScope({ user } as any);
-  const classIds = await getScopedClassIds(db, CLASS_TABLE, scope);
+  const classIds = await getScopedClassIds(db, CLASS_TABLE, scope, DB, STAGE);
   if (classIds) {
     if (!classIds.length) qb.whereRaw('1 = 0');
     else qb.whereIn('class_id', classIds);
@@ -125,6 +153,7 @@ function buildBase(q: StudentListQuery) {
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.studentStatus) qb.andWhere('student_status', q.studentStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
+  applySchemeFilter(qb, q);
   if (q.keyword) {
     qb.andWhere((b: any) => {
       b.where('student_no', 'like', `%${q.keyword}%`)
@@ -148,6 +177,7 @@ export const repo: StudentRepo = {
   async list(q, user) {
     const qb = buildBase(q);
     await applyScope(qb, user);
+    await applyClassScopeKeepNull(qb, 'class_id', STAGE, user);
     const rows = (await qb.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     return rows.map(mapRow);
   },
@@ -162,7 +192,10 @@ export const repo: StudentRepo = {
     if (!(await guard.first())) return null;
 
     const base = mapRow(r);
-    const flows = (await db(FLOW_TABLE)
+    // ★ 切读接入：审批流水 t_class_flow → t_uni_approval。
+    //   下面读的 flow_type / flow_status / apply_time / current_node_name / reject_reason
+    //   在统一表里同名保留（超集），只需换表。
+    const flows = (await tbl(db, 'sms_class_jh', FLOW_TABLE, STAGE)
       .where({ student_id: id, is_deleted: false })
       .orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     const repeats = (await tbl(db, 'sms_class_jh', REPEAT_TABLE, STAGE)
@@ -287,7 +320,8 @@ export const repo: StudentRepo = {
       return { id: body.id };
     }
 
-    const studentNo = String(body.studentNo || '').trim() || (await generateStudentNo());
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略前端手填值（用户口径）
+    const studentNo = await generateStudentNo(body);
     const dup = (await tbl(db, 'sms_class_jh', T, STAGE).where({ student_no: studentNo }).first()) as
       | Record<string, any>
       | undefined;
@@ -348,17 +382,13 @@ async function ensureNetAccount(studentId: string): Promise<void> {
   });
 }
 
-/** 学号生成：S + 年份 + 4 位流水（初高口径） */async function generateStudentNo(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `S${year}`;
-  const rows = (await tbl(db, 'sms_class_jh', T, STAGE).where('student_no', 'like', `${prefix}%`).select('student_no')) as Array<{
-    student_no: string;
-  }>;
-  const max = rows.reduce((m, r) => {
-    const n = Number(String(r.student_no).slice(prefix.length));
-    return Number.isFinite(n) && n > m ? n : m;
-  }, 0);
-  return `${prefix}${String(max + 1).padStart(4, '0')}`;
+/**
+ * 学号生成（★ 2026-10-22 用户口径，替换掉 10-21 的「LZ+学段字母+班号」版本）：
+ *   学号 = LZ + 班级编号 + 班内序号(3位)，如 LZQ17001
+ *   必须选班级、班级必须有编号；没编号直接报错（不造旧格式兜底号）
+ */
+async function generateStudentNo(body: StudentSaveBody): Promise<string> {
+  return nextStudentNoForClass('jh', body.classId);
 }
 
 export default repo;

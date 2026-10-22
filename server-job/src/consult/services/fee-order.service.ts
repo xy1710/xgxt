@@ -131,7 +131,18 @@ export function parseOrderItemDetail(
   if (!raw) return [];
   try {
     const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(arr) ? arr : [];
+    if (!Array.isArray(arr)) return [];
+    /**
+     * ★ 2026-10-22 显示名以字典为准
+     *
+     * item_detail 里存的是「建单那一刻」的名称快照，字典改名后老单还是旧名
+     * （比如「补费」已改名「补学费」，此前落库的单据在详情里仍显示补费）。
+     * 这里按 feeType 重新映射，字典没有的类型才退回快照，保证新老单据口径一致。
+     */
+    return arr.map((i: any) => ({
+      ...i,
+      feeTypeName: FEE_TYPE_NAME[Number(i?.feeType)] || i?.feeTypeName || '',
+    }));
   } catch {
     return [];
   }

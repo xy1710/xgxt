@@ -63,10 +63,18 @@ import {
   isWithinLeaveDateWindow,
 } from '../shared/format';
 import { classNameOf, listClassesOfStages } from '../shared/classOptions';
+import { tbl, tblTrx } from '../shared/uniTable';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption } from './types';
 import * as repoJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
+import { assertClassInScope } from '../shared/dataScope';
+
+/* ★ 切读层：审批单 t_job_approval 在 sms_job（学段固定 job），已归一 → 全部切读。
+   ⚠️ `db(常量)`/`trx(常量)` 形态是扫描器盲区（裸扫只认字符串字面量），
+      与 refund/service.ts 同批修掉（2026-10-16）。 */
+const APPROVAL_DB = 'sms_job';
+const APPROVAL_STAGE = 'job' as const;
 
 /** 业务类型 → 审批业务类型（三条链，来自 shared-types 的 APPROVAL_CHAINS） */
 function bizToApproval(bizType: number): string {
@@ -96,7 +104,7 @@ const TERMINAL_STUDENT_STATUSES: number[] = [
  * ============================================================ */
 
 type Repo = {
-  list: (q: LeaveListQuery) => Promise<{ rows: LeaveRow[]; total: number }>;
+  list: (q: LeaveListQuery, user?: any) => Promise<{ rows: LeaveRow[]; total: number }>;
   detail: (id: string) => Promise<LeaveRow | null>;
   studentOptions: (
     keyword: string,
@@ -107,6 +115,7 @@ type Repo = {
      * `excludeWithPending` = 剔除**已有未办结申请**的学生（与 hasPending 同口径）
      */
     opts?: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean },
+    user?: any,
   ) => Promise<StudentOption[]>;
   findStudent: (id: string) => Promise<{
     no: string;
@@ -170,7 +179,7 @@ export function toOperator(user: any): Operator {
 /** 批量取审批单（三条链 btype 不同，都要捞） */
 async function loadApprovals(ids: string[]): Promise<Record<string, Record<string, any>>> {
   if (!ids.length) return {};
-  const rows = (await db(APPROVAL_TABLE)
+  const rows = (await tbl(db, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE)
     .whereIn('biz_type', [
       ApprovalBizType.SUSPEND,
       ApprovalBizType.QUIT,
@@ -276,7 +285,7 @@ export async function list(
 
   // ---------- 快路径：单学段、且不需要按「待我审批」过滤 ----------
   if (stages.length === 1 && !q.onlyMine) {
-    const { rows, total } = await REPOS[stages[0]].list(q);
+    const { rows, total } = await REPOS[stages[0]].list(q, user);
     const ap = await loadApprovals(rows.map((r) => r.id));
     const out = rows.map((r) => withActions(r, ap[r.id], op));
     await attachStudentStatus(out);
@@ -298,7 +307,7 @@ export async function list(
     if (q.bizType && !LEAVE_STAGE_BIZ[stage].includes(q.bizType)) continue;
     try {
       await assertStageView(user, stage);
-      const { rows } = await REPOS[stage].list({ ...q, page: 1, size: MERGE_FETCH_LIMIT });
+      const { rows } = await REPOS[stage].list({ ...q, page: 1, size: MERGE_FETCH_LIMIT }, user);
       all.push(...rows);
     } catch {
       /* 没权限的学段跳过（与 summary 同口径） */
@@ -356,6 +365,7 @@ export async function detail(id: string, user: any): Promise<LeaveDetail> {
   }
   if (!row) throw new BizError(BizCode.STUDENT_LEAVE_NOT_FOUND, '申请单不存在');
   await assertStageView(user, row.stage);
+  await assertClassInScope(row.stage, row.classId, user, '该班级请假单');
 
   const ap = await loadApprovals([id]);
   const approval = ap[id];
@@ -415,16 +425,21 @@ export async function studentOptions(
 ): Promise<StudentOption[]> {
   await assertStageView(user, stage);
   const onlySuspended = bizType === LEAVE_BIZ_TYPE.RESUME;
-  return REPOS[stage].studentOptions(keyword, limit, {
-    onlySuspended,
-    excludeStatuses: TERMINAL_STUDENT_STATUSES,
-    excludeWithPending: true,
-  });
+  return REPOS[stage].studentOptions(
+    keyword,
+    limit,
+    {
+      onlySuspended,
+      excludeStatuses: TERMINAL_STUDENT_STATUSES,
+      excludeWithPending: true,
+    },
+    user,
+  );
 }
 
 export async function classOptions(user: any) {
   const stages = await visibleStages(user);
-  return listClassesOfStages(stages);
+  return listClassesOfStages(stages, user);
 }
 
 /* ============================================================
@@ -582,7 +597,7 @@ async function ensureApproval(
   row: LeaveRow,
   op: Operator,
 ): Promise<string> {
-  const existed = (await trx(APPROVAL_TABLE)
+  const existed = (await tblTrx(trx, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE)
     .where({ biz_id: bizId, is_deleted: false })
     .whereIn('biz_type', [ApprovalBizType.SUSPEND, ApprovalBizType.QUIT, ApprovalBizType.RESUME])
     .first()) as Record<string, any> | undefined;
@@ -607,7 +622,7 @@ async function ensureApproval(
       : row.approvalStatus === LEAVE_STATUS.PENDING_MANAGER
         ? 1
         : 0;
-  await trx(APPROVAL_TABLE).where({ id }).update({
+  await tblTrx(trx, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE).where({ id }).update({
     status: row.approvalStatus,
     current_step: step,
     current_handler_hint:
@@ -663,6 +678,20 @@ export async function approve(
   await assertStageView(user, stage);
   const op = toOperator(user);
   const row = await mustGet(stage, id);
+
+  // ① ★ 复学：参数完整性校验**前置**到 doApprove 之前。
+  //    复学链只有 1 步（shared-types approval.ts：学管 → APPROVED），走到 approve 必然 finished。
+  //    必须先拦：doApprove 写统一表（tblTrx）会**脱离本事务**（见 uniTable.ts tblTrx 的跨库注释），
+  //    先批后校验会让「审批单已永久 finished、而复学班/副作用没做」成为脏状态
+  //    （2026-10-16 _e2e-leave-check 开关开实锤：apR1 被拦后单子却已通过）。
+  //    权限校验仍在 doApprove 里，前置的只是「参数是否存在」，越权者碰不到数据。
+  /* ★ 2026-10-19 修：前置校验必须与下面第 708 行同口径 ——
+     建单时已经填过复学班的（row.newClassId 有值），终审不传也应当通过
+     （业务语义：沿用建单时选定的复学班）。原来只判 body.newClassId，
+     导致「建单填了、终审不传」被误拦，单子卡在待审批。 */
+  if (row.bizType === LEAVE_BIZ_TYPE.RESUME && !body.newClassId && !row.newClassId) {
+    throw new BizError(BizCode.PARAM_ERROR, '复学审批必须选定复学班级');
+  }
 
   let finished = false;
   let nextStatus: number = row.approvalStatus;

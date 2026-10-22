@@ -87,8 +87,14 @@ export interface StaffOption {
  *   假数据会被存进班级表，页面显示正常，演示时全是坑。
  * ============================================================ */
 
-/** 兜底数据源：大学班（sms_class）+ 实训班（sms_job）两张表 */
-const LOCAL_STAFF_TABLES = ['sms_class.t_class_info', 'sms_job.t_job_class'];
+/**
+ * 兜底数据源：统一班级表 `sms_common.t_uni_class`（三个学段的班级都在这张表里）。
+ *
+ * ★ 2026-10-19：原来是 `sms_class.t_class_info` + `sms_job.t_job_class` 两张老表，
+ *   P8 已 DROP → 查询被下面的 try/catch 吞掉，兜底恒为空（权限库没建人时
+ *   建班弹窗 5 个岗位下拉会「无数据」且不报错）。改为统一表，一条查询覆盖三学段。
+ */
+const LOCAL_STAFF_TABLES = ['sms_common.t_uni_class'];
 
 /* ============================================================
  * ★ 2026-10-06 新增：人员下拉的【首选】数据源 = 系统账户 + 其角色

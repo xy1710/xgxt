@@ -19,6 +19,10 @@ import { getNumberSetting, getJsonSetting } from '../utils/setting';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件四张初高表（t_class_attendance / t_class_attendance_detail /
+//   t_class_student / t_class_info）均已归一，全部走 tbl()/tblTrx()/tblInsTrx() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl, tblInsTrx, tblTrx } from '../../teaching/shared/uniTable';
 
 export const attendanceRouter = Router();
 
@@ -26,6 +30,10 @@ const TABLE = 't_class_attendance';
 const DETAIL_TABLE = 't_class_attendance_detail';
 const STUDENT_TABLE = 't_class_student';
 const CLASS_TABLE = 't_class_info';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务初高） */
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /** 出勤口径 */
 interface AttendanceScope {
@@ -92,12 +100,12 @@ attendanceRouter.get(
   validate(listSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.startDate) query.andWhere('attendance_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('attendance_date', '<=', q.endDate);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')
@@ -127,7 +135,7 @@ attendanceRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof detailSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.attendanceId) query.andWhere('id', q.attendanceId);
     else if (q.classId && q.attendanceDate) {
       query.andWhere('class_id', q.classId).andWhere('attendance_date', q.attendanceDate);
@@ -138,7 +146,7 @@ attendanceRouter.get(
     const record = await query.first();
     if (!record) throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '出勤台账不存在');
 
-    const details = await db(DETAIL_TABLE).where({ attendance_id: record.id, is_deleted: false }).select('*');
+    const details = await tbl(db, DB, DETAIL_TABLE, STAGE).where({ attendance_id: record.id, is_deleted: false }).select('*');
     res.json(ok({ record: toRecord(record), details: details.map(toDetail) }));
   }),
 );
@@ -173,7 +181,7 @@ attendanceRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof importSchema>;
 
-    const cls = await db(CLASS_TABLE).where({ id: body.classId, is_deleted: false }).first();
+    const cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: body.classId, is_deleted: false }).first();
     if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在');
 
     const scope = await getJsonSetting<AttendanceScope>('attendanceScope');
@@ -181,7 +189,7 @@ attendanceRouter.post(
     const presentStatuses = scope.presentStatuses ?? [1, 2];
 
     // 应到：班级内在读/试学/预读学生
-    const students = await db(STUDENT_TABLE)
+    const students = await tbl(db, DB, STUDENT_TABLE, STAGE)
       .where({ class_id: body.classId, is_deleted: false })
       .whereIn('student_status', shouldStatuses)
       .select('*');
@@ -202,15 +210,15 @@ attendanceRouter.post(
 
     // 明细学生必须属于该班「应到」集合，否则直接拒绝：
     // 避免写入 NOT NULL 的 student_no/student_name 时落 NULL（原先报 50001），也避免留下半截台账。
-    const invalidDetails = detailInput.filter((d) => !studentMap.has(d.studentId));
+    const invalidDetails = detailInput.filter((d: any) => !studentMap.has(d.studentId));
     if (invalidDetails.length) {
       throw new BizError(
         BizCode.STUDENT_NOT_FOUND,
-        `以下学生不在该班应到名单中：${invalidDetails.map((d) => d.studentId).join('、')}`,
+        `以下学生不在该班应到名单中：${invalidDetails.map((d: any) => d.studentId).join('、')}`,
       );
     }
 
-    const actualCount = detailInput.filter((d) => presentStatuses.includes(d.attendanceStatus)).length;
+    const actualCount = detailInput.filter((d: any) => presentStatuses.includes(d.attendanceStatus)).length;
     const attendanceRate = shouldCount > 0 ? Number(((actualCount / shouldCount) * 100).toFixed(2)) : 0;
 
     const now = new Date();
@@ -218,7 +226,7 @@ attendanceRouter.post(
     // 台账 + 明细 + 出勤率回流 放在同一事务，任一步失败整体回滚（不留脏台账）
     const attendanceId = await db.transaction(async (trx) => {
       // 复用已存在台账（unique class+date）
-      const existing = await trx(TABLE)
+      const existing = await tblTrx(trx, DB, TABLE, STAGE)
         .where({ class_id: body.classId, attendance_date: body.attendanceDate, is_deleted: false })
         .first();
 
@@ -239,18 +247,46 @@ attendanceRouter.post(
       };
 
       if (existing) {
-        await trx(TABLE).where({ id: attId }).update({ ...payload, update_time: now, update_by: req.user?.userId || 'system' });
-        // 明细先做逻辑删除再重插（禁止物理删除）
-        await trx(DETAIL_TABLE).where({ attendance_id: attId, is_deleted: false }).update({ is_deleted: true, update_time: now });
+        await tblTrx(trx, DB, TABLE, STAGE).where({ id: attId }).update({ ...payload, update_time: now, update_by: req.user?.userId || 'system' });
       } else {
-        await trx(TABLE).insert({ id: attId, ...payload, is_deleted: false, create_time: now, create_by: req.user?.userId || 'system' });
+        await tblInsTrx(trx, DB, TABLE, STAGE, { id: attId, ...payload, is_deleted: false, create_time: now, create_by: req.user?.userId || 'system' });
       }
 
-      // 写明细
+      /**
+       * ★★ 明细「整体替换」= 按 (attendance_id, student_id) upsert
+       *    （**禁止**「先整体软删、再逐条重插」）
+       *
+       * 【原来为什么错】
+       *   旧写法是 `update({is_deleted:true}).where({attendance_id})` 后逐条 insert。
+       *   在老表上一直"看起来正常"——`t_class_attendance_detail` 的
+       *   attendance_id / student_id 只有普通索引。
+       *   但切读后的统一表 `t_uni_attendance_detail` 有唯一键
+       *     `uk_attendance_detail(attendance_id, student_id, edu_stage)`
+       *   —— 软删只是把 is_deleted 置 1，**行还在、唯一键仍被占着**
+       *   → 紧接着的 insert 必报 `Duplicate entry ... uk_attendance_detail`。
+       *
+       * 【与 P2 的关系】`teaching/attendance/repo.classJh.ts` 已在 P2 改成同款 upsert；
+       *   本文件是初高**老接口**（`class-jh/routes/*`，P4 才接切读层），
+       *   所以今天还没炸，但接切读的那一刻就会炸 → 提前修掉。
+       */
+      const prevDetails = (await tblTrx(trx, DB, DETAIL_TABLE, STAGE)
+        .where({ attendance_id: attId })
+        .select('id', 'student_id')) as Array<Record<string, any>>;
+      const prevMap = new Map(prevDetails.map((r: any) => [String(r.student_id), String(r.id)]));
+      const submittedIds = new Set(detailInput.map((d: any) => String(d.studentId)));
+
+      // 本次未提交的旧明细 → 逻辑删除（保留审计，禁止物理删除）
+      const staleIds = prevDetails.filter((r) => !submittedIds.has(String(r.student_id))).map((r) => String(r.id));
+      if (staleIds.length) {
+        await tblTrx(trx, DB, DETAIL_TABLE, STAGE)
+          .whereIn('id', staleIds)
+          .update({ is_deleted: true, update_time: now });
+      }
+
+      // 写明细：已存在（含软删）→ 原地更新并复活；不存在 → 新增
       for (const d of detailInput) {
         const stu = studentMap.get(d.studentId);
-        await trx(DETAIL_TABLE).insert({
-          id: randomUUID(),
+        const detailPayload = {
           attendance_id: attId,
           class_id: cls.id,
           attendance_date: body.attendanceDate,
@@ -261,20 +297,31 @@ attendanceRouter.post(
           parent_phone: stu?.parent_phone ?? null,
           attendance_status: d.attendanceStatus,
           absent_reason: d.absentReason ?? null,
-          is_deleted: false,
-          create_time: now,
-          create_by: req.user?.userId || 'system',
-        });
+        };
+        const prevId = prevMap.get(String(d.studentId));
+        if (prevId) {
+          await tblTrx(trx, DB, DETAIL_TABLE, STAGE)
+            .where({ id: prevId })
+            .update({ ...detailPayload, is_deleted: false, update_time: now });
+        } else {
+          await tblInsTrx(trx, DB, DETAIL_TABLE, STAGE, {
+            id: randomUUID(),
+            ...detailPayload,
+            is_deleted: false,
+            create_time: now,
+            create_by: req.user?.userId || 'system',
+          });
+        }
       }
 
       // 回流学生出勤率（该班所有应到学生统一回写当日口径后的班级出勤率）
-      await trx(STUDENT_TABLE)
+      await tblTrx(trx, DB, STUDENT_TABLE, STAGE)
         .where({ class_id: cls.id, is_deleted: false })
         .whereIn('student_status', shouldStatuses)
         .update({ attendance_rate: attendanceRate, update_time: now });
 
       // 回写班级今日出勤率
-      await trx(CLASS_TABLE).where({ id: cls.id }).update({ today_attendance_rate: attendanceRate, update_time: now });
+      await tblTrx(trx, DB, CLASS_TABLE, STAGE).where({ id: cls.id }).update({ today_attendance_rate: attendanceRate, update_time: now });
 
       return attId;
     });
@@ -294,7 +341,7 @@ attendanceRouter.get(
   validate(listSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.startDate) query.andWhere('attendance_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('attendance_date', '<=', q.endDate);
@@ -328,7 +375,7 @@ attendanceRouter.get(
     const [yearNum, monthNum] = month.split('-').map((v) => Number(v));
     const nextMonthStart =
       monthNum === 12 ? `${yearNum + 1}-01-01` : `${yearNum}-${String(monthNum + 1).padStart(2, '0')}-01`;
-    const attQuery = db(TABLE)
+    const attQuery = tbl(db, DB, TABLE, STAGE)
       .where('is_deleted', false)
       .andWhere('attendance_date', '>=', `${month}-01`)
       .andWhere('attendance_date', '<', nextMonthStart);
@@ -341,7 +388,7 @@ attendanceRouter.get(
     }
 
     // 该月明细
-    const details = await db(DETAIL_TABLE).whereIn('attendance_id', attendanceIds).andWhere('is_deleted', false).select('*');
+    const details = await tbl(db, DB, DETAIL_TABLE, STAGE).whereIn('attendance_id', attendanceIds).andWhere('is_deleted', false).select('*');
     // 按学生统计：总次数 & 达标次数（出勤+迟到视为达标）
     const stat = new Map<string, { studentNo: string; studentName: string; total: number; qualified: number }>();
     for (const d of details) {
@@ -371,7 +418,7 @@ attendanceRouter.get(
 
     // 补充班级名
     if (list.length) {
-      const stuRows = await db(STUDENT_TABLE)
+      const stuRows = await tbl(db, DB, STUDENT_TABLE, STAGE)
         .whereIn('id', list.map((x) => x.studentId))
         .select('id', 'class_name');
       const m = new Map<string, string>(stuRows.map((r: any) => [r.id, r.class_name]));

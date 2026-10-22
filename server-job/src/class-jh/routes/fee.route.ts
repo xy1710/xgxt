@@ -34,6 +34,10 @@ import { boolFlag } from '../../utils/query';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件三张初高表（t_class_fee / t_class_fee_notify /
+//   t_class_student）均已归一，全部走 tbl()/tblIns() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl, tblIns } from '../../teaching/shared/uniTable';
 // ★ 2026-10-20 批量转交财务：直接复用财务自己的建单服务（凭证唯一性等规则不重复实现）
 import { addFee as financeAddFee } from '../../finance/services/fee.service';
 
@@ -42,6 +46,10 @@ export const feeRouter = Router();
 const FEE_TABLE = 't_class_fee';
 const NOTIFY_TABLE = 't_class_fee_notify';
 const STUDENT_TABLE = 't_class_student';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务初高） */
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /** 剩余天数（到期日 - 今天）；无到期日返回 null */
 function calcRemainDays(expireDate: any): number | null {
@@ -294,7 +302,7 @@ feeRouter.get(
     // ★ 催费列表窗口天数（默认 20）：到期日距今 ≤ N 天才进列表
     const windowDays = await getNumberSetting('feeUrgeWindowDays');
 
-    const query = db(FEE_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, FEE_TABLE, STAGE).where('is_deleted', false);
     // ★ 2026-10-20：班级筛选同时认「单据快照」和「档案现状」（学生换班后仍能筛到）
     if (q.classId) {
       const inClass = await studentIdsInClass(q.classId);
@@ -325,15 +333,15 @@ feeRouter.get(
       .map((r: any) => toFee(r, remindDays))
       .filter((x: any) => withinUrgeWindow(x, windowDays));
     // ★ 缴费状态按派生后的状态筛（逾期 = 待缴 + 已过到期日，见 effectivePayStatus）
-    if (q.payStatus) list = list.filter((x) => x.payStatus === q.payStatus);
-    if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
+    if (q.payStatus) list = list.filter((x: any) => x.payStatus === q.payStatus);
+    if (q.isUrgent !== undefined) list = list.filter((x: any) => x.isUrgent === q.isUrgent);
 
     const total = list.length;
     const paged = list.slice((q.page - 1) * q.size, q.page * q.size);
 
     // ★ 催费次数（2026-10-19 用户要求）：按学生聚合催费记录条数（notify 按学生维度催缴，
     //    只查本页行，一次 groupBy，代价可忽略）
-    const stuIds = [...new Set(paged.map((x: any) => x.studentId))].filter(Boolean);
+    const stuIds = ([...new Set(paged.map((x: any) => x.studentId))].filter(Boolean)) as string[];
     let urgeCountMap: Record<string, number> = {};
     if (stuIds.length) {
       const counts = await db(NOTIFY_TABLE)
@@ -370,7 +378,7 @@ feeRouter.get(
     // ★ 导出与列表同一窗口口径（少了一行会被当成 bug）
     const windowDays = await getNumberSetting('feeUrgeWindowDays');
 
-    const query = db(FEE_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, FEE_TABLE, STAGE).where('is_deleted', false);
     // ★ 2026-10-20：筛选口径与列表完全一致（班级/关键字都认档案现状）
     if (q.classId) {
       const inClass = await studentIdsInClass(q.classId);
@@ -398,8 +406,8 @@ feeRouter.get(
       .map((r: any) => toFee(r, remindDays))
       .filter((x: any) => withinUrgeWindow(x, windowDays));
     // ★ 导出与列表同一缴费状态口径（逾期按到期日派生）
-    if (q.payStatus) list = list.filter((x) => x.payStatus === q.payStatus);
-    if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
+    if (q.payStatus) list = list.filter((x: any) => x.payStatus === q.payStatus);
+    if (q.isUrgent !== undefined) list = list.filter((x: any) => x.isUrgent === q.isUrgent);
 
     // ★ 档案信息（2026-10-20）：导出与列表同口径，按 500 分片批量取档案
     const contacts = await fetchStudentContacts(list.map((x: any) => x.studentId));
@@ -747,11 +755,11 @@ feeRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof shareSchema>;
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     // 取最近一笔该类型缴费快照
-    const fee = await db(FEE_TABLE)
+    const fee = await tbl(db, DB, FEE_TABLE, STAGE)
       .where({ student_id: stu.id, fee_type: body.feeType, is_deleted: false })
       .orderBy('expire_date', 'desc')
       .first();
@@ -770,7 +778,7 @@ feeRouter.post(
 
     const notifyId = randomUUID();
     const now = new Date();
-    await db(NOTIFY_TABLE).insert({
+    await tblIns(db, DB, NOTIFY_TABLE, STAGE, {
       id: notifyId,
       student_id: stu.id,
       student_no: stu.student_no,
@@ -812,10 +820,10 @@ feeRouter.get(
   validate(notifyListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof notifyListSchema>;
-    const query = db(NOTIFY_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, NOTIFY_TABLE, STAGE).where('is_deleted', false);
     if (q.studentId) query.andWhere('student_id', q.studentId);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')

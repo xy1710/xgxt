@@ -14,7 +14,7 @@ import { resolveSyncStudentId } from '../shared/studentRef';
 import { wrap } from '../../middleware/error';
 // ★ 2026-10-06：缴费「类型 / 状态 / 部门」展示文案统一收口到主工程（初高、实训共用一套）
 import { FEE_TYPE_TEXT, FEE_STATUS_TEXT, DEPT_TEXT } from '../../../utils/financeFeeRef';
-import { tbl, tblTrx, tblInsTrx, uniUpdCols, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../../../teaching/shared/uniTable';
 
 /**
  * ★ 第 10 批：费用域切读
@@ -42,7 +42,7 @@ const FEE_T = 't_class_fee_sync';
 const FEE = () => tbl(commonDb, SRC_COMMON, FEE_T, STAGE);
 
 /** 应收金额列名：切读写统一表的新列，老表写老列 */
-const amountCol = () => (USE_UNI_TABLE ? 'fee_amount' : 'amount');
+const amountCol = () => 'fee_amount';
 
 /**
  * 缴费信息（需求三：同步财务管理的缴费信息）

@@ -3,10 +3,19 @@
  * 清空 sms_job + sms_class 两库业务表，按现有规则重造：
  *   6 班 Q1~Q6（大学一~六阶段）· 30 学生 · 5 岗位齐全 · 宿舍分配
  * 用法：node scripts/reset-demo-data.cjs
+ *
+ * ★ P8（2026-10-19）：教学域老表已 DROP。本脚本按老表列名重建演示数据，
+ *   因此流程改为「临时重建老表 → 重建演示数据 → 全量搬迁进统一表 → 清除临时老表」。
+ *   （重建 → 搬迁 缺一不可：只写老表的话，产品读统一表会看到空数据。）
  */
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
 const mysql = require('mysql2/promise');
 const { randomUUID } = require('crypto');
+const { spawnSync } = require('child_process');
+const pathMod = require('path');
+
+const runNode = (script, ...args) =>
+  spawnSync(process.execPath, [pathMod.join(__dirname, script), ...args], { stdio: 'inherit' });
 
 const DB = { host: process.env.DB_HOST || 'localhost', port: Number(process.env.DB_PORT || 3306), user: process.env.DB_USER || 'root', password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'sms_job' };
 if (!process.env.DB_PASSWORD) throw new Error('DB_PASSWORD is required; configure server-job/.env');
@@ -46,8 +55,17 @@ const CLASSES = [
 ];
 
 (async () => {
-  const c = await mysql.createConnection(DB);
   const log = [];
+  /* ★ P8：先把空壳老表建出来（脚本下面全是按老表列名写的 SQL） */
+  log.push('→ 临时重建教学域老表…');
+  if (runNode('_uni-recreate-legacy.mjs').status !== 0) {
+    log.push('✗ 临时老表重建失败（检查 exports/p8-final-backup）');
+    require('fs').writeFileSync('D:/_seed2.txt', log.join('\n'));
+    process.exit(1);
+  }
+
+  const c = await mysql.createConnection(DB);
+  let ok = false;
   try {
     await c.beginTransaction();
 
@@ -120,12 +138,24 @@ const CLASSES = [
     }
 
     await c.commit();
+    ok = true;
     log.push('✓ 完成：6 班 30 学生 + 宿舍分配 + 角色扩充');
   } catch (e) {
     await c.rollback();
     log.push('✗ 失败已回滚：' + e.message);
   } finally {
-    require('fs').writeFileSync('D:/_seed2.txt', log.join('\n'));
     await c.end();
+    /* ★ P8：把老表里的演示数据全量搬进统一表（产品只读统一表），然后清除临时老表。
+       ⚠️ 本脚本语义就是「重置」——搬迁脚本会先清空统一表再全量搬，符合预期。 */
+    if (ok) {
+      log.push('→ 全量搬迁进统一表…');
+      const mig = runNode('_uni-migrate-p5.mjs');
+      log.push(mig.status === 0 ? '✓ 统一表已同步' : '✗ 统一表同步失败（可手动跑 node scripts/_uni-migrate-p5.mjs）');
+    }
+    log.push('→ 清除临时老表…');
+    const drop = runNode('_uni-recreate-legacy.mjs', '--drop');
+    log.push(drop.status === 0 ? '✓ 临时老表已清除' : '✗ 临时老表清除失败（可手动跑 --drop）');
+
+    require('fs').writeFileSync('D:/_seed2.txt', log.join('\n'));
   }
 })();

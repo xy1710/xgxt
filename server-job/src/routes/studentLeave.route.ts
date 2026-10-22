@@ -89,8 +89,17 @@ import {
   APPROVAL_TABLE,
   type Operator,
 } from '../utils/approval';
+// ★ P3 切读层：本文件各表（t_job_student_leave / t_student_base / t_job_class /
+//   t_job_class_student / t_job_attendance / t_job_refund / sms_class.t_class_student）
+//   都已归一，全部走 tbl()/tblAs()/tblRef()/tblTrx()/tblInsTrx() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl, tblAs, tblInsTrx, tblRef, tblTrx } from '../teaching/shared/uniTable';
 
 export const studentLeaveRouter = Router();
+
+/** ★ 统一表 edu_stage 取值（本文件主库为实训库） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 表名常量 */
 const TABLE = 't_job_student_leave';
@@ -114,8 +123,12 @@ const REFUND_TABLE = 't_job_refund';
  * 【同实例跨库】
  *   三个库在同一个 MySQL 实例，所以用全限定名 + 调用方传的同一个事务对象(trx)，
  *   「改我们这边 + 改班级库那边」在**同一事务**里，要么都成、要么都滚。
+ *
+ * ★ P3 切读层：原来是「库.表」全限定名字符串，现拆成 库名 + 表名，
+ *   交给 `tblTrx()` 按开关路由（开关关时仍拼成 `sms_class.t_class_student`）。
  */
-const CLASS_DB_STUDENT = 'sms_class.t_class_student';
+const CLASS_DB = 'sms_class';
+const CLASS_DB_STUDENT = 't_class_student';
 
 /**
  * 把学生状态**同步到班级库**（休学/退学/复学都走这里）
@@ -137,7 +150,7 @@ async function syncStatusToClassDB(
   operator: Operator,
 ): Promise<number> {
   if (!studentNo) return 0;
-  const n = await trx(CLASS_DB_STUDENT)
+  const n = await tblTrx(trx, CLASS_DB, CLASS_DB_STUDENT, 'class')
     .where({ student_no: studentNo, is_deleted: false })
     .update({
       student_status: newStatus,
@@ -189,7 +202,7 @@ function toApprovalBizType(bizType: number): string {
  *      （出勤 + 迟到 + 早退 算到；缺勤/请假不算）
  */
 async function calcAttendedHours(studentId: string, conn: any = db): Promise<number> {
-  const row = await conn(ATT_TABLE)
+  const row = await tbl(conn, DB, ATT_TABLE, STAGE)
     .where({ student_id: studentId, is_deleted: false })
     .whereIn('attend_status', [...ATTEND_STATUS_PRESENT_SET])
     .countDistinct({ c: 'attend_date' })
@@ -328,7 +341,7 @@ async function afterApproved(
     // ★ 复学：回到【复学班】—— **学管审批时选定的那个班**（单据的 new_class_id）
     //   ⚠️ t_student_base 没有 dept_name 字段，只写 dept_code（从复学班带出来）
     const resumeCls = row.new_class_id
-      ? await trx(CLASS_TABLE).where({ id: row.new_class_id }).first()
+      ? await tblTrx(trx, DB, CLASS_TABLE, STAGE).where({ id: row.new_class_id }).first()
       : null;
     patch.class_id = row.new_class_id;
     patch.class_name = row.new_class_name;
@@ -349,7 +362,7 @@ async function afterApproved(
     //   单据在下方的「②' 退学结算」里生成。
   }
 
-  await trx(STUDENT_TABLE).where({ id: row.student_id }).update(patch);
+  await tblTrx(trx, DB, STUDENT_TABLE, STAGE).where({ id: row.student_id }).update(patch);
 
   // ★★ 2026-10-05 治本：同步到班级库（sms_class.t_class_student）
   //
@@ -373,7 +386,7 @@ async function afterApproved(
     //   ⚠️ 唯一索引 uk_in_class 只保「在班唯一」，所以重复复学不会插重。
     //   ⚠️ 这里的班级是 **row.new_class_id**（学管审批时选定的复学班），
     //      不是 row.class_id（那是学生休学前的原班）。
-    const exist = await trx(CS_TABLE)
+    const exist = await tblTrx(trx, DB, CS_TABLE, STAGE)
       .where({
         class_id: row.new_class_id,
         student_id: row.student_id,
@@ -382,7 +395,7 @@ async function afterApproved(
       })
       .first();
     if (!exist) {
-      await trx(CS_TABLE).insert({
+      await tblInsTrx(trx, DB, CS_TABLE, STAGE, {
         id: randomUUID(),
         create_time: now,
         create_by: operator.userId,
@@ -408,7 +421,7 @@ async function afterApproved(
     };
     if (row.class_id) csWhere.class_id = row.class_id;
 
-    await trx(CS_TABLE).where(csWhere).update({
+    await tblTrx(trx, DB, CS_TABLE, STAGE).where(csWhere).update({
       status: CS_OUT,
       leave_date: row.leave_date || today(),
       leave_type: isSuspend ? 3 : 4, // 3休学 4退学
@@ -487,8 +500,8 @@ studentLeaveRouter.get(
     const operator = getOperator(req);
 
     // ⚠️ 始终 leftJoin 审批表（canApprove 需要，且避免别名不存在报错）
-    const query = db(`${TABLE} as l`)
-      .leftJoin(`${APPROVAL_TABLE} as a`, 'l.approval_id', 'a.id')
+    const query = tblAs(db, DB, TABLE, STAGE, 'l')
+      .leftJoin(`${tblRef(DB, APPROVAL_TABLE)} as a`, 'l.approval_id', 'a.id')
       .where('l.is_deleted', false);
 
     // ★ 数据范围：班主任只能看**自己带的班**的申请（斌哥 2026-09-30）
@@ -504,7 +517,7 @@ studentLeaveRouter.get(
     const _pm1 = hasRole(_s1, RoleCode.PROJECT_MANAGER);
     const _hd1 = hasRole(_s1, RoleCode.TEACH_HEAD);
     if (!_adm1 && _pm1) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ project_manager_id: operator.userId, is_deleted: false })
         // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
         // .whereNot('class_status', ClassStatus.GRADUATED)
@@ -513,7 +526,7 @@ studentLeaveRouter.get(
       if (ids.length === 0) query.whereRaw('1 = 0');
       else query.whereIn('l.class_id', ids);
     } else if (!_adm1 && _hd1) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ head_teacher_id: operator.userId, is_deleted: false })
         .select('id');
       // 一个班都没有 → 传空数组，结果自然是空的（不会误放开成"看全部"）
@@ -524,7 +537,7 @@ studentLeaveRouter.get(
     }
 
     if (q.keyword) {
-      query.andWhere((b) => {
+      query.andWhere((b: import('knex').Knex.QueryBuilder) => {
         b.where('l.student_name', 'like', `%${q.keyword}%`)
           .orWhere('l.student_no', 'like', `%${q.keyword}%`);
       });
@@ -571,7 +584,7 @@ studentLeaveRouter.get(
         [ApprovalBizType.QUIT]: 2,
         [ApprovalBizType.RESUME]: 3,
       };
-      query.andWhere((b) => {
+      query.andWhere((b: import('knex').Knex.QueryBuilder) => {
         for (const s of steps) {
           const bt = BIZ_TO_NUM[s.biz];
           b.orWhere((x) => x.where('l.biz_type', bt).andWhere('a.current_step', s.step));
@@ -621,7 +634,7 @@ studentLeaveRouter.get(
     const q = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: q.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: q.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.STUDENT_LEAVE_NOT_FOUND, '休学/退学申请不存在');
 
     const biz = toApprovalBizType(row.biz_type);
@@ -643,13 +656,13 @@ studentLeaveRouter.get(
     // ★ 该学生的历史退费单（xmind：查看退费表 → 按学号查同学生的申请）
     // ⚠️ 不要再 select `refund_no` —— 该字段 2026-09-30 已删（迁移 007），
     //    带上它会让整个「详情」接口报 50002「数据库字段不存在」。
-    const refunds = await db(REFUND_TABLE)
+    const refunds = await tbl(db, DB, REFUND_TABLE, STAGE)
       .where({ student_id: row.student_id, is_deleted: false })
       .select('id', 'refund_type_name', 'refund_amount', 'apply_date', 'approval_status')
       .orderBy('apply_date', 'desc');
 
     // 该生的其他休学/退学记录
-    const history = await db(TABLE)
+    const history = await tbl(db, DB, TABLE, STAGE)
       .where({ student_id: row.student_id, is_deleted: false })
       .whereNot('id', row.id)
       .select('id', 'biz_type', 'leave_date', 'approval_status')
@@ -730,7 +743,7 @@ studentLeaveRouter.post(
       throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有班主任能发起休学/退学/复学申请');
     }
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     const isResume = body.bizType === StudentLeaveBizType.RESUME;
@@ -762,8 +775,8 @@ studentLeaveRouter.post(
     }
 
     // ② 重复校验：同一学生 + 同类型 + 未结束
-    const dup = await db(`${TABLE} as l`)
-      .join(`${APPROVAL_TABLE} as a`, 'l.approval_id', 'a.id')
+    const dup = await tblAs(db, DB, TABLE, STAGE, 'l')
+      .join(`${tblRef(DB, APPROVAL_TABLE)} as a`, 'l.approval_id', 'a.id')
       .where('l.student_id', stu.id)
       .andWhere('l.biz_type', body.bizType)
       .andWhere('l.is_deleted', false)
@@ -796,12 +809,12 @@ studentLeaveRouter.post(
         throw new BizError(BizCode.NO_OPERATION_PERMISSION, '该学生没有班级，无法发起申请');
       }
       const mine = _pm2
-        ? await db(CLASS_TABLE)
+        ? await tbl(db, DB, CLASS_TABLE, STAGE)
             .where({ id: stu.class_id, project_manager_id: operator.userId, is_deleted: false })
             // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
             // .whereNot('class_status', ClassStatus.GRADUATED)
             .first()
-        : await db(CLASS_TABLE)
+        : await tbl(db, DB, CLASS_TABLE, STAGE)
             .where({ id: stu.class_id, head_teacher_id: operator.userId, is_deleted: false })
             .first();
       if (!mine) {
@@ -817,7 +830,7 @@ studentLeaveRouter.post(
     //      这里写入的 `class_id` 是**原班**（"他休学前在哪个班"）。
     let cls: any = null;
     if (stu.class_id) {
-      cls = await db(CLASS_TABLE).where({ id: stu.class_id, is_deleted: false }).first();
+      cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: stu.class_id, is_deleted: false }).first();
     }
 
     const id = randomUUID();
@@ -826,7 +839,7 @@ studentLeaveRouter.post(
 
     await db.transaction(async (trx) => {
   
-      await trx(TABLE).insert({
+      await tblInsTrx(trx, DB, TABLE, STAGE, {
         id,
         create_time: now,
         create_by: operator.userId,
@@ -876,11 +889,11 @@ studentLeaveRouter.post(
         trx,
       );
 
-      await trx(TABLE).where({ id }).update({ approval_id: approvalId });
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id }).update({ approval_id: approvalId });
 
       if (body.submit) {
         await submitApproval(approvalId, operator, trx);
-        await trx(TABLE).where({ id }).update({
+        await tblTrx(trx, DB, TABLE, STAGE).where({ id }).update({
           approval_status: ApprovalStatus.PENDING_MANAGER,
           update_time: now,
         });
@@ -903,13 +916,13 @@ studentLeaveRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.STUDENT_LEAVE_NOT_FOUND, '申请单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
 
     await db.transaction(async (trx) => {
       await submitApproval(row.approval_id, operator, trx);
-      await trx(TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update({
         approval_status: ApprovalStatus.PENDING_MANAGER,
         update_time: new Date(),
         update_by: operator.userId,
@@ -942,7 +955,7 @@ studentLeaveRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.STUDENT_LEAVE_NOT_FOUND, '申请单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
 
@@ -972,7 +985,7 @@ studentLeaveRouter.post(
         if (!body.classId) {
           throw new BizError(BizCode.PARAM_ERROR, '复学审批必须选定复学班级');
         }
-        const resumeCls = await trx(CLASS_TABLE)
+        const resumeCls = await tblTrx(trx, DB, CLASS_TABLE, STAGE)
           .where({ id: body.classId, is_deleted: false })
           .first();
         if (!resumeCls) throw new BizError(BizCode.CLASS_NOT_FOUND, '复学班级不存在');
@@ -980,13 +993,13 @@ studentLeaveRouter.post(
         patch.new_class_name = resumeCls.class_name;
       }
 
-      await trx(TABLE).where({ id: row.id }).update(patch);
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update(patch);
 
       // ③ 全流程走完 → 执行"通过后的动作"
       //    ⚠️ 必须**重新读一次**单据 —— 刚刚才写入 new_class_id，
       //       用旧 row 的话 afterApproved 拿不到复学班。
       if (finished) {
-        const fresh = await trx(TABLE).where({ id: row.id }).first();
+        const fresh = await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).first();
         await afterApproved(trx, fresh, operator);
       }
     });
@@ -1018,13 +1031,13 @@ studentLeaveRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.STUDENT_LEAVE_NOT_FOUND, '申请单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
 
     await db.transaction(async (trx) => {
       await doReject(row.approval_id, operator, body.reason, trx);
-      await trx(TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update({
         approval_status: ApprovalStatus.REJECTED,
         update_time: new Date(),
         update_by: operator.userId,
@@ -1052,13 +1065,13 @@ studentLeaveRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.STUDENT_LEAVE_NOT_FOUND, '申请单不存在');
     if (!row.approval_id) throw new BizError(BizCode.APPROVAL_NOT_FOUND, '该单没有关联审批单');
 
     await db.transaction(async (trx) => {
       await doCancel(row.approval_id, operator, body.reason, trx);
-      await trx(TABLE).where({ id: row.id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id: row.id }).update({
         approval_status: ApprovalStatus.CANCELED,
         update_time: new Date(),
         update_by: operator.userId,
@@ -1094,8 +1107,8 @@ studentLeaveRouter.get(
 
     const isResume = q.bizType === StudentLeaveBizType.RESUME;
 
-    const query = db(`${STUDENT_TABLE} as s`)
-      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
+    const query = tblAs(db, DB, STUDENT_TABLE, STAGE, 's')
+      .leftJoin(`${tblRef(DB, CLASS_TABLE)} as c`, 's.class_id', 'c.id')
       .where('s.is_deleted', false)
       .whereIn(
         's.student_status',
@@ -1110,7 +1123,7 @@ studentLeaveRouter.get(
     const _pm3 = hasRole(_s3, RoleCode.PROJECT_MANAGER);
     const _hd3 = hasRole(_s3, RoleCode.TEACH_HEAD);
     if (!_adm3 && _pm3) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ project_manager_id: operator.userId, is_deleted: false })
         // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
         // .whereNot('class_status', ClassStatus.GRADUATED)
@@ -1119,7 +1132,7 @@ studentLeaveRouter.get(
       if (ids.length === 0) query.whereRaw('1 = 0');
       else query.whereIn('s.class_id', ids);
     } else if (!_adm3 && _hd3) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ head_teacher_id: operator.userId, is_deleted: false })
         .select('id');
       query.whereIn(
@@ -1129,7 +1142,7 @@ studentLeaveRouter.get(
     }
 
     if (q.keyword) {
-      query.andWhere((b) => {
+      query.andWhere((b: import('knex').Knex.QueryBuilder) => {
         b.where('s.student_name', 'like', `%${q.keyword}%`).orWhere(
           's.student_no',
           'like',
@@ -1193,28 +1206,28 @@ studentLeaveRouter.get(
   wrap(async (req, res) => {
     const operator = getOperator(req);
 
-    const totalRow = await db(TABLE).where('is_deleted', false).count({ c: 'id' }).first();
-    const suspendRow = await db(TABLE)
+    const totalRow = await tbl(db, DB, TABLE, STAGE).where('is_deleted', false).count({ c: 'id' }).first();
+    const suspendRow = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, biz_type: StudentLeaveBizType.SUSPEND })
       .count({ c: 'id' })
       .first();
-    const quitRow = await db(TABLE)
+    const quitRow = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, biz_type: StudentLeaveBizType.QUIT })
       .count({ c: 'id' })
       .first();
-    const resumeRow = await db(TABLE)
+    const resumeRow = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, biz_type: StudentLeaveBizType.RESUME })
       .count({ c: 'id' })
       .first();
-    const pendingMgr = await db(TABLE)
+    const pendingMgr = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, approval_status: ApprovalStatus.PENDING_MANAGER })
       .count({ c: 'id' })
       .first();
-    const pendingPrincipal = await db(TABLE)
+    const pendingPrincipal = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, approval_status: ApprovalStatus.PENDING_PRINCIPAL })
       .count({ c: 'id' })
       .first();
-    const approved = await db(TABLE)
+    const approved = await tbl(db, DB, TABLE, STAGE)
       .where({ is_deleted: false, approval_status: ApprovalStatus.APPROVED })
       .count({ c: 'id' })
       .first();
@@ -1228,8 +1241,8 @@ studentLeaveRouter.get(
     if (canApprove(ApprovalBizType.RESUME, 1, operator.roles)) steps.push({ bt: 3, step: 1 });
 
     if (steps.length) {
-      const r = await db(`${TABLE} as l`)
-        .join(`${APPROVAL_TABLE} as a`, 'l.approval_id', 'a.id')
+      const r = await tblAs(db, DB, TABLE, STAGE, 'l')
+        .join(`${tblRef(DB, APPROVAL_TABLE)} as a`, 'l.approval_id', 'a.id')
         .where('l.is_deleted', false)
         .whereNotIn('a.status', [
           ApprovalStatus.DRAFT,
@@ -1237,7 +1250,7 @@ studentLeaveRouter.get(
           ApprovalStatus.REJECTED,
           ApprovalStatus.CANCELED,
         ])
-        .andWhere((b) => {
+        .andWhere((b: import('knex').Knex.QueryBuilder) => {
           for (const s of steps) {
             b.orWhere((x) => x.where('l.biz_type', s.bt).andWhere('a.current_step', s.step));
           }

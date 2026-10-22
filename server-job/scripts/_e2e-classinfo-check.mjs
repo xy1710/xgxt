@@ -296,16 +296,18 @@ async function mkStudent(dbCls, uniDb, tag, cls, headTeacherId) {
   check(`⑧ /stage/advance 推进成功（${WHERE}）`, r8.json?.code === 200, `code=${r8.json?.code} msg=${r8.json?.message ?? ''}`);
   if (r8.json?.code === 200) {
     const clsAfter = await probe(dbCls, 'sms_class', 't_class_info', STAGE).where('id', clsA.id).first();
+    // ★ #23 方案 B：统一表 stage 列废弃（一律 null），权威列是 stage_code
+    const phaseOf = (row) => (USE_UNI ? Number(row?.stage_code) : Number(row?.stage));
     check(
       `⑧ ★ 班级 stage 已推进（${WHERE}）`,
-      clsAfter && Number(clsAfter.stage) === 202,
-      `stage=${clsAfter ? clsAfter.stage : 'N/A'} 期望=202（一阶段→二阶段）`,
+      clsAfter && phaseOf(clsAfter) === 202,
+      `${USE_UNI ? 'stage_code' : 'stage'}=${clsAfter ? phaseOf(clsAfter) : 'N/A'} 期望=202（一阶段→二阶段）`,
     );
     const stuAfter = await probe(dbCls, 'sms_class', 't_class_student', STAGE).where('id', stu2.id).first();
     check(
       `⑧ ★ 学员 stage 同步跟进（${WHERE}）`,
-      stuAfter && Number(stuAfter.stage) === 202,
-      `student.stage=${stuAfter ? stuAfter.stage : 'N/A'} 期望=202`,
+      stuAfter && phaseOf(stuAfter) === 202,
+      `student.${USE_UNI ? 'stage_code' : 'stage'}=${stuAfter ? phaseOf(stuAfter) : 'N/A'} 期望=202`,
     );
     // ★ 最隐蔽的坑：只切主表时这条会挂（阶段日志表仍是老表）
     const log = await probe(dbCls, 'sms_class', 't_class_stage_log', STAGE)

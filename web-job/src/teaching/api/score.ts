@@ -54,6 +54,8 @@ export interface ScoreEntry {
   classId: string;
   className: string;
   fullTotal: number;
+  /** 各分数项的本场满分（written/machine/interview/other） */
+  contentFullScore?: Record<string, number>;
   hasWrittenAvg: boolean;
   rows: ScoreEntryRow[];
 }
@@ -142,72 +144,25 @@ export function fetchScoreFormula() {
   return http.get<Record<TeachingStage, ScoreScopeItem>>('/api/teaching/score/formula');
 }
 
-/* ============================================================
- * 编辑 / 末班（2026-10-19 新增）
- * ============================================================ */
-
 /**
- * 单行改分
+ * ★ 2026-10-19：成绩页的考试下拉（只读）
  *
- * ★ 只传要改的字段：备注列是列表内联编辑的，只传 remark 时后端不会重算分数。
+ * 为什么不再调 `/api/teaching/exam/list`：
+ *   大学部班主任只有成绩码 `class:grade:view`，没有考试码 `class:exam:view`，
+ *   调考试域接口会被 403 →「点成绩管理就弹无权限」。
+ *   这个接口用成绩域的权限码判权，只返回考试列表。
  */
-export interface ScoreUpdatePayload {
-  stage: TeachingStage;
-  /** 成绩行 id */
-  id: string;
-  writtenScore?: number | null;
-  machineScore?: number | null;
-  interviewScore?: number | null;
-  otherScore?: number | null;
-  /** 只有大学（judgeMode='manual'）能改 */
-  examResult?: number | null;
-  remark?: string | null;
-}
-
-export function updateScore(body: ScoreUpdatePayload) {
-  return http.post<{ updated: number }>('/api/teaching/score/update', body);
-}
-
-/** 末班入参 */
-export interface ScoreRepeatPayload {
-  stage: TeachingStage;
-  /** 成绩行 id */
-  scoreId: string;
-  /** 目标班级所属学段：初高→初高、大学→大学、实训→任意 */
-  targetStage: TeachingStage;
-  targetClassId: string;
-  /** YYYY-MM-DD */
-  repeatDate?: string;
-  repeatReason: string;
-  /** 学员不足说明：拼进末班原因，并同步写成绩备注 */
-  shortcoming?: string;
-}
-
-export interface ScoreRepeatResult {
-  repeatCount: number;
-  fromClassName: string | null;
-  toClassName: string;
-  toStageName: string;
-  notified: boolean;
-}
-
-export function repeatScore(body: ScoreRepeatPayload) {
-  return http.post<ScoreRepeatResult>('/api/teaching/score/repeat', body);
+export function listScoreExamOptions(p: { stage?: TeachingStage; keyword?: string } = {}) {
+  return http.get<import('./exam').ExamRow[]>('/api/teaching/score/exam-options', p);
 }
 
 /**
- * 末班原因的下拉选项
+ * 成绩录入用的「班级下拉」
  *
- * ★ 选「其他」时前端要展开一个输入框手填；
- *   后端只校验非空，不校验是否属于这份列表（保留历史数据的兼容空间）。
+ * 为什么不用 `/api/teaching/exam/classes`：那个接口按考试域权限码判权，
+ * 班主任只有 class:grade:view、没有 class:exam:view → 拿到 0 个班。
  */
-export const REPEAT_REASON_OPTIONS = [
-  '综合成绩未达标',
-  '学习态度不端正',
-  '出勤不达标',
-  '基础薄弱跟不上',
-  '其他',
-] as const;
+export function listScoreClasses() {
+  return http.get<import('./attendance').ClassOption[]>('/api/teaching/score/classes');
+}
 
-/** 选了「其他」时要手填的原因值 */
-export const REPEAT_REASON_OTHER = '其他';

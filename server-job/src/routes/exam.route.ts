@@ -24,6 +24,10 @@ import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P3 切读层：本文件三张表（t_job_exam / t_job_exam_score / t_student_base）都已归一，
+//   全部走 tbl()/tblTrx()/tblInsTrx() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblInsTrx, tblTrx } from '../teaching/shared/uniTable';
+import { assertExamNotDuplicated } from '../teaching/exam/uniExamUnique';
 
 export const examRouter = Router();
 
@@ -31,6 +35,10 @@ export const examRouter = Router();
 const TABLE = 't_job_exam';
 const SCORE_TABLE = 't_job_exam_score';
 const STUDENT_TABLE = 't_student_base';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 本期固定的考试内容：笔试(1) + 机试(2) + 面试(3) */
 const DEFAULT_CONTENT_TYPES = [1, 2, 3];
@@ -69,7 +77,7 @@ examRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
 
     if (q.examName) query.andWhere('exam_name', 'like', `%${q.examName}%`);
     if (q.examType) query.andWhere('exam_type', q.examType);
@@ -82,7 +90,7 @@ examRouter.get(
       });
     }
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -96,7 +104,7 @@ examRouter.get(
     const statMap: Record<string, { totalCount: number; scoredCount: number }> = {};
 
     if (ids.length > 0) {
-      const stats = await db(SCORE_TABLE)
+      const stats = await tbl(db, DB, SCORE_TABLE, STAGE)
         .whereIn('exam_id', ids)
         .andWhere('is_deleted', false)
         .groupBy('exam_id')
@@ -144,7 +152,7 @@ examRouter.get(
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) {
       throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在或已被删除');
     }
@@ -199,15 +207,28 @@ examRouter.post(
     const operatorId = req.user?.userId || 'system';
     const operatorName = req.user?.userName || '系统';
 
+    /**
+     * ★ 同班 + 同日 + 同名 查重（任务 #20）
+     *
+     * 统一表 `t_uni_exam` 的 `uk_exam` 唯一索引**已废弃**（迁移 20261016_007，
+     * 它不含 class_id、且老表本就没有唯一键）→ 改由应用层在此拦，
+     * 两种开关模式走同一段逻辑。实训是多班，按「班级有交集」判定。
+     */
+    await assertExamNotDuplicated(db, STAGE, {
+      classIds: body.classIds,
+      examName: body.examName,
+      examDate: body.examTime,
+    });
+
     // ---- ① 查所选班级的所有在校学生 ----
-    const students = await db(STUDENT_TABLE)
+    const students = await tbl(db, DB, STUDENT_TABLE, STAGE)
       .whereIn('class_id', body.classIds)
       .andWhere('is_deleted', false)
       .select('id', 'student_no', 'student_name', 'class_id', 'class_name');
 
     // ---- ② 事务：写考试 + 批量写成绩 ----
     await db.transaction(async (trx) => {
-      await trx(TABLE).insert({
+      await tblInsTrx(trx, DB, TABLE, STAGE, {
         id: examId,
         exam_name: body.examName,
         exam_type: body.examType,
@@ -251,7 +272,7 @@ examRouter.post(
         // 分批插入，防止单条 SQL 过长（1000 条一批足够）
         const BATCH = 500;
         for (let i = 0; i < scoreRows.length; i += BATCH) {
-          await trx(SCORE_TABLE).insert(scoreRows.slice(i, i + BATCH));
+          await tblInsTrx(trx, DB, SCORE_TABLE, STAGE, scoreRows.slice(i, i + BATCH));
         }
       }
     });
@@ -279,12 +300,20 @@ examRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const exists = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!exists) {
       throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在');
     }
 
-    await db(TABLE).where({ id: body.id }).update({
+    /** ★ 改名后也查重（排除自己），规则同 /add（任务 #20） */
+    await assertExamNotDuplicated(db, STAGE, {
+      classIds: body.classIds,
+      examName: body.examName,
+      examDate: body.examTime,
+      excludeId: body.id,
+    });
+
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       exam_name: body.examName,
       exam_type: body.examType,
       exam_time: body.examTime,
@@ -311,7 +340,7 @@ examRouter.delete(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const exists = await db(TABLE).where({ id, is_deleted: false }).first();
+    const exists = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!exists) {
       throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在或已被删除');
     }
@@ -321,12 +350,12 @@ examRouter.delete(
 
     // ⚠️ 逻辑删除，绝不用 .del()。同时级联删成绩，避免留下孤儿数据
     await db.transaction(async (trx) => {
-      await trx(TABLE).where({ id }).update({
+      await tblTrx(trx, DB, TABLE, STAGE).where({ id }).update({
         is_deleted: true,
         update_time: now,
         update_by: operatorId,
       });
-      await trx(SCORE_TABLE).where({ exam_id: id }).update({
+      await tblTrx(trx, DB, SCORE_TABLE, STAGE).where({ exam_id: id }).update({
         is_deleted: true,
         update_time: now,
         update_by: operatorId,
@@ -348,13 +377,13 @@ examRouter.get(
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
 
-    const exam = await db(TABLE).where({ id, is_deleted: false }).first();
+    const exam = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!exam) {
       throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在或已被删除');
     }
 
     // 按班级分组统计
-    const rows = await db(SCORE_TABLE)
+    const rows = await tbl(db, DB, SCORE_TABLE, STAGE)
       .where({ exam_id: id, is_deleted: false })
       .groupBy('class_id', 'class_name')
       .select('class_id', 'class_name')
@@ -386,7 +415,7 @@ examRouter.get(
 
     // 合计行
     const total = list.reduce(
-      (acc, r) => ({
+      (acc: any, r: any) => ({
         classId: undefined,
         className: '全部班合计',
         studentCount: acc.studentCount + r.studentCount,
@@ -413,7 +442,7 @@ examRouter.get(
     );
 
     // 合计行的平均分单独算（用全部有分数的记录）
-    const allAvg = await db(SCORE_TABLE)
+    const allAvg = await tbl(db, DB, SCORE_TABLE, STAGE)
       .where({ exam_id: id, is_deleted: false })
       .whereNotNull('total_score')
       .avg({ avg: 'total_score' })

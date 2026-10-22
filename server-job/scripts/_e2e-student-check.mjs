@@ -10,7 +10,8 @@
  *      而且要连列表里的 stage 过滤一起验（不能只拦详情）
  *   ③【★ 去重规则】同一个学号在 job 与 class 各有一条 → 「全部」视图只出现 1 条，
  *      且保留**阶段更靠后**的那条（job > class > jh > edu）—— 这条最容易写反
- *   ④【就业口径】job 学段只显示 待就业/已就业/休学/退学 四种状态
+ *   ④【实训口径】job 学段显示 待就业 / 已就业 / 实训中 / 休学 / 退学
+ *      （实训中(8) 于 2026-10-15 纳入：项目经理 = 实训阶段班主任，必须能看到实训学员）
  *   ⑤【统计= 列表】summary 的 total 必须等于同筛选下 list 的 total
  *   ⑥【写操作守门】只读管理员 + 无权学段 都要被拦
  *
@@ -34,8 +35,8 @@ import {
 
 const API = `${BASE}/api/teaching/student`;
 const ST = { WAIT_CONSULT: 1, TRIAL: 3, STUDYING: 5, SUSPENDED: 6, QUIT: 7, TRAINING: 8, WAIT_EMPLOY: 9, EMPLOYED: 10 };
-/** job 学段 VISIBLE_STATUS = 待就业(9) / 已就业(10) / 休学(6) / 退学(7) */
-const JOB_VISIBLE = [ST.WAIT_EMPLOY, ST.EMPLOYED, ST.SUSPENDED, ST.QUIT];
+/** job 学段 VISIBLE_STATUS = 实训中(8) / 待就业(9) / 已就业(10) / 休学(6) / 退学(7) */
+const JOB_VISIBLE = [ST.TRAINING, ST.WAIT_EMPLOY, ST.EMPLOYED, ST.SUSPENDED, ST.QUIT];
 
 const { check, summary } = makeChecker();
 
@@ -129,7 +130,8 @@ async function mkStudent(db, table, over = {}) {
       student_status: ST.WAIT_EMPLOY,
       class_id: 'U0003',
       class_name: '自检-实训班',
-      dept_code: 1,
+      // ★ 2026-10-22 新口径：就业部 = sms_job 里 dept_code=3 的学生（job/emp 两种 stage_key 都算）
+      dept_code: 3,
     });
     const sEdu = await mkStudent(dbEdu, 't_student_base', {
       student_no: 'U0004',
@@ -151,37 +153,53 @@ async function mkStudent(db, table, over = {}) {
       student_no: 'DUP001',
       student_name: '自检-重复号-就业那条',
       student_status: ST.WAIT_EMPLOY,
-      dept_code: 1,
+      dept_code: 3,
     });
 
-    // 就业口径夹具：状态=实训中(8)，**不在** VISIBLE_STATUS 里 → 列表不该出现
-    const hiddenJob = await mkStudent(dbJob, 't_student_base', {
+    // 实训口径夹具：状态=实训中(8)。
+    // ★ 2026-10-15 起 TRAINING(8) 已进 VISIBLE_STATUS（项目经理 = 实训阶段班主任，
+    //   必须能看到实训中的学员）→ 该学生**应当**出现在 job 列表里。
+    await mkStudent(dbJob, 't_student_base', {
       student_no: 'U0005',
-      student_name: '自检-就业口径外',
+      student_name: '自检-实训中',
       student_status: ST.TRAINING,
-      dept_code: 1,
+      dept_code: 3,
     });
 
-    check('夹具写入 7 条学生（4 学段 + 重复号 2 + 口径外1）', true);
+    check('夹具写入 7 条学生（4 学段 + 重复号 2 + 实训中1）', true);
 
     /* ---- 班级夹具：三个学段的班级表演示库是空的，不造就没有下拉项 ---- */
-    const mkClass = async (db, dbName, table, name) => {
-      const row = await buildRow(db, table, { class_name: name, class_status: 1, is_deleted: 0 });
+    const mkClass = async (db, dbName, table, name, classCode, extra = {}) => {
+      const row = await buildRow(db, table, { class_name: name, class_status: 1, is_deleted: 0, ...extra });
+      // ★ 老表没有 class_code 列（该列只在统一表），别写进老表 insert
       await db(table).insert(row);
       reg(dbName, table, row.id);
-      // ★ 双写统一表 t_uni_class
-      await mirrorRow(uniDb, dbName, table, row, STAGE_OF[dbName], (_d, t, id) =>
-        reg('sms_common', t, id),
+      // ★ 双写统一表 t_uni_class（班号新规：镜像里带上班级编号）
+      await mirrorRow(
+        uniDb,
+        dbName,
+        table,
+        classCode ? { ...row, class_code: classCode } : row,
+        STAGE_OF[dbName],
+        (_d, t, id) => reg('sms_common', t, id),
       );
-      return row;
+      return { ...row, classCode };
     };
     await mkClass(dbJh, 'sms_class_jh', 't_class_info', '自检-初高班');
-    await mkClass(dbCls, 'sms_class', 't_class_info', '自检-大学班');
+    const uniCls = await mkClass(
+      dbCls,
+      'sms_class',
+      't_class_info',
+      '自检-大学班',
+      'UC' + Math.random().toString(36).slice(2, 6).toUpperCase(),
+      // ★ 数据范围按责任人过滤：夹具班必须挂到 zhanght 名下，否则他读不到详情
+      { head_teacher_id: '85a47f05-6f96-4602-944e-d5c29b0154ae', head_teacher_name: '张海涛' },
+    );
     await mkClass(dbJob, 'sms_job', 't_job_class', '自检-实训班');
 
     /* ============ C. 四入口同构：按 stage 查列表 ============ */
     const byStage = {};
-    for (const stage of ['jh', 'class', 'job', 'edu']) {
+    for (const stage of ['jh', 'class', 'emp']) {
       const r = await req(`${API}/list?stage=${stage}&page=1&size=50`, { token: tPrincipal });
       byStage[stage] = r.json?.data?.list || [];
       check(
@@ -194,14 +212,15 @@ async function mkStudent(db, table, over = {}) {
     const has = (stage, no) => byStage[stage].some((x) => x.studentNo === no);
     check('初高库命中 U0001', has('jh', 'U0001'));
     check('大学库命中 U0002', has('class', 'U0002'));
-    check('就业库命中 U0003', has('job', 'U0003'));
-    check('教务库命中 U0004', has('edu', 'U0004'));
-    check('★ 就业口径：实训中(8) 不在列表里', !has('job', 'U0005'));
+    // ★ 2026-10-22 新口径：三学段（jh/class/emp），就业部 = dept_code=3（含原实训学生）
+    check('就业部命中 U0003', has('emp', 'U0003'));
+    check('教务库不再列出（学段已删）', !has('emp', 'U0004'));
+    check('★ 就业部口径：实训中(8) 也在列表里（dept_code=3 全算）', has('emp', 'U0005'));
 
     /* ============ D. ★ 学段隔离（安全边界） ============ */
-    const rJhSeesJob = await req(`${API}/list?stage=job&page=1&size=50`, { token: tJhHead });
+    const rJhSeesJob = await req(`${API}/list?stage=emp&page=1&size=50`, { token: tJhHead });
     check(
-      '★ 初高班主任查 job 被拦（403/无权限）',
+      '★ 初高班主任查就业部被拦（403/无权限）',
       isBlocked(rJhSeesJob) || (rJhSeesJob.json?.data?.list || []).length === 0,
       `HTTP ${rJhSeesJob.status} ${rJhSeesJob.json?.message || ''}`,
     );
@@ -225,8 +244,8 @@ async function mkStudent(db, table, over = {}) {
     const dupRows = allPrin.filter((x) => x.studentNo === 'DUP001');
     check('★ 同学号合并后只出现 1 条', dupRows.length === 1, `实际 ${dupRows.length} 条`);
     check(
-      '★ 保留的是阶段更靠后的 job（job > class > jh > edu）',
-      dupRows[0]?.stage === 'job' && dupRows[0]?.studentName === '自检-重复号-就业那条',
+      '★ 保留的是就业部那条（emp > class > jh）',
+      dupRows[0]?.stage === 'emp' && dupRows[0]?.studentName === '自检-重复号-就业那条',
       `拿到 stage=${dupRows[0]?.stage} name=${dupRows[0]?.studentName}`,
     );
     // 单学段查询不去重（同一张表内学号本就唯一）
@@ -254,9 +273,9 @@ async function mkStudent(db, table, over = {}) {
     );
 
     /* ============ G. 详情 ============ */
-    const dJob = await req(`${API}/detail?stage=job&id=${sJob.id}`, { token: tPrincipal });
+    const dJob = await req(`${API}/detail?stage=emp&id=${sJob.id}`, { token: tPrincipal });
     check(
-      '就业详情返回统一结构（base/profile/market/flows）',
+      '就业部详情返回统一结构（base/profile/market/flows）',
       isOk(dJob) &&
         dJob.json?.data?.base?.studentNo === 'U0003' &&
         !!dJob.json?.data?.profile &&
@@ -264,7 +283,7 @@ async function mkStudent(db, table, over = {}) {
     );
     const dJhByWrongUser = await req(`${API}/detail?stage=jh&id=${sJh.id}`, { token: tJob });
     check('★ 无权学段查详情被拦', isBlocked(dJhByWrongUser), `code=${dJhByWrongUser.json?.code}`);
-    const dNotFound = await req(`${API}/detail?stage=job&id=${randomUUID()}`, { token: tPrincipal });
+    const dNotFound = await req(`${API}/detail?stage=emp&id=${randomUUID()}`, { token: tPrincipal });
     check('不存在的学生返回业务错误（非 200）', isBlocked(dNotFound));
 
     /* ============ H. 写：新增 / 修改 / 学号重复 / 校验 ============ */
@@ -280,6 +299,8 @@ async function mkStudent(db, table, over = {}) {
         deptCode: 1,
         studentStatus: ST.STUDYING,
         phone: '13800000001',
+        // ★ 班号新规：显式学号也必须挂班级（学号跟班级编号走）
+        classId: uniCls.id,
       },
     });
     // ★ 保存接口返回的是 { id }（不是 studentId）
@@ -287,12 +308,40 @@ async function mkStudent(db, table, over = {}) {
     const newId = created.json?.data?.id;
     if (newId) reg('sms_class', 't_class_student', newId);
 
+    // ★ 2026-10-22 学号新规：不传学号 → 自动生成 LZ + 班级编号 + 3 位序号
+    const autoNo = await req(`${API}/save`, {
+      method: 'POST',
+      token: tHead,
+      body: { stage: 'class', studentName: '自检-自动学号', gender: 1, deptCode: 1, studentStatus: ST.STUDYING, classId: uniCls.id },
+    });
+    const autoNoId = autoNo.json?.data?.id;
+    if (autoNoId) reg('sms_class', 't_class_student', autoNoId);
+    const autoRow = autoNoId ? await probe(dbCls, 'sms_class', 't_class_student', 'class').where({ id: autoNoId }).first() : null;
+    check(
+      '★ 不传学号 → 自动生成 LZ+班级编号+序号（新规）',
+      isOk(autoNo) && new RegExp('^LZ' + uniCls.classCode + '\\d{3}$').test(String(autoRow?.student_no)),
+      `学号=${autoRow?.student_no}`,
+    );
+
+    /* ★ 2026-10-22 学号新规：学号一律自动生成，前端手填值被忽略 ——
+       「同学号建两次」不再可能撞号，改为断言「两次拿到的学号都是 LZ 且互不相同」。 */
     const dupNo = await req(`${API}/save`, {
       method: 'POST',
       token: tHead,
-      body: { stage: 'class', studentNo: newNo, studentName: '自检-重号', gender: 1, deptCode: 1 },
+      body: { stage: 'class', studentNo: newNo, studentName: '自检-重号', gender: 1, deptCode: 1, classId: uniCls.id },
     });
-    check('★ 学号重复被拦（不是静默通过）', isBlocked(dupNo), `code=${dupNo.json?.code} ${dupNo.json?.message || ''}`);
+    const dupNoId = dupNo.json?.data?.id;
+    if (dupNoId) reg('sms_class', 't_class_student', dupNoId);
+    const firstRow = newId ? await probe(dbCls, 'sms_class', 't_class_student', 'class').where({ id: newId }).first() : null;
+    const dupRow = dupNoId ? await probe(dbCls, 'sms_class', 't_class_student', 'class').where({ id: dupNoId }).first() : null;
+    check(
+      '★ 显式学号被忽略 → 自动生成 LZ 学号且互不相同（新规）',
+      isOk(dupNo) &&
+        /^LZ/.test(String(firstRow?.student_no)) &&
+        /^LZ/.test(String(dupRow?.student_no)) &&
+        dupRow?.student_no !== firstRow?.student_no,
+      `${firstRow?.student_no} vs ${dupRow?.student_no}`,
+    );
 
     const noName = await req(`${API}/save`, {
       method: 'POST',
@@ -366,7 +415,7 @@ async function mkStudent(db, table, over = {}) {
     /* ============ K. 元信息 / 班级下拉 ============ */
     const meta = await req(`${API}/meta`, { token: tPrincipal });
     const metas = meta.json?.data || [];
-    check('meta 返回 4 个学段', metas.length === 4, metas.map((m) => m.stage).join(','));
+    check('meta 返回 3 个学段（jh/class/emp，就业与教务已删）', metas.length === 3, metas.map((m) => m.stage).join(','));
     check('meta 含阶段码选项与区块声明', metas.every((m) => Array.isArray(m.phaseOptions) && Array.isArray(m.sections)));
 
     const metaJh = await req(`${API}/meta`, { token: tJhHead });
@@ -374,8 +423,9 @@ async function mkStudent(db, table, over = {}) {
 
     const cls = await req(`${API}/classes`, { token: tPrincipal });
     const clsList = cls.json?.data || [];
-    check('班级下拉合并 4 学段', new Set(clsList.map((c) => c.stage)).size === 4, clsList.length + ' 项');
-    check('班级下拉含教务的去重班级', clsList.some((c) => c.stage === 'edu' && c.name === '自检-教务班'));
+    // ★ 2026-10-22：学生档案收成三学段（教务/就业入口已删）
+    check('班级下拉合并 3 学段（jh/class/emp）', new Set(clsList.map((c) => c.stage)).size === 3, clsList.length + ' 项');
+    check('班级下拉含就业部班级', clsList.some((c) => c.stage === 'emp'));
 
     /* ============ L. 分页 ============ */
     const p1 = await req(`${API}/list?stage=class&page=1&size=1`, { token: tHead });
@@ -385,11 +435,11 @@ async function mkStudent(db, table, over = {}) {
       (p1.json?.data?.list || []).length === 1 && p2.json?.data?.list?.length === 1 && p1.json.data.list[0].studentId !== p2.json.data.list[0].studentId,
     );
 
-    /* ============ M. 业务事实：大学不支持就业口径字段（不崩即可） ============ */
-    const dEdu = await req(`${API}/detail?stage=edu&id=${sEdu.id}`, { token: tEdu });
-    check('教务详情：特有区块为空但结构完整', isOk(dEdu) && dEdu.json?.data?.base?.studentNo === 'U0004');
-    const dEduByJob = await req(`${API}/detail?stage=edu&id=${sEdu.id}`, { token: tJob });
-    check('★ 就业老师查教务详情被拦', isBlocked(dEduByJob));
+    /* ============ M. 业务事实：教务/就业学段入口已删（2026-10-22 用户口径） ============ */
+    const dEduGone = await req(`${API}/detail?stage=edu&id=${sEdu.id}`, { token: tEdu });
+    check('★ edu 学段已删 → 详情被拦（40000/403）', isBlocked(dEduGone), `code=${dEduGone.json?.code}`);
+    const dJobGone = await req(`${API}/detail?stage=job&id=${sJob.id}`, { token: tJob });
+    check('★ job 学段已删 → 详情被拦', isBlocked(dJobGone), `code=${dJobGone.json?.code}`);
   } catch (e) {
     console.log('\n💥 脚本异常：', e && e.stack ? e.stack : e);
     check('脚本执行未抛异常', false, String(e && e.message));

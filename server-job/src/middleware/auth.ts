@@ -340,6 +340,8 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
    *   这里顺手把映射结果带上，业务侧一句 `user.businessUserId || user.userId` 就能用。
    */
   let businessUserId = '';
+  /** ★ 2026-10-15：权限库里的真实部门 id（映射成业务部门码用，见 DEPT_CODE_BY_PERM_DEPT） */
+  let profileDeptId = '';
   if (kind === 'sys_admin') {
     // 系统管理员：全系统可见（页面全开，但受「只读总闸」限制不能写）
     roles = [RoleCode.SYS_ADMIN];
@@ -352,6 +354,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     const profile = await resolveAccountProfile(account);
     roles = profile.roles;
     businessUserId = profile.permUserId;
+    profileDeptId = profile.deptId;
   }
 
   /**
@@ -378,9 +381,18 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     businessUserId,
     userName: String(payload.userName || account || ''),
     roles,
-    deptCode: 1,
-    // 系统管理员 = 通配权限（页面全开）；其余账号靠角色查页面清单
-    dataScope: (payload.dataScope as DataScope) ?? DataScope.ALL,
+    /* ★★★ 2026-10-15 修：部门码原来**硬编码 1**（等于把所有账号都当成初高），
+     *   导致 `applyDataScope` 的「本部门」过滤对大学部/实训账号恒为空 ——
+     *   大学部班主任、实训项目经理登录后看不到自己的班和学生（页面 0 条）。
+     *   现在按权限库里的真实部门映射成业务部门码。
+     *   （映射表见文件上方的 DEPT_CODE_BY_PERM_DEPT）*/
+    deptCode: DEPT_CODE_BY_PERM_DEPT[profileDeptId] ?? 1,
+    /* ★ 「全部门」（D_ALL，如校长 qiansy）→ 直接提升为「不过滤」，
+     *   否则会被映射成某个具体部门码、反而只看得到一部分。 */
+    dataScope:
+      profileDeptId === 'D_ALL'
+        ? DataScope.ALL
+        : ((payload.dataScope as DataScope) ?? DataScope.ALL),
     permissions: kind === 'sys_admin' ? ['*'] : [],
     classIds: [],
     token,
@@ -411,10 +423,49 @@ export interface AccountProfile {
    * 不是门户账号 UUID。拿不到时是空串，调用方按「无映射」处理。
    */
   permUserId: string;
+  /**
+   * ★★ 2026-10-15 新增：权限库部门 id（如 `D_TEACH_U` 大学部 / `D_TRAIN` 实训教学部）
+   *
+   * 【为什么需要】
+   *   数据范围过滤（`DataScope.DEPT`）要按「本部门」筛数据，
+   *   但原先 `req.user.deptCode` 是**写死的 1**（初高）——
+   *   于是大学部班主任、实训项目经理按「部门 1」去查，永远查不到自己的班（部门 2）。
+   *   这里把权限库的真实部门带出来，由下面的 DEPT_CODE_BY_PERM_DEPT 映射成业务部门码。
+   */
+  deptId: string;
+  /** 部门中文名（如「大学部」），仅用于日志/排查 */
+  deptName: string;
 }
 
+/**
+ * 权限库部门 id → 业务部门码（数据表 `dept_code` 列的口径）
+ *
+ * 【业务口径（斌哥 2026-10-15 确认）】
+ *   数据里只有两个部门码：**1 = 初高** / **2 = 大学部（这一类）**
+ *   · 实训、就业 → **算大学部这一类（2）**
+ *   · 教务 → **不算**（`D_ACAD`，见下方 TODO）
+ *
+ * 【`D_ALL`（全部门）不在这张表里】
+ *   校长 qiansy 的部门就是 `D_ALL` —— 他要看全部数据，
+ *   所以在中间件里**直接把 dataScope 提升为 ALL**（不过滤），而不是映射成一个码。
+ */
+const DEPT_CODE_BY_PERM_DEPT: Record<string, number> = {
+  // —— 初高系 → 1 ——
+  D_TEACH: 1, // 教学部（初高班主任 sunmin / 学管主任 congym 都挂这个部门）
+  D_TEACH_G: 1, // 高中部
+  D_TEACH_J: 1, // 初中部
+  // —— 大学部这一类 → 2（实训、就业按斌哥口径并入）——
+  D_TEACH_U: 2, // 大学部
+  D_TRAIN: 2, // 实训教学部（项目经理 sunjl）
+  D_JOB: 2, // 就业管理部
+  /* ⚠️ TODO（待斌哥定口径）：`D_ACAD`（教务部）明确「不算大学部」，
+   *   但教务的数据（sms_edu.t_student_base）dept_code 实测是 2 ——
+   *   所以教务账号该映射成几，需要业务确认后再补这一条。
+   *   当前未映射 → 走兜底值 1（与改动前的行为一致，不引入新问题）。 */
+};
+
 async function resolveAccountProfile(account: string): Promise<AccountProfile> {
-  const EMPTY: AccountProfile = { roles: [], permUserId: '' };
+  const EMPTY: AccountProfile = { roles: [], permUserId: '', deptId: '', deptName: '' };
   if (!account) return EMPTY;
   try {
     /**
@@ -434,6 +485,8 @@ async function resolveAccountProfile(account: string): Promise<AccountProfile> {
     return {
       roles: Array.isArray(roles) ? roles.filter((r: any) => typeof r === 'string') : [],
       permUserId: String(body?.data?.permUserId || ''),
+      deptId: String(body?.data?.deptId || ''),
+      deptName: String(body?.data?.deptName || ''),
     };
   } catch {
     return EMPTY;
